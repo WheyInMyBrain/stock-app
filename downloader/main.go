@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"stock-app/downloader/scrape_bse"
 	"stock-app/downloader/scrape_nse"
 	"time"
 )
@@ -52,7 +53,9 @@ func main() {
 	// PHASE 2: EXECUTE BOMBAY STOCK EXCHANGE (BSE) ENGINE DATA STREAM
 	// ============================================================================
 	fmt.Printf("\n[engine] 🔵 Triggering Bombay Stock Exchange (BSE) Pipeline Flow...\n")
-	// TODO: scrape_bse.ExecuteAll(ticker, workerCount) will sit here beautifully next!
+	if err := scrape_bse.ExecuteAll(ticker, workerCount); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ BSE Pipeline failure: %v\n", err)
+	}
 
 	fmt.Printf("\n=== 🎉 [%s] All Exchange Pipelines Completed in %v ===\n", ticker, time.Since(startTime))
 }
