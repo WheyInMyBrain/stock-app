@@ -59,7 +59,7 @@ Assembles the multi-stage compiler environment and generates the statically link
 
 Bash
 
-`   make build   `
+`   make docker-build   `
 
 ### 2\. Run Scraping with Defaults
 
@@ -67,7 +67,7 @@ Pull data for a target company across **both** exchanges using a pool of 5 def
 
 Bash
 
-`   make scrape ticker=IMFA   `
+`   make docker-scrape ticker=IMFA   `
 
 ### 3\. Run Custom Scenarios with Advanced Arguments
 
@@ -75,11 +75,13 @@ Pass your custom exchange-isolation and worker execution switches cleanly inside
 
 Bash
 
-`   make scrape ticker=IMFA args="-mode=nse -workers=10"   `
-    
+`   make docker-scrape ticker=IMFA args="-mode=nse -workers=10"   `
+
+If you dont understand use help command to get the fucntions 
+
 Bash
 
-`   make scrape ticker=TCS args="-mode=bse"    `
+`   make help   `
     
 
 📁 Storage Topography Schema
