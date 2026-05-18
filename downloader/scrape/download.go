@@ -9,6 +9,7 @@ import (
 	"sync"
 )
 
+// DownloadTask represents a single unit of work for a background worker loop.
 type DownloadTask struct {
 	URL      string
 	SavePath string
@@ -20,6 +21,13 @@ func downloadFileWorker(client *NSEClient, tasks <-chan DownloadTask, wg *sync.W
 	defer wg.Done()
 
 	for task := range tasks {
+		// 🛡️ THE CACHE CHECK: Does this file already exist on your disk?
+		if _, err := os.Stat(task.SavePath); err == nil {
+			// err == nil means the file exists perfectly. Skip the network completely!
+			fmt.Printf("[worker] ⏭️ Skipped (Already Downloaded): %s\n", task.FileName)
+			continue
+		}
+
 		fmt.Printf("[worker] ⏳ Downloading: %s\n", task.FileName)
 
 		req, err := http.NewRequest("GET", task.URL, nil)
