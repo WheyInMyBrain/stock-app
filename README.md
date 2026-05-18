@@ -27,6 +27,7 @@ stock-app/
 ├── Dockerfile                  <-- Compact, multi-stage compilation & runtime 
 ├── Makefile                    <-- High-speed terminal command execution shortcuts
 └── .gitignore                  <-- Keeps transient venvs and financial assets off git
+text```
 
 🔥 Key Operational Features
 ---------------------------
