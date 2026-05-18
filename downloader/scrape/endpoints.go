@@ -360,7 +360,7 @@ func (cb CorporateBoardMeetingsAPI) ParseResponse(body io.Reader) ([]UniversalRe
 }
 
 // ============================================================================
-// STRATEGY 8: Corporate Actions (Saves raw data directly as a JSON file)
+// STRATEGY 8: Corporate Actions
 // ============================================================================
 type CorporateActionsAPI struct{}
 
@@ -371,25 +371,9 @@ func (ca CorporateActionsAPI) BuildURL(symbol string) string {
 }
 
 func (ca CorporateActionsAPI) ParseResponse(body io.Reader) ([]UniversalRecord, error) {
-	// Instead of losing the data fields, we read the raw text stream fully
-	rawData, err := io.ReadAll(body)
-	if err != nil {
-		return nil, err
-	}
-
-	// If the response is empty or just "[]", skip it
-	if len(rawData) <= 4 {
-		return nil, nil
-	}
-
-	var results []UniversalRecord
-	// We pass the raw text data straight into the DownloadURL field as a string string!
-	results = append(results, UniversalRecord{
-		Period:      "corporate-actions", // This will be the filename: corporate-actions.json
-		DownloadURL: "DATA_DUMP:" + string(rawData),
-	})
-
-	return results, nil
+	// The pipeline automatically saved the raw JSON file as "endpoint-metadata.json".
+	// We return nil here because there are no external files to schedule for downloading!
+	return nil, nil
 }
 
 // ============================================================================

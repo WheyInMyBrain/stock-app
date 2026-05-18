@@ -1,7 +1,9 @@
 package scrape
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -55,23 +57,40 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 		return fmt.Errorf("API %s rejected request with status: %d", endpoint.Name(), resp.StatusCode)
 	}
 
-	records, err := endpoint.ParseResponse(resp.Body)
+	// 💾 READ THE RAW BYTES FIRST: So we can write the clean JSON file to disk
+	rawBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed parsing data payload for %s: %w", endpoint.Name(), err)
+		return fmt.Errorf("failed reading body bytes: %w", err)
 	}
 
-	fmt.Printf("[scrape] Strategy '%s' identified %d files for %s.\n", endpoint.Name(), len(records), symbol)
-	if len(records) == 0 {
-		return nil
-	}
-
-	// 2. Mount automated directory path: ../data/{symbol}/{api_name}
+	// Mount automated directory path: ../data/{symbol}/{api_name}
 	outputDir, err := buildSaveDirectory(symbol, endpoint.Name())
 	if err != nil {
 		return fmt.Errorf("failed creating directories: %w", err)
 	}
 
-	// 3. Spin up concurrent lanes
+	// 📝 Save the raw JSON data file exactly as NSE returned it
+	metaJSONPath := filepath.Join(outputDir, "endpoint-metadata.json")
+	fmt.Printf("[scrape] 📝 Archiving raw response array payload to: %s\n", metaJSONPath)
+	if err := os.WriteFile(metaJSONPath, rawBytes, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Warning: Failed saving metadata JSON file: %v\n", err)
+	}
+
+	// Refeed the read bytes into a new reader so our parser strategies can decode it safely
+	bodyReader := bytes.NewReader(rawBytes)
+	records, err := endpoint.ParseResponse(bodyReader)
+	if err != nil {
+		return fmt.Errorf("failed parsing data payload for %s: %w", endpoint.Name(), err)
+	}
+
+	fmt.Printf("[scrape] Strategy '%s' identified %d files for %s.\n", endpoint.Name(), len(records), symbol)
+	
+	// If the strategy doesn't have any files to download (like Corporate Actions), wrap up cleanly here
+	if len(records) == 0 {
+		return nil
+	}
+
+	// 2. Spin up concurrent worker pool lanes
 	tasksChan := make(chan DownloadTask, len(records))
 	var wg sync.WaitGroup
 
@@ -80,24 +99,8 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 		go downloadFileWorker(client, tasksChan, &wg)
 	}
 
-	// 4. Feed records into jobs queue channel array
+	// 3. Feed records into jobs queue channel array
 	for _, row := range records {
-		// CHECK: Is this a raw text data dump instead of an external file download link?
-		if len(row.DownloadURL) > 10 && row.DownloadURL[:10] == "DATA_DUMP:" {
-			// Strip our custom prefix keyword to get back the pure JSON text string
-			pureJSONText := row.DownloadURL[10:]
-			
-			jsonPath := filepath.Join(outputDir, row.Period+".json")
-			fmt.Printf("[scrape] 💾 Saving structural tabular data to: %s.json\n", row.Period)
-			
-			// Write the data payload directly onto your disk storage
-			if err := os.WriteFile(jsonPath, []byte(pureJSONText), 0644); err != nil {
-				fmt.Fprintf(os.Stderr, "[scrape] ❌ Failed to write JSON data file: %v\n", err)
-			}
-			continue // Skip adding it to the file downloader worker threads!
-		}
-
-		// --- Standard external file downloading logic continues safely below ---
 		ext := filepath.Ext(row.DownloadURL)
 		if ext == "" {
 			ext = ".xml" 
