@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"time"
 )
 
 // GetAllEndpoints registers all the individual active scrapers.
@@ -23,6 +24,7 @@ func GetAllEndpoints() []FilingsEndpoint {
 		HistoricalChartAPI{},
 		SymbolDataAPI{},
 		PeerComparisonAPI{},
+		BulkAndBlockDealsAPI{},
 	}
 }
 
@@ -607,4 +609,30 @@ func (p PeerComparisonAPI) GetCombinations(symbol string) []PeerDirective {
 	}
 
 	return directives
+}
+
+// ============================================================================
+// STRATEGY 14: Historical Bulk & Block Deals (Last 2 Years)
+// ============================================================================
+type BulkAndBlockDealsAPI struct{}
+
+func (b BulkAndBlockDealsAPI) Name() string { return "bulk-block-deals" }
+
+func (b BulkAndBlockDealsAPI) BuildURL(symbol string) string {
+	// 1. Grab current time vector bounds dynamically
+	now := time.Now()
+	twoYearsAgo := now.AddDate(-2, 0, 0) // Subtract exactly 2 years
+
+	// 2. Format times precisely into the NSE required layout string: DD-MM-YYYY
+	toDateStr := now.Format("02-01-2006")
+	fromDateStr := twoYearsAgo.Format("02-01-2006")
+
+	// 3. Synthesize the final query request path mapping
+	return fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getHistoricalBulkAndBlockData&symbol=%s&fromDate=%s&toDate=%s", symbol, fromDateStr, toDateStr)
+}
+
+func (b BulkAndBlockDealsAPI) ParseResponse(body io.Reader) ([]UniversalRecord, error) {
+	// The central pipeline engine automatically records this payload as "endpoint-metadata.json".
+	// We return nil here because there are no files to schedule for downloading!
+	return nil, nil
 }
