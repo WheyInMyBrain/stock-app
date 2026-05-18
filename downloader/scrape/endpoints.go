@@ -20,6 +20,7 @@ func GetAllEndpoints() []FilingsEndpoint {
 		CorporateActionsAPI{},
 		InsiderPlanAPI{},
 		InvestorComplaintsAPI{},
+		HistoricalChartAPI{},
 	}
 }
 
@@ -490,4 +491,38 @@ func (i InvestorComplaintsAPI) ParseResponse(body io.Reader) ([]UniversalRecord,
 		})
 	}
 	return results, nil
+}
+
+// ============================================================================
+// STRATEGY 11: Historical Chart Coordinates Data (Multi-Timeframe)
+// ============================================================================
+type HistoricalChartAPI struct{}
+
+func (h HistoricalChartAPI) Name() string { return "historical-chart-data" }
+
+func (h HistoricalChartAPI) BuildURL(symbol string) string {
+	// Dummy fallback implementation to satisfy the interface boundary
+	return ""
+}
+
+func (h HistoricalChartAPI) ParseResponse(body io.Reader) ([]UniversalRecord, error) {
+	// Dummy fallback implementation to satisfy the interface boundary
+	return nil, nil
+}
+
+// Custom ParseMultiTimeframes builds the special fetch directives for all time horizons
+func (h HistoricalChartAPI) ParseMultiTimeframes(symbol string) []UniversalRecord {
+	timeframes := []string{"1D", "1W", "1M", "1Y", "5Y", "10Y", "30Y"}
+	var results []UniversalRecord
+
+	for _, tf := range timeframes {
+		url := fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getSymbolChartData&symbol=%sEQN&days=%s", symbol, tf)
+		
+		// Pass the timeframe identifier in Period and use a CHART_FETCH: prefix trick
+		results = append(results, UniversalRecord{
+			Period:      tf,
+			DownloadURL: "CHART_FETCH:" + url,
+		})
+	}
+	return results
 }

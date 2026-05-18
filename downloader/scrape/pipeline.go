@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // ExecuteAll is the sole gateway for main.go.
@@ -37,7 +38,69 @@ func ExecuteAll(symbol string, workerCount int) error {
 
 // executeStrategy is unexported (private) to keep the package API surface tiny.
 func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint, workerCount int) error {
-	// 1. Fetch records dynamically using the strategy blueprint
+	// Mount automated directory path right away: data/{symbol}/{api_name}
+	outputDir, err := buildSaveDirectory(symbol, endpoint.Name())
+	if err != nil {
+		return fmt.Errorf("failed creating directories: %w", err)
+	}
+
+	// 🛡️ INTERCEPT CHART STRATEGY: Handle Multi-Timeframe logic dynamically
+	if endpoint.Name() == "historical-chart-data" {
+		chartAPI, ok := endpoint.(HistoricalChartAPI)
+		if !ok {
+			return fmt.Errorf("failed type assertion for HistoricalChartAPI")
+		}
+
+		// Grab the 7 custom time horizon fetch instructions
+		directives := chartAPI.ParseMultiTimeframes(symbol)
+
+		for _, dir := range directives {
+			// Strip out our custom action keyword prefix ("CHART_FETCH:") to isolate the raw URL target
+			targetURL := dir.DownloadURL[12:]
+			fmt.Printf("[scrape] 📈 Fetching historical market trend timeline: %s\n", dir.Period)
+
+			req, err := http.NewRequest("GET", targetURL, nil)
+			if err != nil {
+				return err
+			}
+			req.Header.Set("User-Agent", UserAgent)
+			req.Header.Set("Referer", Referer)
+			req.Header.Set("Accept", "*/*")
+
+			resp, err := client.HTTPClient.Do(req)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[scrape] ❌ Chart fetch dropped for %s: %v\n", dir.Period, err)
+				continue
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				fmt.Fprintf(os.Stderr, "[scrape] ❌ Chart API rejected timeframe %s, status: %d\n", dir.Period, resp.StatusCode)
+				resp.Body.Close()
+				continue
+			}
+
+			chartBytes, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[scrape] ❌ Read failed for chart %s: %v\n", dir.Period, err)
+				continue
+			}
+
+			// Save directly as time horizon JSON files! (e.g. 1D.json, 30Y.json)
+			tfPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", dir.Period))
+			if err := os.WriteFile(tfPath, chartBytes, 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "[scrape] ❌ Failed saving chart file %s: %v\n", dir.Period, err)
+			}
+
+			// Pause briefly (150ms) to ensure we stay completely off the firewall's radar
+			time.Sleep(150 * time.Millisecond)
+		}
+		return nil // Multi-timeframe chart collection fully complete! Skip the rest of the pipeline.
+	}
+
+	// ============================================================================
+	// STANDARD 1-TO-1 FILE DOWNLOAD PIPELINE FOR ALL OTHER ENDPOINTS
+	// ============================================================================
 	apiURL := endpoint.BuildURL(symbol)
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
@@ -63,12 +126,6 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 		return fmt.Errorf("failed reading body bytes: %w", err)
 	}
 
-	// Mount automated directory path: ../data/{symbol}/{api_name}
-	outputDir, err := buildSaveDirectory(symbol, endpoint.Name())
-	if err != nil {
-		return fmt.Errorf("failed creating directories: %w", err)
-	}
-
 	// 📝 Save the raw JSON data file exactly as NSE returned it
 	metaJSONPath := filepath.Join(outputDir, "endpoint-metadata.json")
 	fmt.Printf("[scrape] 📝 Archiving raw response array payload to: %s\n", metaJSONPath)
@@ -84,7 +141,7 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 	}
 
 	fmt.Printf("[scrape] Strategy '%s' identified %d files for %s.\n", endpoint.Name(), len(records), symbol)
-	
+
 	// If the strategy doesn't have any files to download (like Corporate Actions), wrap up cleanly here
 	if len(records) == 0 {
 		return nil
@@ -106,7 +163,7 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 			fmt.Printf("[scrape] ⚠️ Skipping entry '%s': Invalid or empty download URL string.\n", row.Period)
 			continue
 		}
-		
+
 		if row.DownloadURL[:4] != "http" {
 			fmt.Printf("[scrape] ⚠️ Skipping entry '%s': Unsupported url prefix: %s\n", row.Period, row.DownloadURL)
 			continue
@@ -114,9 +171,9 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 
 		ext := filepath.Ext(row.DownloadURL)
 		if ext == "" {
-			ext = ".xml" 
+			ext = ".xml"
 		}
-		
+
 		localName := fmt.Sprintf("%s%s", row.Period, ext)
 		fullDiskPath := filepath.Join(outputDir, localName)
 
