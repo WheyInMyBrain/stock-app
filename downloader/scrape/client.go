@@ -18,7 +18,7 @@ type NSEClient struct {
 	HTTPClient *http.Client
 }
 
-// NewNSEClient initializes session context by hitting the home layout first.
+// NewNSEClient initializes session context by hitting the home layout first with realistic headers.
 func NewNSEClient() (*NSEClient, error) {
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -41,7 +41,20 @@ func NewNSEClient() (*NSEClient, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// 🛡️ BROWSER EMULATION FOOTPRINT: Add standard browser headers to bypass the 403 block
 	req.Header.Set("User-Agent", UserAgent)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Sec-Ch-Ua", `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`)
+	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+	req.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
+	req.Header.Set("Sec-Fetch-Dest", "document")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {

@@ -72,7 +72,7 @@ func downloadFileWorker(client *NSEClient, tasks <-chan DownloadTask, wg *sync.W
 
 // buildSaveDirectory builds structural tree target schemas: ../data/{ticker}/{api_name}
 func buildSaveDirectory(symbol, apiName string) (string, error) {
-	baseDir := filepath.Join("..", "data", symbol, apiName)
+	baseDir := filepath.Join("data", symbol, apiName)
 	err := os.MkdirAll(baseDir, os.ModePerm)
 	return baseDir, err
 }
