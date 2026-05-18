@@ -51,11 +51,8 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 			return fmt.Errorf("failed type assertion for HistoricalChartAPI")
 		}
 
-		// Grab the 7 custom time horizon fetch instructions
 		directives := chartAPI.ParseMultiTimeframes(symbol)
-
 		for _, dir := range directives {
-			// Strip out our custom action keyword prefix ("CHART_FETCH:") to isolate the raw URL target
 			targetURL := dir.DownloadURL[12:]
 			fmt.Printf("[scrape] 📈 Fetching historical market trend timeline: %s\n", dir.Period)
 
@@ -86,16 +83,63 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 				continue
 			}
 
-			// Save directly as time horizon JSON files! (e.g. 1D.json, 30Y.json)
 			tfPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", dir.Period))
 			if err := os.WriteFile(tfPath, chartBytes, 0644); err != nil {
 				fmt.Fprintf(os.Stderr, "[scrape] ❌ Failed saving chart file %s: %v\n", dir.Period, err)
 			}
 
-			// Pause briefly (150ms) to ensure we stay completely off the firewall's radar
 			time.Sleep(150 * time.Millisecond)
 		}
-		return nil // Multi-timeframe chart collection fully complete! Skip the rest of the pipeline.
+		return nil
+	}
+
+	// 🛡️ INTERCEPT PEER COMPARISON STRATEGY: Matrix Combination Generator Loop
+	if endpoint.Name() == "peer-comparison-matrix" {
+		peerAPI, ok := endpoint.(PeerComparisonAPI)
+		if !ok {
+			return fmt.Errorf("failed type assertion for PeerComparisonAPI")
+		}
+
+		combos := peerAPI.GetCombinations(symbol)
+		fmt.Printf("[scrape] 📊 Running grid sweeper across %d distinct valuation peer matrix variants...\n", len(combos))
+
+		for _, item := range combos {
+			req, err := http.NewRequest("GET", item.URL, nil)
+			if err != nil {
+				return err
+			}
+			req.Header.Set("User-Agent", UserAgent)
+			req.Header.Set("Referer", Referer)
+			req.Header.Set("Accept", "*/*")
+
+			resp, err := client.HTTPClient.Do(req)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[scrape] ❌ Peer matrix drop for %s: %v\n", item.FileName, err)
+				continue
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				// Don't log a scary warning for 400 or 404 since companies don't sit in all indices simultaneously
+				resp.Body.Close()
+				continue
+			}
+
+			peerBytes, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				continue
+			}
+
+			// Write out unique files directly (e.g. Industry_2025-12.json, Index_NIFTY_MICROCAP_250_2025-03.json)
+			matrixPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", item.FileName))
+			if err := os.WriteFile(matrixPath, peerBytes, 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "[scrape] ❌ Failed writing peer matrix %s: %v\n", item.FileName, err)
+			}
+
+			// Polite pacing delay to protect session health boundaries
+			time.Sleep(150 * time.Millisecond)
+		}
+		return nil
 	}
 
 	// ============================================================================
@@ -120,20 +164,17 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 		return fmt.Errorf("API %s rejected request with status: %d", endpoint.Name(), resp.StatusCode)
 	}
 
-	// 💾 READ THE RAW BYTES FIRST: So we can write the clean JSON file to disk
 	rawBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed reading body bytes: %w", err)
 	}
 
-	// 📝 Save the raw JSON data file exactly as NSE returned it
 	metaJSONPath := filepath.Join(outputDir, "endpoint-metadata.json")
 	fmt.Printf("[scrape] 📝 Archiving raw response array payload to: %s\n", metaJSONPath)
 	if err := os.WriteFile(metaJSONPath, rawBytes, 0644); err != nil {
 		fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Warning: Failed saving metadata JSON file: %v\n", err)
 	}
 
-	// Refeed the read bytes into a new reader so our parser strategies can decode it safely
 	bodyReader := bytes.NewReader(rawBytes)
 	records, err := endpoint.ParseResponse(bodyReader)
 	if err != nil {
@@ -142,12 +183,10 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 
 	fmt.Printf("[scrape] Strategy '%s' identified %d files for %s.\n", endpoint.Name(), len(records), symbol)
 
-	// If the strategy doesn't have any files to download (like Corporate Actions), wrap up cleanly here
 	if len(records) == 0 {
 		return nil
 	}
 
-	// 2. Spin up concurrent worker pool lanes
 	tasksChan := make(chan DownloadTask, len(records))
 	var wg sync.WaitGroup
 
@@ -156,9 +195,7 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 		go downloadFileWorker(client, tasksChan, &wg)
 	}
 
-	// 3. Feed records into jobs queue channel array
 	for _, row := range records {
-		// 🛡️ THE PROTOCOL GUARD: Skip empty links, dashes, or invalid URL schemes
 		if row.DownloadURL == "" || row.DownloadURL == "-" || len(row.DownloadURL) < 8 {
 			fmt.Printf("[scrape] ⚠️ Skipping entry '%s': Invalid or empty download URL string.\n", row.Period)
 			continue

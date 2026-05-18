@@ -21,6 +21,8 @@ func GetAllEndpoints() []FilingsEndpoint {
 		InsiderPlanAPI{},
 		InvestorComplaintsAPI{},
 		HistoricalChartAPI{},
+		SymbolDataAPI{},
+		PeerComparisonAPI{},
 	}
 }
 
@@ -525,4 +527,84 @@ func (h HistoricalChartAPI) ParseMultiTimeframes(symbol string) []UniversalRecor
 		})
 	}
 	return results
+}
+
+// ============================================================================
+// STRATEGY 12: Fundamental Symbol Data Tracker
+// ============================================================================
+type SymbolDataAPI struct{}
+
+func (s SymbolDataAPI) Name() string { return "symbol-core-data" }
+func (s SymbolDataAPI) BuildURL(symbol string) string {
+	return fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getSymbolData&marketType=N&series=EQ&symbol=%s", symbol)
+}
+func (s SymbolDataAPI) ParseResponse(body io.Reader) ([]UniversalRecord, error) {
+	return nil, nil // Pipeline automatically saves this via raw metadata file dump!
+}
+
+// ============================================================================
+// STRATEGY 13: Cross-Sectional Peer Comparison Data Matrix
+// ============================================================================
+type PeerComparisonAPI struct{}
+
+func (p PeerComparisonAPI) Name() string { return "peer-comparison-matrix" }
+func (p PeerComparisonAPI) BuildURL(symbol string) string { return "" }
+func (p PeerComparisonAPI) ParseResponse(body io.Reader) ([]UniversalRecord, error) { return nil, nil }
+
+// Struct to track dynamic multi-dimensional configuration inputs
+type PeerDirective struct {
+	FileName string
+	URL      string
+}
+
+func (p PeerComparisonAPI) GetCombinations(symbol string) []PeerDirective {
+	quarters := []string{"2025-12", "2025-09", "2025-06", "2025-03"}
+	indices := []string{
+		"NIFTY MICROCAP 250",
+		"NIFTY TOTAL MARKET MOMENTUM QUALITY 50",
+		"NIFTY TOTAL MARKET",
+		"NIFTY SMALLCAP 500",
+	}
+
+	var directives []PeerDirective
+
+	for _, q := range quarters {
+		// 1. Core Industry Parameter Combo
+		indURL := fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getPeerComparisonData&symbol=%s&type=S&quarter=%s&param=industry&index=", symbol, q)
+		directives = append(directives, PeerDirective{
+			FileName: fmt.Sprintf("Industry_%s", q),
+			URL:      indURL,
+		})
+
+		// 2. Specific Index Parameter Combos
+		for _, idx := range indices {
+			// Escape spaces to %20 cleanly for raw web formatting
+			escapedIndex := ""
+			for _, char := range idx {
+				if char == ' ' {
+					escapedIndex += "%20"
+				} else {
+					escapedIndex += string(char)
+				}
+			}
+
+			// Sanitize index text for clear file system naming strings
+			cleanIndexName := ""
+			for _, char := range idx {
+				if char == ' ' {
+					cleanIndexName += "_"
+				} else {
+					cleanIndexName += string(char)
+				}
+			}
+
+			idxURL := fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getPeerComparisonData&symbol=%s&type=S&quarter=%s&param=index&index=%s", symbol, q, escapedIndex)
+			directives = append(directives, PeerDirective{
+				FileName: fmt.Sprintf("Index_%s_%s", cleanIndexName, q),
+				URL:      idxURL,
+			})
+		}
+	}
+
+	return directives
 }
