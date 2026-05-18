@@ -1,4 +1,4 @@
-package scrape
+package scrape_nse
 
 import "io"
 

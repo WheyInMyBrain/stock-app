@@ -1,4 +1,4 @@
-package scrape
+package scrape_nse
 
 import (
 	"fmt"
@@ -70,9 +70,11 @@ func downloadFileWorker(client *NSEClient, tasks <-chan DownloadTask, wg *sync.W
 	}
 }
 
-// buildSaveDirectory builds structural tree target schemas: ../data/{ticker}/{api_name}
+// buildSaveDirectory builds structural tree target schemas: data/{ticker}/nse_{api_name}
 func buildSaveDirectory(symbol, apiName string) (string, error) {
-	baseDir := filepath.Join("data", symbol, apiName)
+	// 🚀 Added "nse_" prefix cleanly here!
+	exchangeFolder := fmt.Sprintf("nse_%s", apiName)
+	baseDir := filepath.Join("data", symbol, exchangeFolder)
 	err := os.MkdirAll(baseDir, os.ModePerm)
 	return baseDir, err
 }
