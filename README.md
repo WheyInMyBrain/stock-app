@@ -74,16 +74,19 @@ Bash
 Pass your custom exchange-isolation and worker execution switches cleanly inside the args="..." variable string:
 
 Bash
-`make scrape ticker=IMFA args="-mode=nse -workers=10"`
+
+`   make scrape ticker=IMFA args="-mode=nse -workers=10"   `
     
 Bash
-`make scrape ticker=TCS args="-mode=bse"`
+
+`   make scrape ticker=TCS args="-mode=bse"    `
     
 
 📁 Storage Topography Schema
 ----------------------------
 
 Downloaded files are automatically structured inside the local repository. The exchange names are cleanly prefixed onto directories to prevent folder name conflicts on disk:
+```text
 data/
 └── IMFA/
     ├── nse_historical-chart-data/
@@ -92,7 +95,7 @@ data/
     ├── bse_bulk-block-deals/          <-- Contains (Bulk_Deals.json, Block_Deals.json)
     ├── bse_financial-results-docs/    <-- Contains physical downloaded XBRL .xml files
     └── bse_voting-results-docs/       <-- Contains physical compliance voter reports (.pdf / .html)
-
+```
 ---
 
 This README clearly documents the architecture and capabilities of your tool, making it easy for anyone to pick up and run your multi-exchange engine instantly!
