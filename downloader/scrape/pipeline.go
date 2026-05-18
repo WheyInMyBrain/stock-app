@@ -101,6 +101,17 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 
 	// 3. Feed records into jobs queue channel array
 	for _, row := range records {
+		// 🛡️ THE PROTOCOL GUARD: Skip empty links, dashes, or invalid URL schemes
+		if row.DownloadURL == "" || row.DownloadURL == "-" || len(row.DownloadURL) < 8 {
+			fmt.Printf("[scrape] ⚠️ Skipping entry '%s': Invalid or empty download URL string.\n", row.Period)
+			continue
+		}
+		
+		if row.DownloadURL[:4] != "http" {
+			fmt.Printf("[scrape] ⚠️ Skipping entry '%s': Unsupported url prefix: %s\n", row.Period, row.DownloadURL)
+			continue
+		}
+
 		ext := filepath.Ext(row.DownloadURL)
 		if ext == "" {
 			ext = ".xml" 

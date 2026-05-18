@@ -21,9 +21,8 @@ func downloadFileWorker(client *NSEClient, tasks <-chan DownloadTask, wg *sync.W
 	defer wg.Done()
 
 	for task := range tasks {
-		// 🛡️ THE CACHE CHECK: Does this file already exist on your disk?
+		// THE CACHE CHECK: Does this file already exist on your disk?
 		if _, err := os.Stat(task.SavePath); err == nil {
-			// err == nil means the file exists perfectly. Skip the network completely!
 			fmt.Printf("[worker] ⏭️ Skipped (Already Downloaded): %s\n", task.FileName)
 			continue
 		}
@@ -44,10 +43,11 @@ func downloadFileWorker(client *NSEClient, tasks <-chan DownloadTask, wg *sync.W
 			continue
 		}
 
+		// 🛡️ HTTP RESPONSE GUARD: Check status before touch disk file system!
 		if resp.StatusCode != http.StatusOK {
-			fmt.Printf("[worker] ❌ Server rejected %s, status: %d\n", task.FileName, resp.StatusCode)
+			fmt.Printf("[worker] ❌ Server rejected %s: HTTP Status Code %d (File missing on NSE servers)\n", task.FileName, resp.StatusCode)
 			resp.Body.Close()
-			continue
+			continue // Skip creating an empty local file, proceed to next queue element
 		}
 
 		// Stream to filesystem block chunks immediately — keeps RAM consumption near 0
