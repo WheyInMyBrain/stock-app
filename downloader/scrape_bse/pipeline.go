@@ -68,20 +68,20 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
 		return fmt.Errorf("failed creating directories: %w", err)
 	}
 
-	// 🛡️ INTERCEPT CHART STRATEGY: Handle BSE Multi-Timeframe logic dynamically
-	if endpoint.Name() == "historical-chart-data" {
-		chartAPI, ok := endpoint.(BSEHistoricalChartAPI)
+	// 🛡️ INTERCEPT DEALS STRATEGY: Handle Bulk (type=1) and Block (type=2) dynamics sequentially
+	if endpoint.Name() == "bulk-block-deals" {
+		dealsAPI, ok := endpoint.(BSEBulkBlockDealsAPI)
 		if !ok {
-			return fmt.Errorf("failed type assertion for BSEHistoricalChartAPI")
+			return fmt.Errorf("failed type assertion for BSEBulkBlockDealsAPI")
 		}
 
-		// Grab the 4 custom data collection directives
-		directives := chartAPI.ParseMultiHorizons(scripCode)
+		// Pull out our two custom deal directives (Bulk and Block paths)
+		directives := dealsAPI.ParseDeals(scripCode)
 
 		for _, dir := range directives {
-			// Strip out our action prefix token ("BSE_CHART_FETCH:") to isolate the target URL path string
-			targetURL := dir.DownloadURL[17:]
-			fmt.Printf("[bse_scrape] 📈 Fetching historical market chart horizon timeline: %s\n", dir.Period)
+			// Strip out our custom tracking prefix token ("BSE_DEAL_FETCH:") to isolate the target query path
+			targetURL := dir.DownloadURL[15:]
+			fmt.Printf("[bse_scrape] 📊 Fetching institutional market transaction layer: %s\n", dir.Period)
 
 			req, err := http.NewRequest("GET", targetURL, nil)
 			if err != nil {
@@ -94,33 +94,33 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
 
 			resp, err := client.HTTPClient.Do(req)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Chart tracking drop for horizon %s: %v\n", dir.Period, err)
+				fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Connection error dropped deal fetch for %s: %v\n", dir.Period, err)
 				continue
 			}
 
 			if resp.StatusCode != http.StatusOK {
-				fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ BSE Chart API rejected timeframe %s, status code: %d\n", dir.Period, resp.StatusCode)
+				fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ BSE API rejected deal entry %s, status code: %d\n", dir.Period, resp.StatusCode)
 				resp.Body.Close()
 				continue
 			}
 
-			chartBytes, err := io.ReadAll(resp.Body)
+			dealBytes, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Failed reading chart raw bytes stream for horizon %s: %v\n", dir.Period, err)
+				fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Read failed for transaction stream row %s: %v\n", dir.Period, err)
 				continue
 			}
 
-			// Save data points directly as clean standalone timeframe logs!
-			tfPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", dir.Period))
-			if err := os.WriteFile(tfPath, chartBytes, 0644); err != nil {
-				fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Failed writing local chart log %s: %v\n", dir.Period, err)
+			// Save directly as unique files: Bulk_Deals.json and Block_Deals.json!
+			dealPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", dir.Period))
+			if err := os.WriteFile(dealPath, dealBytes, 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Failed writing transaction file to disk %s: %v\n", dir.Period, err)
 			}
 
-			// Pacing buffer delay (150ms) to ensure continuous backend access integrity
+			// Polite pacing buffer pause (150ms) to ensure continuous session protection
 			time.Sleep(150 * time.Millisecond)
 		}
-		return nil // Chart compilation sequence fully handled! Skip past standard workflow.
+		return nil // Complete institutional sweep finished cleanly! Skip standard workflow loop.
 	}
 
 	// ============================================================================
