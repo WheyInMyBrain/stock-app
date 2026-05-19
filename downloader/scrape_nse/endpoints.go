@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"strings"
 	"path/filepath"
 	"time"
 )
@@ -544,8 +546,11 @@ func (s SymbolDataAPI) ParseResponse(body io.Reader) ([]UniversalRecord, error) 
 	return nil, nil // Pipeline automatically saves this via raw metadata file dump!
 }
 
+// UniversalRecord placeholder representing your architecture's standard format
+type UniversalRecord struct{}
+
 // ============================================================================
-// STRATEGY 13: Cross-Sectional Peer Comparison Data Matrix
+// STRATEGY 13: Cross-Sectional Peer Comparison Data Matrix (FULLY AUTOMATED)
 // ============================================================================
 type PeerComparisonAPI struct{}
 
@@ -559,17 +564,110 @@ type PeerDirective struct {
 	URL      string
 }
 
+// Structural mapping model for the NSE Quarter API payload array format
+type QuarterResponse struct {
+	Label string `json:"label"`
+	Value string `json:"value"` // This is what we need (e.g., "2025-12")
+}
+
+// Fetch real-time available data quarters directly from the NSE API tracking layers
+func fetchDynamicQuarters(symbol string) []string {
+	// 🎯 DYNAMIC TIMELINE QUERY: Grab the exact valid reporting quarters available right now
+	url := fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getPeerComparisonQuaters&symbol=%s", symbol)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		fmt.Printf("⚠️  Failed to build quarter lookup blueprint request for %s: %v\n", symbol, err)
+		return nil
+	}
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("⚠️  Network timeout pulling dynamic quarters timeline for %s: %v\n", symbol, err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Printf("⚠️  NSE Quarter API returned non-200 state context for %s: %d\n", symbol, resp.StatusCode)
+		return nil
+	}
+
+	var parsedQuarters []QuarterResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsedQuarters); err != nil {
+		fmt.Printf("⚠️  Failed to decode dynamic quarter schema layout for %s: %v\n", symbol, err)
+		return nil
+	}
+
+	// Isolate and extract just the values array
+	var quarters []string
+	for _, q := range parsedQuarters {
+		if q.Value != "" {
+			quarters = append(quarters, q.Value)
+		}
+	}
+
+	return quarters
+}
+
+// Fetch real-time index alignments directly from the NSE API tracking layers
+func fetchDynamicIndices(symbol string) []string {
+	url := fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getIndexList&symbol=%s", symbol)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		fmt.Printf("⚠️  Failed to create index lookup request for %s: %v\n", symbol, err)
+		return nil
+	}
+	
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("⚠️  Network timeout pulling dynamic indices for %s: %v\n", symbol, err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var indices []string
+	if err := json.NewDecoder(resp.Body).Decode(&indices); err != nil {
+		return nil
+	}
+
+	return indices
+}
+
 func (p PeerComparisonAPI) GetCombinations(symbol string) []PeerDirective {
-	quarters := []string{"2025-12", "2025-09", "2025-06", "2025-03"}
-	indices := []string{
-		"NIFTY MICROCAP 250",
-		"NIFTY TOTAL MARKET MOMENTUM QUALITY 50",
-		"NIFTY TOTAL MARKET",
-		"NIFTY SMALLCAP 500",
+	// 🚀 STEP 1: Dynamically pull the latest available quarter nodes from the web
+	quarters := fetchDynamicQuarters(symbol)
+	
+	// Fallback to maintain historical pipeline stability if the network fails
+	if len(quarters) == 0 {
+		fmt.Printf("ℹ️  Using default time-series fallback track matrix for stock: %s\n", symbol)
+		quarters = []string{"2025-12", "2025-09", "2025-06", "2025-03"}
+	}
+
+	// 🚀 STEP 2: Dynamically pull the live index assignments
+	indices := fetchDynamicIndices(symbol)
+	
+	if len(indices) == 0 {
+		fmt.Printf("ℹ️  Using safe index fallback registry layout for stock tracking: %s\n", symbol)
+		indices = []string{"NIFTY TOTAL MARKET"}
 	}
 
 	var directives []PeerDirective
 
+	// Nest both dynamic collections together to map out our absolute collection parameters grid
 	for _, q := range quarters {
 		// 1. Core Industry Parameter Combo
 		indURL := fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getPeerComparisonData&symbol=%s&type=S&quarter=%s&param=industry&index=", symbol, q)
@@ -580,25 +678,8 @@ func (p PeerComparisonAPI) GetCombinations(symbol string) []PeerDirective {
 
 		// 2. Specific Index Parameter Combos
 		for _, idx := range indices {
-			// Escape spaces to %20 cleanly for raw web formatting
-			escapedIndex := ""
-			for _, char := range idx {
-				if char == ' ' {
-					escapedIndex += "%20"
-				} else {
-					escapedIndex += string(char)
-				}
-			}
-
-			// Sanitize index text for clear file system naming strings
-			cleanIndexName := ""
-			for _, char := range idx {
-				if char == ' ' {
-					cleanIndexName += "_"
-				} else {
-					cleanIndexName += string(char)
-				}
-			}
+			escapedIndex := strings.ReplaceAll(idx, " ", "%20")
+			cleanIndexName := strings.ReplaceAll(idx, " ", "_")
 
 			idxURL := fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getPeerComparisonData&symbol=%s&type=S&quarter=%s&param=index&index=%s", symbol, q, escapedIndex)
 			directives = append(directives, PeerDirective{
