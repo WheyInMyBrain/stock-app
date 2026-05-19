@@ -26,7 +26,7 @@ fn main() -> PolarsResult<()> {
     let current_ticker = &args[1].to_uppercase();
 
     println!("=================================================================================");
-    println!("🦀 AUTOMATED MULTI-EXCHANGE PIPELINE TARGETING SECTOR: [{}]", current_ticker);
+    println!("🦀 AUTOMATED PARSING PIPELINE TARGETING SECTOR: [{}]", current_ticker);
     println!("=================================================================================\n");
 
     let pipeline_start = Instant::now();
@@ -144,7 +144,7 @@ fn main() -> PolarsResult<()> {
     }
 
     println!("=================================================================================");
-    println!("🎉 DUAL-EXCHANGE FUSION CONCLUDED FOR TICKER SYSTEM [{}]", current_ticker);
+    println!("🎉 PARSING CONCLUDED FOR TICKER SYSTEM [{}]", current_ticker);
     println!("=================================================================================");
     println!("📈 Grand Total Data Rows Synchronized: {}", grand_total_rows);
     println!("⏱️ Full Run Pipeline Execution Time   : {:?}", pipeline_start.elapsed());
