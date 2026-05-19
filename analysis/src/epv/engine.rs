@@ -2,7 +2,9 @@
 
 use polars::prelude::*;
 use std::path::Path;
-use crate::epv::EpvResultRow;
+use rayon::prelude::*;
+
+use crate::epv::EpvMatrixCell;
 
 struct InternalLedgerRow {
     date_bounds: String,
@@ -14,7 +16,10 @@ struct InternalLedgerRow {
     ebit: f64,
 }
 
-pub fn execute_rolling_epv_pipeline(ticker: &str, wacc: f64) -> PolarsResult<Vec<EpvResultRow>> {
+pub fn execute_rolling_epv_pipeline(
+    ticker: &str, 
+    base_wacc: f64,
+) -> PolarsResult<Vec<EpvMatrixCell>> {
     let bse_path = format!("../data/{}/parquets/bse_financial-results-docs.parquet", ticker);
     let shp_path = format!("../data/{}/parquets/bse_shareholding-pattern-docs.parquet", ticker);
 
@@ -24,10 +29,10 @@ pub fn execute_rolling_epv_pipeline(ticker: &str, wacc: f64) -> PolarsResult<Vec
         ));
     }
 
+    // 1. Ingest Data Tables into memory EXACTLY ONCE
     let df_fin = LazyFrame::scan_parquet(&bse_path, Default::default())?.collect()?;
     let df_shp = LazyFrame::scan_parquet(&shp_path, Default::default())?.collect()?;
 
-    // 1. Gather our operational target tags
     let target_tags = [
         "RevenueFromOperations", 
         "ProfitBeforeTax", 
@@ -76,7 +81,7 @@ pub fn execute_rolling_epv_pipeline(ticker: &str, wacc: f64) -> PolarsResult<Vec
     }
     unique_groups.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // 2. Parse into internal ledger rows
+    // 2. Map structures into a clean history ledger vector
     let mut ledger: Vec<InternalLedgerRow> = Vec::new();
     for (bounds, source) in unique_groups {
         if let Some(metrics) = grouped_rows.get(&(bounds.clone(), source.clone())) {
@@ -104,62 +109,38 @@ pub fn execute_rolling_epv_pipeline(ticker: &str, wacc: f64) -> PolarsResult<Vec
         }
     }
 
-    let mut output_report = Vec::new();
-
-    // Cache the share pattern vectors out of the loop to process row filtering efficiently
     let shp_bounds_col = df_shp.column("date_bounds")?.str()?;
     let shp_tag_col = df_shp.column("tag_name")?.str()?;
     let shp_ctx_col = df_shp.column("context_id")?.str()?;
     let shp_val_col = df_shp.column("raw_value")?.str()?;
 
-    // 3. Rolling Period calculation loop 
+    // 3. Generate high-resolution matrix ranges in RAM
+    let mut wacc_scenarios = Vec::new();
+    for step in -5..=5 {
+        wacc_scenarios.push(base_wacc + (step as f64 * 0.005)); // +/- 2.5% in 0.5% steps
+    }
+
+    let mut multiplier_scenarios = Vec::new();
+    let mut current_mult = 0.75;
+    while current_mult <= 1.25001 {
+        multiplier_scenarios.push(current_mult);
+        current_mult += 0.0003; // Exact 0.03% increments
+    }
+
+    // Pre-calculate baseline outstanding shares matching each node timeline index to avoid looping inside threads
+    let mut shares_timeline_mapping = Vec::with_capacity(ledger.len());
     for idx in 0..ledger.len() {
-        let current_node = &ledger[idx];
-        let year_label = current_node.date_bounds.split(" to ").collect::<Vec<&str>>()[1].to_string();
-
-        // Compute rolling mean EBIT margin up to this point in time
-        let mut margin_sum = 0.0;
-        let mut capex_sum = 0.0;
-        let mut depr_sum = 0.0;
-        for j in 0..=idx {
-            margin_sum += ledger[j].ebit_margin;
-            capex_sum += ledger[j].capex;
-            depr_sum += ledger[j].depr;
-        }
-        let rolling_mean_ebit_margin = margin_sum / ((idx + 1) as f64);
-        let avg_historical_capex = capex_sum / ((idx + 1) as f64);
-        let avg_historical_depr = depr_sum / ((idx + 1) as f64);
-
-        // Normalize EBIT for this period node
-        let normalized_ebit = current_node.revenue * rolling_mean_ebit_margin;
-
-        // Dynamic tax rate check
-        let mut effective_tax_rate = current_node.tax / (if current_node.ebit > 0.0 { current_node.ebit } else { 1.0 });
-        if effective_tax_rate < 0.0 || effective_tax_rate > 0.40 {
-            effective_tax_rate = 0.25;
-        }
-
-        // Apply Greenwald maintenance capex ratio proxy
-        let maintenance_capex_ratio = (avg_historical_depr / (if avg_historical_capex > 0.0 { avg_historical_capex } else { 1.0 })).min(1.0);
-        let normalized_capex = current_node.capex * maintenance_capex_ratio;
-
-        // Normalized cash flow perpetuity generation
-        let normalized_earnings_power = (normalized_ebit * (1.0 - effective_tax_rate)) + current_node.depr - normalized_capex;
-        let enterprise_value_epv = normalized_earnings_power / wacc;
-
-        // 🎯 FIXED STRING COMPARISON FIX: Extract matching outstanding shares using native loop scanning
+        let year_label = ledger[idx].date_bounds.split(" to ").collect::<Vec<&str>>()[1];
         let mut extracted_shares: Option<f64> = None;
         for s_idx in 0..df_shp.shape().0 {
-            if let Some(b_val) = shp_bounds_col.get(s_idx) {
-                if b_val == year_label {
-                    if let (Some(tag), Some(ctx)) = (shp_tag_col.get(s_idx), shp_ctx_col.get(s_idx)) {
-                        if tag == "NumberOfShares" && ctx == "ShareholdingPattern_ContextI" {
-                            if let Some(val_str) = shp_val_col.get(s_idx) {
-                                if let Ok(parsed_shares) = val_str.replace(",", "").trim().parse::<f64>() {
-                                    if parsed_shares > 1_000_000.0 {
-                                        extracted_shares = Some(parsed_shares);
-                                        break;
-                                    }
+            if shp_bounds_col.get(s_idx) == Some(year_label) {
+                if let (Some(tag), Some(ctx)) = (shp_tag_col.get(s_idx), shp_ctx_col.get(s_idx)) {
+                    if tag == "NumberOfShares" && ctx == "ShareholdingPattern_ContextI" {
+                        if let Some(val_str) = shp_val_col.get(s_idx) {
+                            if let Ok(parsed_shares) = val_str.replace(",", "").trim().parse::<f64>() {
+                                if parsed_shares > 1_000_000.0 {
+                                    extracted_shares = Some(parsed_shares);
+                                    break;
                                 }
                             }
                         }
@@ -168,7 +149,6 @@ pub fn execute_rolling_epv_pipeline(ticker: &str, wacc: f64) -> PolarsResult<Vec
             }
         }
 
-        // Treat missing chronological share capital matching as a hard error condition
         let shares_outstanding = match extracted_shares {
             Some(shares) => shares,
             None => {
@@ -177,17 +157,73 @@ pub fn execute_rolling_epv_pipeline(ticker: &str, wacc: f64) -> PolarsResult<Vec
                 ));
             }
         };
-
-        let epv_fair_value = enterprise_value_epv / shares_outstanding;
-
-        output_report.push(EpvResultRow {
-            year_end: year_label,
-            base_revenue: current_node.revenue,
-            historical_ebit_margin: rolling_mean_ebit_margin,
-            normalized_fcf: normalized_earnings_power,
-            epv_fair_value,
-        });
+        shares_timeline_mapping.push(shares_outstanding);
     }
 
-    Ok(output_report)
+    // Flatten cell coordinates for parallel mapping execution
+    let mut grid_tasks = Vec::new();
+    for idx in 0..ledger.len() {
+        for &wacc in &wacc_scenarios {
+            for &mult in &multiplier_scenarios {
+                grid_tasks.push((idx, wacc, mult));
+            }
+        }
+    }
+
+    println!("⚡ Computing {} high-precision rolling EPV matrix cells concurrently in memory...", grid_tasks.len());
+
+    // 4. Run Rayon parallel mapping across tasks
+    let final_matrix_output: Vec<EpvMatrixCell> = grid_tasks
+        .par_iter()
+        .map(|&(idx, wacc, mult)| {
+            let current_node = &ledger[idx];
+            let year_label = current_node.date_bounds.split(" to ").collect::<Vec<&str>>()[1].to_string();
+            let shares_used = shares_timeline_mapping[idx];
+
+            // Compute historical baseline parameters up to this specific point in time
+            let mut margin_sum = 0.0;
+            let mut capex_sum = 0.0;
+            let mut depr_sum = 0.0;
+            for j in 0..=idx {
+                margin_sum += ledger[j].ebit_margin;
+                capex_sum += ledger[j].capex;
+                depr_sum += ledger[j].depr;
+            }
+            
+            // Distort margins dynamically matching the active multiplier axis
+            let rolling_mean_ebit_margin = (margin_sum / ((idx + 1) as f64)) * mult;
+            let avg_historical_capex = capex_sum / ((idx + 1) as f64);
+            let avg_historical_depr = depr_sum / ((idx + 1) as f64);
+
+            // Normalize EBIT for this matrix cell configuration
+            let normalized_ebit = current_node.revenue * rolling_mean_ebit_margin;
+
+            // Audit operational tax bounds
+            let mut effective_tax_rate = current_node.tax / (if current_node.ebit > 0.0 { current_node.ebit } else { 1.0 });
+            if effective_tax_rate < 0.0 || effective_tax_rate > 0.40 {
+                effective_tax_rate = 0.25;
+            }
+
+            // Apply maintenance CapEx extraction constraints
+            let maintenance_capex_ratio = (avg_historical_depr / (if avg_historical_capex > 0.0 { avg_historical_capex } else { 1.0 })).min(1.0);
+            let normalized_capex = current_node.capex * maintenance_capex_ratio;
+
+            // Calculate sustainable earnings power cash flow perpetuity
+            let normalized_earnings_power = (normalized_ebit * (1.0 - effective_tax_rate)) + current_node.depr - normalized_capex;
+            let enterprise_value_epv = normalized_earnings_power / wacc;
+            let epv_fair_value = enterprise_value_epv / shares_used;
+
+            EpvMatrixCell {
+                year_end: year_label,
+                base_revenue: current_node.revenue,
+                wacc,
+                operational_multiplier: mult,
+                historical_ebit_margin: rolling_mean_ebit_margin,
+                normalized_fcf: normalized_earnings_power,
+                epv_fair_value,
+            }
+        })
+        .collect();
+
+    Ok(final_matrix_output)
 }

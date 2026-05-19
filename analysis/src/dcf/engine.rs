@@ -2,7 +2,9 @@
 
 use polars::prelude::*;
 use std::path::Path;
-use crate::dcf::DcfResultRow;
+use rayon::prelude::*;
+
+use crate::dcf::DcfMatrixCell;
 
 struct DynamicYearData {
     date_bounds: String,
@@ -13,11 +15,9 @@ struct DynamicYearData {
 
 pub fn execute_dual_dcf_pipeline(
     ticker: &str,
-    wacc: f64,
-    terminal_g: f64,
-    growth_multiplier: f64,
-    margin_multiplier: f64,
-) -> PolarsResult<Vec<DcfResultRow>> {
+    base_wacc: f64,
+    base_terminal_g: f64,
+) -> PolarsResult<Vec<DcfMatrixCell>> {
     let bse_path = format!("../data/{}/parquets/bse_financial-results-docs.parquet", ticker);
     let shp_path = format!("../data/{}/parquets/bse_shareholding-pattern-docs.parquet", ticker);
 
@@ -27,11 +27,9 @@ pub fn execute_dual_dcf_pipeline(
         ));
     }
 
-    // 1. Load data tables lazily
     let df_fin = LazyFrame::scan_parquet(&bse_path, Default::default())?.collect()?;
     let df_shp = LazyFrame::scan_parquet(&shp_path, Default::default())?.collect()?;
 
-    // 2. Filter for our broad set of direct + indirect fallback target tags
     let target_tags = [
         "RevenueFromOperations",
         "CashFlowsFromUsedInOperatingActivities",
@@ -52,7 +50,6 @@ pub fn execute_dual_dcf_pipeline(
     
     let df_filtered = df_fin.filter(&mask)?;
 
-    // 3. Manual structural pivot grouping by date_bounds & source_file
     let date_bounds_col = df_filtered.column("date_bounds")?.str()?;
     let source_file_col = df_filtered.column("source_file")?.str()?;
     let tag_name_col = df_filtered.column("tag_name")?.str()?;
@@ -85,7 +82,6 @@ pub fn execute_dual_dcf_pipeline(
 
     unique_groups.sort_by(|a, b| a.0.cmp(&b.0));
 
-    // 4. Pre-calculate baseline CapEx intensity from valid direct cash flow horizons
     let mut capex_ratios = Vec::new();
     for (bounds, source) in &unique_groups {
         if let Some(metrics) = grouped_rows.get(&(bounds.clone(), source.clone())) {
@@ -104,7 +100,6 @@ pub fn execute_dual_dcf_pipeline(
         0.05 
     };
 
-    // 5. Build our ledger and extract matching chronological share values
     let mut dynamic_timeline = Vec::new();
 
     for (bounds, source) in unique_groups {
@@ -156,7 +151,7 @@ pub fn execute_dual_dcf_pipeline(
                 Some(shares) => shares,
                 None => {
                     return Err(PolarsError::ComputeError(
-                        format!("CRITICAL EXTRACTION GAP: Missing total outstanding shares matching [NumberOfShares + ShareholdingPattern_ContextI] for date window ending {}.", year_end_date).into()
+                        format!("CRITICAL EXTRACTION GAP: Missing total outstanding shares matching date window ending {}.", year_end_date).into()
                     ));
                 }
             };
@@ -170,63 +165,88 @@ pub fn execute_dual_dcf_pipeline(
         }
     }
 
-    // 6. Forward Parameters with dynamic terminal injected overrides
-    let omni_growth: f64 = -0.0035 * growth_multiplier;
-    let omni_margin: f64 = 0.1033 * margin_multiplier;
-
-    let mut output_report = Vec::new();
-
-    // 7. Dual Horizon Running DCF Projections Loop
-    for idx in 2..dynamic_timeline.len() {
-        let current_node = &dynamic_timeline[idx];
-        let year_label = current_node.date_bounds.split(" to ").collect::<Vec<&str>>()[1].to_string();
-        
-        let mut total_g_sum = 0.0;
-        for j in 1..=idx {
-            total_g_sum += (dynamic_timeline[j].revenue - dynamic_timeline[j-1].revenue) / dynamic_timeline[j-1].revenue;
-        }
-        let rolling_growth = (total_g_sum / (idx as f64)) * growth_multiplier;
-
-        let mut total_m_sum = 0.0;
-        for j in 0..=idx {
-            total_m_sum += dynamic_timeline[j].fcf_margin;
-        }
-        let rolling_margin = (total_m_sum / ((idx + 1) as f64)) * margin_multiplier;
-
-        let mut roll_rev = current_node.revenue;
-        let mut roll_pvs = 0.0;
-        let mut last_roll_fcf = 0.0;
-        for year in 1..=5 {
-            roll_rev *= 1.0 + rolling_growth;
-            let fcf = roll_rev * rolling_margin;
-            roll_pvs += fcf / ((1.0 + wacc) as f64).powi(year as i32);
-            if year == 5 { last_roll_fcf = fcf; }
-        }
-        let roll_tv = (last_roll_fcf * (1.0 + terminal_g)) / (wacc - terminal_g);
-        let roll_pv_tv = roll_tv / ((1.0 + wacc) as f64).powi(5);
-        let rolling_fair_value = (roll_pvs + roll_pv_tv) / current_node.shares_outstanding;
-
-        let mut omni_rev = current_node.revenue;
-        let mut omni_pvs = 0.0;
-        let mut last_omni_fcf = 0.0;
-        for year in 1..=5 {
-            omni_rev *= 1.0 + omni_growth;
-            let fcf = omni_rev * omni_margin;
-            omni_pvs += fcf / ((1.0 + wacc) as f64).powi(year as i32);
-            if year == 5 { last_omni_fcf = fcf; }
-        }
-        let omni_tv = (last_omni_fcf * (1.0 + terminal_g)) / (wacc - terminal_g);
-        let omni_pv_tv = omni_tv / ((1.0 + wacc) as f64).powi(5);
-        let omniscient_fair_value = (omni_pvs + omni_pv_tv) / current_node.shares_outstanding;
-
-        output_report.push(DcfResultRow {
-            year_end: year_label,
-            baseline_revenue: current_node.revenue,
-            rolling_fair_value,
-            omniscient_fair_value,
-            shares_used: current_node.shares_outstanding,
-        });
+    let mut wacc_scenarios = Vec::new();
+    for step in -5..=5 {
+        wacc_scenarios.push(base_wacc + (step as f64 * 0.005));
     }
 
-    Ok(output_report)
+    let mut multiplier_scenarios = Vec::new();
+    let mut current_mult = 0.75;
+    while current_mult <= 1.25001 {
+        multiplier_scenarios.push(current_mult);
+        current_mult += 0.0003;
+    }
+
+    let mut calculation_tasks = Vec::new();
+    for idx in 2..dynamic_timeline.len() {
+        for &wacc in &wacc_scenarios {
+            for &mult in &multiplier_scenarios {
+                calculation_tasks.push((idx, wacc, mult));
+            }
+        }
+    }
+
+    println!("⚡ Computing {} high-precision valuation cells concurrently in memory...", calculation_tasks.len());
+
+    let matrix_grid_output: Vec<DcfMatrixCell> = calculation_tasks
+        .par_iter()
+        .map(|&(idx, wacc, mult)| {
+            let current_node = &dynamic_timeline[idx];
+            let year_label = current_node.date_bounds.split(" to ").collect::<Vec<&str>>()[1].to_string();
+
+            let cell_omni_growth = -0.0035 * mult;
+            let cell_omni_margin = 0.1033 * mult;
+            
+            let mut total_g_sum = 0.0;
+            for j in 1..=idx {
+                total_g_sum += (dynamic_timeline[j].revenue - dynamic_timeline[j-1].revenue) / dynamic_timeline[j-1].revenue;
+            }
+            let rolling_growth = (total_g_sum / (idx as f64)) * mult;
+
+            let mut total_m_sum = 0.0;
+            for j in 0..=idx {
+                total_m_sum += dynamic_timeline[j].fcf_margin;
+            }
+            let rolling_margin = (total_m_sum / ((idx + 1) as f64)) * mult;
+
+            let mut roll_rev = current_node.revenue;
+            let mut roll_pvs = 0.0;
+            let mut last_roll_fcf = 0.0;
+            for year in 1..=5 {
+                roll_rev *= 1.0 + rolling_growth;
+                let fcf = roll_rev * rolling_margin;
+                roll_pvs += fcf / (1.0 + wacc).powi(year as i32);
+                if year == 5 { last_roll_fcf = fcf; }
+            }
+            let roll_tv = (last_roll_fcf * (1.0 + base_terminal_g)) / (wacc - base_terminal_g);
+            let roll_pv_tv = roll_tv / (1.0 + wacc).powi(5);
+            let rolling_fair_value = (roll_pvs + roll_pv_tv) / current_node.shares_outstanding;
+
+            let mut omni_rev = current_node.revenue;
+            let mut omni_pvs = 0.0;
+            let mut last_omni_fcf = 0.0;
+            for year in 1..=5 {
+                omni_rev *= 1.0 + cell_omni_growth;
+                let fcf = omni_rev * cell_omni_margin;
+                omni_pvs += fcf / (1.0 + wacc).powi(year as i32);
+                if year == 5 { last_omni_fcf = fcf; }
+            }
+            let omni_tv = (last_omni_fcf * (1.0 + base_terminal_g)) / (wacc - base_terminal_g);
+            let omni_pv_tv = omni_tv / (1.0 + wacc).powi(5);
+            let omniscient_fair_value = (omni_pvs + omni_pv_tv) / current_node.shares_outstanding;
+
+            DcfMatrixCell {
+                year_end: year_label,
+                base_revenue: current_node.revenue,
+                wacc,
+                terminal_g: base_terminal_g,
+                growth_multiplier: mult,
+                margin_multiplier: mult,
+                rolling_fair_value,
+                omniscient_fair_value,
+            }
+        })
+        .collect();
+
+    Ok(matrix_grid_output)
 }

@@ -1,14 +1,15 @@
-// analysis/src/monte_carlo/mod.rs
+// analysis/src/dcf/mod.rs
 
 pub mod engine;
 
 use serde::Serialize;
 
-/// Container holding the aggregated percentile outcomes 
-/// of our randomized simulation matrix.
+/// High-resolution multidimensional grid container for persistent storage.
 #[derive(Debug, Clone, Serialize)]
-pub struct MonteCarloReport {
-    pub ticker: String,
+pub struct MonteCarloMatrixCell {
+    pub wacc: f64,
+    pub terminal_g: f64,
+    pub operational_multiplier: f64,
     pub trials_executed: usize,
     pub p10_bear: f64,
     pub p30_conservative: f64,
