@@ -57,6 +57,6 @@ downloader-run:
 
 # Bypasses Docker and manual building completely—compiles instantly in RAM and runs
 # Usage: make local-run ticker=IMFA args="-mode=both -workers=10"
-local-run:
+local-download:
 	@if [ -z "$(ticker)" ]; then echo "❌ Error: 'ticker' variable is required. Example: make local-run ticker=IMFA"; exit 1; fi
 	go run ./downloader/main.go $(args) $(ticker)
