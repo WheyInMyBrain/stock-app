@@ -1,39 +1,50 @@
 # ============================================================================
-# STAGE 1: COMPILE THE GO APPLICATION ENGINE
+# STAGE 1: COMPILE THE GO DOWNLOADER ENGINE
 # ============================================================================
-FROM golang:1.23-alpine AS builder
-
-# Install system utilities needed for potential cross-compilation boundaries
+FROM golang:1.23-alpine AS go-builder
 RUN apk add --no-cache git gcc musl-dev
+WORKDIR /go/src/app
 
-# Set the working internal staging container directory
-WORKDIR /app
-
-# Copy the dependency tracking manifests first to maximize layer caching
+# Download Go dependencies using cache boundaries
 COPY go.mod ./
-# If you have a go.sum file, uncomment the line below:
-# COPY go.sum ./
+# COPY go.sum ./ (Uncomment if you use a lockfile)
 RUN go mod download
 
-# Copy the entire source code tree into the builder environment
 COPY . .
-
-# Compile the downloader module binary as a statically linked standalone artifact
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /stock-scraper ./downloader/main.go
 
 # ============================================================================
-# STAGE 2: HIGHLY COMPACT PRODUCTION RUNTIME ENVIRONMENT
+# STAGE 2: COMPILE THE RUST XBRL PARSER ENGINE
+# ============================================================================
+FROM rust:1.80-alpine AS rust-builder
+RUN apk add --no-cache musl-dev git
+WORKDIR /usr/src/app
+
+# Pre-stage configuration files to cache downloaded crates
+COPY ./parser/Cargo.toml ./parser/
+COPY . .
+WORKDIR /usr/src/app/parser
+
+# Build high-fidelity optimized production binaries
+RUN RUSTFLAGS="-C target-feature=+crt-static" cargo build --release
+
+# ============================================================================
+# STAGE 3: RUNTIME LAYER - HIGHLY OPTIMIZED & DAEMONIZED PERMANENT ENGINE
 # ============================================================================
 FROM alpine:3.19
+RUN apk add --no-cache ca-certificates tzdata bash
 
-# Install ca-certificates so HTTPS connections to NSE/BSE API subdomains work perfectly
-RUN apk add --no-cache ca-certificates tzdata
+WORKDIR /app
 
-WORKDIR /root/
+# Copy the statically compiled assets from their respective staging layers
+COPY --from=go-builder /stock-scraper ./stock-scraper
+COPY --from=rust-builder /usr/src/app/parser/target/release/parser ./stock-parser
+COPY entrypoint.sh ./
 
-# Copy the compiled binary out from our staging builder container layer
-COPY --from=builder /stock-scraper .
+RUN chmod +x ./stock-scraper ./stock-parser ./entrypoint.sh
 
-# Establish a default fallback execution instruction loop command
-ENTRYPOINT ["./stock-scraper"]
-CMD ["--help"]
+# Establish data volume path directories so parquet and JSON maps persist on host disk
+VOLUME ["/app/data"]
+
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["daemon"]
