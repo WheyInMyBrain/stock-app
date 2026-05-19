@@ -6,6 +6,7 @@ use std::env;
 mod dcf;
 mod runner;
 mod monte_carlo;
+mod epv;
 
 fn main() -> PolarsResult<()> {
     let args: Vec<String> = env::args().collect();
