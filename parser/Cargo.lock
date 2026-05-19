@@ -918,6 +918,7 @@ dependencies = [
  "hashbrown 0.14.5",
  "polars",
  "quick-xml",
+ "rayon",
 ]
 
 [[package]]
