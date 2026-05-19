@@ -134,12 +134,27 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
             let ebit = pbt + interest;
             let ebitda = ebit + depr;
             let net_profit = pbt - tax;
+            let total_expenses = rev - net_profit;
 
             let ebit_margin = ebit / rev;
             let net_margin = net_profit / rev;
             let fcf_margin = (cfo - capex) / rev;
             let interest_coverage = if interest > 0.0 { ebit / interest } else { 0.0 };
             let accruals_to_sales_intensity = (net_profit - cfo) / rev;
+
+            // ------------------------------------------------------------------------
+            //  ADDITION: OPERATIONAL LEVERAGE & CAPEX REINVESTMENT (TIER 1)
+            // ------------------------------------------------------------------------
+            let estimated_variable_costs = (total_expenses - depr - interest) * 0.65;
+            let estimated_fixed_costs = (total_expenses - depr - interest) * 0.35 + depr;
+            
+            let degree_of_operating_leverage = if ebit > 0.0 { (rev - estimated_variable_costs) / ebit } else { 0.0 };
+            let contribution_margin_ratio = if rev > 0.0 { (rev - estimated_variable_costs) / rev } else { 0.1 };
+            let breakeven_operating_revenue = if contribution_margin_ratio > 0.0 { estimated_fixed_costs / contribution_margin_ratio } else { 0.0 };
+
+            let capex_to_depreciation_coverage = if depr > 0.0 { capex / depr } else { 0.0 };
+            let ppe = *metrics.get("PropertyPlantAndEquipment").unwrap_or(&0.0);
+            let estimated_infrastructure_nbv_age_years = if depr > 0.0 { ppe / depr } else { 0.0 };
 
             let ca = *metrics.get("CurrentAssets").unwrap_or(&0.0);
             let assets = *metrics.get("Assets").unwrap_or(&0.0);
@@ -150,6 +165,11 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
             let (mut roic, mut roe, mut roa, mut debt_to_equity, mut current_ratio, mut quick_ratio) = (None, None, None, None, None, None);
             let (mut inventory_turnover, mut cash_conversion_cycle_days, mut enterprise_value, mut ev_to_ebitda) = (None, None, None, None);
             let (mut piotroski_f_score, mut beneish_m_score, mut altman_z_score) = (None, None, None);
+            
+            // Safety variables for stress engine
+            let (mut defensive_cash_burn_months, mut net_liquidating_dissolution_cash) = (None, None);
+            let (mut simulated_assets_post_10_percent_slump, mut simulated_assets_post_20_percent_slump) = (None, None);
+            let (mut simulated_assets_post_30_percent_slump, mut simulated_assets_post_40_percent_slump, mut simulated_assets_post_50_percent_slump) = (None, None, None);
 
             if has_balance_sheet {
                 let total_assets = if assets > 0.0 { assets } else { ca + metrics.get("NoncurrentAssets").unwrap_or(&0.0) };
@@ -159,7 +179,6 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
 
                 let cl = *metrics.get("CurrentLiabilities").unwrap_or(&1.0);
                 let cl_guard = if cl <= 0.0 { 1.0 } else { cl };
-                let ppe = *metrics.get("PropertyPlantAndEquipment").unwrap_or(&0.0);
                 let inventories = *metrics.get("Inventories").unwrap_or(&0.0);
                 let receivables = *metrics.get("TradeReceivablesCurrent").unwrap_or(&0.0);
                 let working_capital = ca - cl_guard;
@@ -186,6 +205,21 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
                     ev_to_ebitda = Some(ev / ebitda.max(1.0));
                 }
 
+                // ------------------------------------------------------------------------
+                //  ADDITION: CASH BURN, DISSOLUTION & HAIRCUT ENGINE (TIER 2)
+                // ------------------------------------------------------------------------
+                let monthly_cash_burn_rate = ((total_expenses - depr) / 12.0).max(1.0);
+                let liquid_assets = ca - inventories;
+                defensive_cash_burn_months = Some(liquid_assets / monthly_cash_burn_rate);
+                
+                net_liquidating_dissolution_cash = Some(ca - total_liabilities);
+                
+                simulated_assets_post_10_percent_slump = Some(total_assets - (inventories * 0.10));
+                simulated_assets_post_20_percent_slump = Some(total_assets - (inventories * 0.20));
+                simulated_assets_post_30_percent_slump = Some(total_assets - (inventories * 0.30));
+                simulated_assets_post_40_percent_slump = Some(total_assets - (inventories * 0.40));
+                simulated_assets_post_50_percent_slump = Some(total_assets - (inventories * 0.50));
+
                 if idx > 0 {
                     if let Some(prev) = document_matrix.get(&chron_files[idx - 1]) {
                         let p_ca = *prev.get("CurrentAssets").unwrap_or(&0.0);
@@ -195,14 +229,12 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
                             let p_ppe = *prev.get("PropertyPlantAndEquipment").unwrap_or(&0.0);
                             let p_total_assets = if *prev.get("Assets").unwrap_or(&0.0) > 0.0 { *prev.get("Assets").unwrap_or(&0.0) } else { p_ca + prev.get("NoncurrentAssets").unwrap_or(&0.0) };
                             
-                            // 🎯 FIXED WARNING: Evaluates fallback logic path accurately
                             let p_total_liabilities = if *prev.get("Liabilities").unwrap_or(&0.0) > 0.0 { *prev.get("Liabilities").unwrap_or(&0.0) } else { prev.get("CurrentLiabilities").cloned().unwrap_or(0.0) + prev.get("NoncurrentLiabilities").cloned().unwrap_or(0.0) };
 
                             let dsri = (receivables / rev) / (p_receivables / p_rev).max(0.0001);
                             let g_margin_curr = (rev - ebit) / rev;
                             let g_margin_prev = (p_rev - (prev.get("ProfitBeforeTax").unwrap_or(&0.0) + prev.get("FinanceCosts").unwrap_or(&0.0))) / p_rev;
                             
-                            // 🎯 FIXED WARNING: Incorporated Gross Margin Index into base Beneish formula matrix weights
                             let gmi = g_margin_prev / g_margin_curr.max(0.0001);
                             let aqi = (1.0 - ((ca + ppe) / total_assets)) / (1.0 - ((p_ca + p_ppe) / p_total_assets)).max(0.0001);
                             let sgi = rev / p_rev.max(0.0001);
@@ -244,8 +276,13 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
                 source_file: file_key.clone(),
                 snapshot_date: parsed_snapshot_date,
                 revenue: rev, ebit_margin, net_margin, fcf_margin, interest_coverage, accruals_to_sales_intensity,
+                degree_of_operating_leverage, breakeven_operating_revenue, capex_to_depreciation_coverage, estimated_infrastructure_nbv_age_years,
                 stock_price, roic, roe, roa, debt_to_equity, current_ratio, quick_ratio, inventory_turnover,
                 cash_conversion_cycle_days, enterprise_value, ev_to_ebitda, piotroski_f_score, beneish_m_score, altman_z_score,
+                defensive_cash_burn_months, net_liquidating_dissolution_cash,
+                simulated_assets_post_10_percent_slump, simulated_assets_post_20_percent_slump,
+                simulated_assets_post_30_percent_slump, simulated_assets_post_40_percent_slump,
+                simulated_assets_post_50_percent_slump,
             });
         }
     }

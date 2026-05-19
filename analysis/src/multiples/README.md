@@ -23,6 +23,14 @@ Calculated across all sequential reporting intervals ($N \approx 40$) using inco
     $$\text{Interest Coverage} = \frac{\text{EBIT}}{\text{Finance Costs}}$$
 * **Accruals-to-Sales Intensity:** Traditional Total Accruals to Total Assets (TATA) variant tailored to identify high-risk non-cash revenue accounting spikes.
     $$\text{Accruals Intensity} = \frac{\text{Net Profit} - \text{Cash Flows from Operating Activities}}{\text{Revenue From Operations}}$$
+* **Degree of Operating Leverage (DOL):** Measures the underlying earnings volatility and bottom-line multiplier sensitivity relative to topline scaling adjustments.
+    $$\text{DOL} = \frac{\text{Revenue From Operations} - \text{Estimated Variable Costs}}{\text{EBIT}}$$
+* **Breakeven Operating Revenue Point:** Calculates the minimum baseline threshold revenue scaling required to support fixed overhead operational expenses before net operational losses occur.
+    $$\text{Breakeven Revenue} = \frac{\text{Estimated Fixed Costs}}{\text{Contribution Margin Ratio}}$$
+* **CapEx-to-Depreciation Coverage Multiplier:** Audits corporate reinvestment health to confirm infrastructure assets are maintained sufficiently against real asset usage decay.
+    $$\text{CapEx Coverage} = \frac{|\text{CapEx}|}{\text{Depreciation, Depletion \& Amortisation Expense}}$$
+* **Estimated Infrastructure NBV Age (Years):** Measures the approximate lifespan remaining on the corporate physical infrastructure footprint (Net Book Value) before replacement cycles apply.
+    $$\text{Estimated Plant Age} = \frac{\text{Property, Plant \& Equipment Net Base}}{\text{Depreciation Expense}}$$
 
 ---
 
@@ -43,6 +51,19 @@ Triggered **only** when balance sheet entities are active ($N = 5$). Missing int
     $$\text{Inventory Turnover} = \frac{\text{Revenue From Operations}}{\text{Inventories}}$$
 * **Cash Conversion Cycle (CCC) Days Proxy:** Tracks the speed at which capital moves through the supply chain.
     $$\text{CCC Days Proxy} = \left(\frac{\text{Inventories}}{\text{Revenue}} \times 365\right) + \left(\frac{\text{Trade Receivables}}{\text{Revenue}} \times 365\right)$$
+* **Defensive Cash Burn Capacity (Months):** Quantifies total survival runways using only cash and high-liquidity assets if primary corporate operational revenues flatline completely.
+    $$\text{Defensive Burn Window} = \frac{\text{Current Assets} - \text{Inventories}}{(\text{Total Expenses} - \text{Depreciation Expense}) / 12}$$
+* **Net Liquidating Dissolution Cash:** Establishes the liquid capital distribution left over for common shareholders if operations cease instantly, liquid current assets are processed, and all outside liabilities are cleared.
+    $$\text{Dissolution Cash Position} = \text{Current Assets} - \text{Total Liabilities}$$
+
+---
+
+## 🌊 Commodity Crash Inventory Haircut Impact Table
+
+To stress-test macro cyclical asset shocks, the engine executes a multi-tiered structural asset write-down simulation matrix, evaluating overall asset degradation profiles when inventory elements encounter liquidation haircuts of $10\%$, $20\%$, $30\%$, $40\%$, and $50\%$:
+
+$$\text{Simulated Post-Asset Value}_{(H)} = \text{Total Assets} - (\text{Inventories} \times H)$$
+*(Where $H$ maps across the designated evaluation parameters: $H \in \{0.10, 0.20, 0.30, 0.40, 0.50\}$).*
 
 ---
 
