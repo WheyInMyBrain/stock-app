@@ -122,7 +122,7 @@ type AnnualReportsXbrlAPI struct{}
 type nseAnnualXbrlRow struct {
 	FromYear       string `json:"fromYr"`
 	ToYear         string `json:"toYr"`
-	XbrlAttachment string `json:"xbrlAttachment"`
+	XbrlAttachment string `json:"fileName"`
 }
 
 func (a AnnualReportsXbrlAPI) Name() string { return "annual-reports-xbrl" }
