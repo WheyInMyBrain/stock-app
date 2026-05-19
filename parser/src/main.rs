@@ -26,6 +26,9 @@ fn main() -> PolarsResult<()> {
 
     // 2. Loop through every folder registered inside targets.rs automatically
     for folder in parser::targets::TARGET_REPORT_FOLDERS {
+        // ⏱️ Start an individual stopwatch timer purely for this loop group block execution frame
+        let group_start = Instant::now();
+
         // Build the precise dynamic path based on the user argument and loop folder
         let target_folder = format!("../data/{}/{}", current_ticker, folder);
         let target_glob = format!("{}/*.xml", target_folder);
@@ -84,7 +87,10 @@ fn main() -> PolarsResult<()> {
         ) {
             Ok(saved_path) => {
                 println!("✅ Digested: {} files | Skipped: {}", processed_files, skipped_files);
-                println!("📁 Saved As: {}\n", saved_path);
+                println!("📁 Saved As: {}", saved_path);
+                // ⏱️ Stop the group watch and print out the precise performance metric
+                println!("⏱️  Duration : {:?}", group_start.elapsed());
+                println!();
                 
                 // Track total written files across the entire pipeline execution frame
                 grand_total_rows += files_vec.len();
