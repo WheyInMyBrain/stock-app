@@ -8,6 +8,7 @@ use std::time::Instant;
 use crate::dcf;
 use crate::monte_carlo;
 use crate::epv;
+use crate::multiples;
 
 pub fn run_all_analysis_pipelines(
     ticker: &str,
@@ -84,6 +85,24 @@ pub fn run_all_analysis_pipelines(
                     }
                 },
                 Err(e) => println!("❌ [THREAD C ERROR]: EPV Matrix Pipeline crash: {}", e),
+            }
+        });
+
+        // Track D: Financial Multiples Analysis
+        scope.spawn(move |_| {
+            let multiples_timer = Instant::now();
+            match multiples::engine::execute_multiples_analytical_pipeline(ticker_ref) {
+                Ok(multiples_report) => {
+                    let json_out_path = format!("{}/nse_corporate_financial_multiples.json", dir_ref);
+                    if let Ok(json_string) = serde_json::to_string_pretty(&multiples_report) {
+                        if let Ok(mut file_handle) = File::create(&json_out_path) {
+                            if file_handle.write_all(json_string.as_bytes()).is_ok() {
+                                println!("💾 [THREAD D SUCCESS]: High-Coverage Financial Multiples Timeline saved. Runtime: {:?}", multiples_timer.elapsed());
+                            }
+                        }
+                    }
+                },
+                Err(err) => println!("❌ [THREAD D ERROR]: Multiples Pipeline Engine crashed: {}", err),
             }
         });
     });
