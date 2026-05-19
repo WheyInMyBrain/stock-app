@@ -1,8 +1,21 @@
 use std::path::Path;
-// Re-export the inner structure out so main.rs can read it easily
-pub use crate::bse::financial_report::BseRecord;
 
-pub fn parse_bse_file(path: &Path) -> Result<Vec<BseRecord>, String> {
-    // This dispatcher pipes execution down into the bse/ folder module cleanly
-    crate::bse::financial_report::parse(path)
+// Re-export all your distinct record structures so main.rs can easily bundle them
+pub use crate::bse::financial_report::BseRecord;
+// pub use crate::bse::shareholding::ShareholdingRecord; // When you add it later!
+
+pub fn parse_bse_file(path: &Path, folder_name: &str) -> Result<Vec<BseRecord>, String> {
+    match folder_name {
+        "bse_financial-results-docs" => {
+            // Pipes straight into your existing financial_report module
+            crate::bse::financial_report::parse(path)
+        }
+        
+        // 🚀 PLUG-AND-PLAY ADDITIONS HERE:
+        // "bse_shareholding_pattern" => {
+        //     crate::bse::shareholding::parse(path)
+        // }
+        
+        _ => Err(format!("No custom parser registered for folder schema: '{}'", folder_name)),
+    }
 }

@@ -52,7 +52,7 @@ fn main() -> PolarsResult<()> {
 
         for entry in entries {
             if let Ok(path) = entry {
-                if let Ok(records) = parser::bse_parser::parse_bse_file(&path) {
+                if let Ok(records) = parser::bse_parser::parse_bse_file(&path, folder) {
                     for r in records {
                         files_vec.push(r.source_file);
                         tags_vec.push(r.tag_name);
