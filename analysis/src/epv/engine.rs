@@ -93,8 +93,6 @@ pub fn execute_rolling_epv_pipeline(
         }
     }
 
-    println!("⚡ [EPV Picker]: Computing {} high-precision rolling EPV matrix cells concurrently...", grid_tasks.len());
-
     let final_matrix_output: Vec<EpvMatrixCell> = grid_tasks
         .par_iter()
         .map(|&(idx, wacc, mult)| {

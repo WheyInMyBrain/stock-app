@@ -4,7 +4,7 @@ use crate::data_loader::UnifiedCompanyMatrix;
 
 pub fn execute_markov_regime_pipeline(
     matrix: &UnifiedCompanyMatrix, // 🎯 PICKER INTERCEPT: Ingests structured shared memory context
-    ticker: &str,
+    _ticker: &str,
 ) -> Vec<MarkovRegimeCell> {
     let mut grid_results = Vec::new();
 
@@ -46,7 +46,6 @@ pub fn execute_markov_regime_pipeline(
     // ==============================================================================
     // 📊 STEP 2: CONCURRENT MARKOV PROBABILITY MATRIX STATE MAPPING via RAYON
     // ==============================================================================
-    println!("🎭 [Markov Picker]: Inferring multi-regime transitional pathways for [{}]...", ticker);
 
     grid_results = (0..observation_stream.len())
         .into_par_iter()

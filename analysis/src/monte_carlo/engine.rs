@@ -112,8 +112,6 @@ pub fn execute_monte_carlo_matrix_pipeline(
         for &mult in &multiplier_scenarios { grid_tasks.push((wacc, mult)); }
     }
 
-    println!("🎲 [Monte Carlo Picker]: Launching parallel processing for {} high-res stochastic scenarios...", grid_tasks.len());
-
     let final_matrix_output: Vec<MonteCarloMatrixCell> = grid_tasks
         .par_iter()
         .map(|&(wacc, mult)| {

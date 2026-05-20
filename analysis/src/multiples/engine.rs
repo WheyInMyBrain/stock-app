@@ -83,7 +83,6 @@ pub fn execute_multiples_analytical_pipeline(
     // ==============================================================================
     // 📊 STEP 3: EXECUTE HIGH-SPEED RATIO MULTIPLIERS GENERATION
     // ==============================================================================
-    println!("⚡ [Multiples Picker]: Compiling multi-tier elasticity and dissolution metrics for [{}]...", ticker);
 
     for (idx, file_key) in matrix.sorted_file_keys.iter().enumerate() {
         if let Some(metrics) = matrix.document_matrix.get(file_key) {

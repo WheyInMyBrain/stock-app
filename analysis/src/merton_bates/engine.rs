@@ -173,7 +173,6 @@ pub fn execute_merton_bates_pipeline(
     // ==============================================================================
     // 📊 STEP 2: CONCURRENT JUMP-DIFFUSION SIMULATIONS via RAYON
     // ==============================================================================
-    println!("🎯 [Merton-Bates Picker]: Simulating trajectory distributions for [{}]...", ticker);
 
     let grid_results: Vec<MertonBatesCell> = evaluation_tasks
         .par_iter()

@@ -6,7 +6,6 @@ use std::sync::Arc;
 use crate::data_loader::{CentralFinancialsDB, Exchange as LoaderExchange};
 
 pub fn run_global_analysis_pipeline(ticker: &str, wacc: f64, terminal_g: f64) {
-    // 🎯 Establish clean output folder path hierarchy natively
     let target_dir = format!("../data/{}/analysis", ticker);
     if let Err(e) = create_dir_all(&target_dir) {
         println!("❌ [SYSTEM ERROR]: Failed to establish output folder path hierarchy: {}", e);
@@ -16,13 +15,24 @@ pub fn run_global_analysis_pipeline(ticker: &str, wacc: f64, terminal_g: f64) {
     let dir_ref = &target_dir;
     let ticker_ref = ticker;
     
-    println!("🏛️  [DATA BROKER]: Pre-fetching unrestricted Parquet tables for [{}]...", ticker);
+    println!("🏛️  [DATA BROKER]: Pre-fetching unrestricted Parquet tables for [{ticker}]...");
     
-    // Ingest the raw parquet data blocks exactly once on the main execution thread
+    // Ingest raw data blocks (returns None if the parquet files are missing from disk)
     let bse_data_matrix = CentralFinancialsDB::load_exchange_matrix(ticker, LoaderExchange::Bse);
     let nse_data_matrix = CentralFinancialsDB::load_exchange_matrix(ticker, LoaderExchange::Nse);
 
-    // Wrap the structured data blocks in read-only thread-safe atomic references
+    // 🎯 MONITOR LISTING COVERAGE UPFRONT
+    match (&bse_data_matrix, &nse_data_matrix) {
+        (Some(_), Some(_)) => println!("⚖️  [LISTING DETECTED]: Dual-Exchange Asset. Spawning all 10 analytics tracks..."),
+        (Some(_), None)    => println!("📢 [LISTING DETECTED]: Exclusive BSE Listing. Skipping NSE tracks cleanly..."),
+        (None, Some(_))    => println!("📢 [LISTING DETECTED]: Exclusive NSE Listing. Skipping BSE tracks cleanly..."),
+        (None, None) => {
+            println!("❌ [DATA CRISIS]: No Parquet files found for [{ticker}] on either BSE or NSE. Aborting pipeline.");
+            return;
+        }
+    }
+
+    // Wrap the data in read-only thread-safe atomic references
     let shared_bse = Arc::new(bse_data_matrix);
     let shared_nse = Arc::new(nse_data_matrix);
 
@@ -178,7 +188,7 @@ pub fn run_global_analysis_pipeline(ticker: &str, wacc: f64, terminal_g: f64) {
         let bse_mb_ref = Arc::clone(&shared_bse);
         scope.spawn(move |_| {
             let merton_bates_timer = Instant::now();
-            if bse_mb_ref.is_some() { // Continuous proxy check verifying active listing presence
+            if let Some(ref _matrix) = *bse_mb_ref {
                 let merton_bates_report = crate::merton_bates::engine::execute_merton_bates_pipeline(ticker_ref, LoaderExchange::Bse);
                 crate::helper::dump_matrix_report_to_disk(
                     &merton_bates_report,
@@ -195,7 +205,7 @@ pub fn run_global_analysis_pipeline(ticker: &str, wacc: f64, terminal_g: f64) {
         let nse_mb_ref = Arc::clone(&shared_nse);
         scope.spawn(move |_| {
             let merton_bates_timer = Instant::now();
-            if nse_mb_ref.is_some() {
+            if let Some(ref _matrix) = *nse_mb_ref {
                 let merton_bates_report = crate::merton_bates::engine::execute_merton_bates_pipeline(ticker_ref, LoaderExchange::Nse);
                 crate::helper::dump_matrix_report_to_disk(
                     &merton_bates_report,
