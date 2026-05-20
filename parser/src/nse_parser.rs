@@ -16,7 +16,9 @@ pub fn parse_nse_file(path: &Path, folder_name: &str) -> Result<Vec<NseRecord>, 
             crate::nse::corporate_governance::parse(path)
         }
 
-        
+        "nse_corporate-shareholding-master" => {
+            crate::nse::shareholding::parse(path)
+        }
 
         _ => Err(format!("No custom NSE parser registered for folder schema: '{}'", folder_name)),
     }

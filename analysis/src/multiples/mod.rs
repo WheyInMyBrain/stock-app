@@ -16,8 +16,6 @@ pub struct CorporateMultiplesReport {
     pub fcf_margin: f64,
     pub interest_coverage: f64,
     pub accruals_to_sales_intensity: f64,
-    
-    // 🎯 NEW TIER 1 ADDITIONS: Leverage & Asset Decay
     pub degree_of_operating_leverage: f64,
     pub breakeven_operating_revenue: f64,
     pub capex_to_depreciation_coverage: f64,
@@ -25,6 +23,7 @@ pub struct CorporateMultiplesReport {
     
     // Tier 2: Structural & Trading Multipliers (Optional Snapshots)
     pub stock_price: f64,
+    pub total_shares: f64,
     pub roic: Option<f64>,
     pub roe: Option<f64>,
     pub roa: Option<f64>,

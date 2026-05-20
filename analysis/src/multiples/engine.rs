@@ -12,6 +12,7 @@ use crate::multiples::CorporateMultiplesReport;
 pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<CorporateMultiplesReport>> {
     let nse_path = format!("../data/{}/parquets/nse_corporates-financial-results.parquet", ticker);
     let chart_path = format!("../data/{}/nse_historical-chart-data/10Y.json", ticker);
+    let shp_path = format!("../data/{}/parquets/nse_corporate-shareholding-master.parquet", ticker);
 
     if !Path::new(&nse_path).exists() || !Path::new(&chart_path).exists() {
         return Err(PolarsError::ComputeError(
@@ -66,10 +67,54 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
         0.0
     };
 
-    let shares_outstanding = 26_977_000.0;
+    // ==============================================================================
+    // 📊 STEP 2: PARSE HISTORICAL SHARES OUTSTANDING (DYNAMIC MATRIX)
+    // ==============================================================================
+    let mut share_history_timeline: HashMap<String, f64> = HashMap::new();
+
+    if Path::new(&shp_path).exists() {
+        let df_shp = LazyFrame::scan_parquet(&shp_path, Default::default())?.collect()?;
+        let shp_tag = df_shp.column("tag_name")?.str()?;
+        let shp_ctx = df_shp.column("context_id")?.str()?;
+        let shp_bounds = df_shp.column("date_bounds")?.str()?;
+        let shp_val = df_shp.column("raw_value")?.str()?;
+
+        for idx in 0..df_shp.shape().0 {
+            if shp_tag.get(idx) == Some("NumberOfShares") {
+                let context = shp_ctx.get(idx).unwrap_or("");
+                if context == "ShareholdingPatternI" || context == "ShareholdingPattern_ContextI" {
+                    let date_key = shp_bounds.get(idx).unwrap_or("").to_string();
+                    let raw_str = shp_val.get(idx).unwrap_or("0");
+                    let parsed_shares: f64 = raw_str.replace(",", "").replace(" ", "").trim().parse().unwrap_or(0.0);
+                    
+                    if parsed_shares > 0.0 {
+                        share_history_timeline.insert(date_key, parsed_shares);
+                    }
+                }
+            }
+        }
+    }
+
+    let find_historical_shares = |target_date: &str| -> f64 {
+        if let Some(&shares) = share_history_timeline.get(target_date) {
+            return shares;
+        }
+        
+        let target_year = target_date.split('-').next().unwrap_or("2024");
+        let mut sorted_dates: Vec<&String> = share_history_timeline.keys().collect();
+        sorted_dates.sort();
+        
+        for date_key in sorted_dates.iter().rev() {
+            if date_key.starts_with(target_year) {
+                return *share_history_timeline.get(*date_key).unwrap_or(&53_954_106.0);
+            }
+        }
+        
+        *share_history_timeline.values().next().unwrap_or(&53_954_106.0)
+    };
 
     // ==============================================================================
-    // 📊 STEP 2: PARQUET INGESTION & IN-MEMORY PIVOT MATCHING
+    // 📊 STEP 3: PARQUET INGESTION & IN-MEMORY PIVOT MATCHING
     // ==============================================================================
     let df_raw = LazyFrame::scan_parquet(&nse_path, Default::default())?.collect()?;
 
@@ -108,18 +153,29 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
     let mut multiples_timeline = Vec::new();
 
     // ==============================================================================
-    // 📊 STEP 3: EXECUTE HIGH-SPEED RATIO MULTIPLIERS GENERATION
+    // 📊 STEP 4: EXECUTE HIGH-SPEED RATIO MULTIPLIERS GENERATION
     // ==============================================================================
     for (idx, file_key) in chron_files.iter().enumerate() {
         if let Some(metrics) = document_matrix.get(file_key) {
             
             let clean_file_prefix = file_key.split('_').next().unwrap_or("31-Mar-2024");
-            
-            let parsed_snapshot_date = if clean_file_prefix.contains("2024") { "2024-03-31".to_string() }
-                else if clean_file_prefix.contains("2023") { "2023-03-31".to_string() }
-                else if clean_file_prefix.contains("2022") { "2022-03-31".to_string() }
-                else if clean_file_prefix.contains("2021") { "2021-03-31".to_string() }
-                else { "2025-03-31".to_string() };
+            let components: Vec<&str> = clean_file_prefix.split('-').collect();
+
+            let parsed_snapshot_date = if components.len() >= 3 {
+                let day = components[0];
+                let month_str = components[1].to_lowercase();
+                let year = components[2];
+                
+                let month_num = match month_str.as_str() {
+                    "jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04",
+                    "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08",
+                    "sep" => "09", "oct" => "10", "nov" => "11", "dec" => "12",
+                    _ => "03",
+                };
+                format!("{}-{}-{}", year, month_num, day)
+            } else {
+                "2024-03-31".to_string()
+            };
 
             let rev = *metrics.get("RevenueFromOperations").unwrap_or(&0.0);
             let pbt = *metrics.get("ProfitBeforeTax").unwrap_or(&0.0);
@@ -142,9 +198,6 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
             let interest_coverage = if interest > 0.0 { ebit / interest } else { 0.0 };
             let accruals_to_sales_intensity = (net_profit - cfo) / rev;
 
-            // ------------------------------------------------------------------------
-            //  ADDITION: OPERATIONAL LEVERAGE & CAPEX REINVESTMENT (TIER 1)
-            // ------------------------------------------------------------------------
             let estimated_variable_costs = (total_expenses - depr - interest) * 0.65;
             let estimated_fixed_costs = (total_expenses - depr - interest) * 0.35 + depr;
             
@@ -161,15 +214,15 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
             let has_balance_sheet = ca > 0.0 || assets > 0.0;
 
             let stock_price = find_aligned_price(&parsed_snapshot_date);
+            let active_shares_outstanding = find_historical_shares(&parsed_snapshot_date);
 
             let (mut roic, mut roe, mut roa, mut debt_to_equity, mut current_ratio, mut quick_ratio) = (None, None, None, None, None, None);
             let (mut inventory_turnover, mut cash_conversion_cycle_days, mut enterprise_value, mut ev_to_ebitda) = (None, None, None, None);
             let (mut piotroski_f_score, mut beneish_m_score, mut altman_z_score) = (None, None, None);
             
-            // Safety variables for stress engine
             let (mut defensive_cash_burn_months, mut net_liquidating_dissolution_cash) = (None, None);
-            let (mut simulated_assets_post_10_percent_slump, mut simulated_assets_post_20_percent_slump) = (None, None);
-            let (mut simulated_assets_post_30_percent_slump, mut simulated_assets_post_40_percent_slump, mut simulated_assets_post_50_percent_slump) = (None, None, None);
+            let (mut simulated_assets_post_10_percent_slump, mut simulated_assets_post_20_percent_slump, mut simulated_assets_post_30_percent_slump) = (None, None, None);
+            let (mut simulated_assets_post_40_percent_slump, mut simulated_assets_post_50_percent_slump) = (None, None);
 
             if has_balance_sheet {
                 let total_assets = if assets > 0.0 { assets } else { ca + metrics.get("NoncurrentAssets").unwrap_or(&0.0) };
@@ -199,15 +252,12 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
                 let asset_turnover_calc = if total_assets > 0.0 { rev / total_assets } else { 0.0 };
 
                 if stock_price > 0.0 {
-                    let market_cap = stock_price * shares_outstanding;
+                    let market_cap = stock_price * active_shares_outstanding;
                     let ev = market_cap + total_liabilities - ca;
                     enterprise_value = Some(ev);
                     ev_to_ebitda = Some(ev / ebitda.max(1.0));
                 }
 
-                // ------------------------------------------------------------------------
-                //  ADDITION: CASH BURN, DISSOLUTION & HAIRCUT ENGINE (TIER 2)
-                // ------------------------------------------------------------------------
                 let monthly_cash_burn_rate = ((total_expenses - depr) / 12.0).max(1.0);
                 let liquid_assets = ca - inventories;
                 defensive_cash_burn_months = Some(liquid_assets / monthly_cash_burn_rate);
@@ -277,7 +327,9 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
                 snapshot_date: parsed_snapshot_date,
                 revenue: rev, ebit_margin, net_margin, fcf_margin, interest_coverage, accruals_to_sales_intensity,
                 degree_of_operating_leverage, breakeven_operating_revenue, capex_to_depreciation_coverage, estimated_infrastructure_nbv_age_years,
-                stock_price, roic, roe, roa, debt_to_equity, current_ratio, quick_ratio, inventory_turnover,
+                stock_price,
+                total_shares: active_shares_outstanding, 
+                roic, roe, roa, debt_to_equity, current_ratio, quick_ratio, inventory_turnover,
                 cash_conversion_cycle_days, enterprise_value, ev_to_ebitda, piotroski_f_score, beneish_m_score, altman_z_score,
                 defensive_cash_burn_months, net_liquidating_dissolution_cash,
                 simulated_assets_post_10_percent_slump, simulated_assets_post_20_percent_slump,

@@ -27,6 +27,7 @@ func GetAllEndpoints() []FilingsEndpoint {
 		SymbolDataAPI{},
 		PeerComparisonAPI{},
 		BulkAndBlockDealsAPI{},
+		CorporateShareholdingMasterAPI{},
 	}
 }
 
@@ -546,9 +547,6 @@ func (s SymbolDataAPI) ParseResponse(body io.Reader) ([]UniversalRecord, error) 
 	return nil, nil // Pipeline automatically saves this via raw metadata file dump!
 }
 
-// UniversalRecord placeholder representing your architecture's standard format
-type UniversalRecord struct{}
-
 // ============================================================================
 // STRATEGY 13: Cross-Sectional Peer Comparison Data Matrix (FULLY AUTOMATED)
 // ============================================================================
@@ -670,7 +668,7 @@ func (p PeerComparisonAPI) GetCombinations(symbol string) []PeerDirective {
 	// Nest both dynamic collections together to map out our absolute collection parameters grid
 	for _, q := range quarters {
 		// 1. Core Industry Parameter Combo
-		indURL := fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getPeerComparisonData&symbol=%s&type=S&quarter=%s&param=industry&index=", symbol, q)
+		indURL := fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getPeerComparisonData&symbol=%s&type=C&quarter=%s&param=industry&index=", symbol, q)
 		directives = append(directives, PeerDirective{
 			FileName: fmt.Sprintf("Industry_%s", q),
 			URL:      indURL,
@@ -681,7 +679,7 @@ func (p PeerComparisonAPI) GetCombinations(symbol string) []PeerDirective {
 			escapedIndex := strings.ReplaceAll(idx, " ", "%20")
 			cleanIndexName := strings.ReplaceAll(idx, " ", "_")
 
-			idxURL := fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getPeerComparisonData&symbol=%s&type=S&quarter=%s&param=index&index=%s", symbol, q, escapedIndex)
+			idxURL := fmt.Sprintf("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getPeerComparisonData&symbol=%s&type=C&quarter=%s&param=index&index=%s", symbol, q, escapedIndex)
 			directives = append(directives, PeerDirective{
 				FileName: fmt.Sprintf("Index_%s_%s", cleanIndexName, q),
 				URL:      idxURL,
@@ -716,4 +714,67 @@ func (b BulkAndBlockDealsAPI) ParseResponse(body io.Reader) ([]UniversalRecord, 
 	// The central pipeline engine automatically records this payload as "endpoint-metadata.json".
 	// We return nil here because there are no files to schedule for downloading!
 	return nil, nil
+}
+
+// ============================================================================
+// STRATEGY 15: Corporate Shareholding Pattern XML Master
+// ============================================================================
+type CorporateShareholdingMasterAPI struct{}
+
+func (c CorporateShareholdingMasterAPI) Name() string { return "corporate-shareholding-master" }
+
+func (c CorporateShareholdingMasterAPI) BuildURL(symbol string) string {
+	// Query the direct equities shareholding master matrix index path
+	return fmt.Sprintf("https://www.nseindia.com/api/corporate-share-holdings-master?index=equities&symbol=%s", symbol)
+}
+
+func (c CorporateShareholdingMasterAPI) ParseResponse(body io.Reader) ([]UniversalRecord, error) {
+	// 1. Structural representation matching the inner targets of the JSON array elements
+	type ShareholdingItem struct {
+		Date string `json:"date"`
+		Xbrl string `json:"xbrl"`
+	}
+
+	var items []ShareholdingItem
+	bodyBytes, err := io.ReadAll(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read shareholding body pipeline: %w", err)
+	}
+
+	if err := json.Unmarshal(bodyBytes, &items); err != nil {
+		return nil, fmt.Errorf("failed to deserialize shareholding entries: %w", err)
+	}
+
+	var results []UniversalRecord
+
+	// 2. Iterate and process fields to mirror Strategy 10's signature convention
+	for _, item := range items {
+		if item.Xbrl == "" || !strings.HasPrefix(item.Xbrl, "http") {
+			continue
+		}
+
+		// Extract base filename from the URL path string
+		// E.g., "https://.../SHP_1648419_10042026103603_WEB.xml" -> "SHP_1648419_10042026103603_WEB.xml"
+		webFileName := filepath.Base(item.Xbrl)
+		ext := filepath.Ext(webFileName)
+		
+		// Strip trailing extension string (.xml)
+		rawToken := webFileName
+		if len(ext) > 0 {
+			rawToken = webFileName[:len(webFileName)-len(ext)]
+		}
+
+		// Clean up spaces in the period text token to maintain pristine path names
+		cleanDate := strings.ReplaceAll(item.Date, " ", "-")
+
+		// Reconstruct the uniform label token: "31-MAR-2026_File_SHP_1648419_10042026103603_WEB"
+		uniquePeriodLabel := fmt.Sprintf("%s_File_%s", cleanDate, rawToken)
+
+		results = append(results, UniversalRecord{
+			Period:      uniquePeriodLabel,
+			DownloadURL: item.Xbrl,
+		})
+	}
+
+	return results, nil
 }
