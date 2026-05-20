@@ -54,11 +54,15 @@ pub struct CorporateMultiplesReport {
     pub government_pct: f64,
     pub public_retail_pct: f64,
     pub margin_of_safety_pct: f64,
+    
+    // DuPont 5-Stage Performance Deconstruction Layers
     pub dupond_tax_burden: f64,
     pub dupond_interest_burden: f64,
     pub dupond_operating_margin: f64,
     pub dupond_asset_turnover: f64,
     pub dupond_leverage_multiplier: f64,
+    
+    // Operational Leverage Margin Elasticity Shock Vectors
     pub elasticity_shock_up_20: f64,
     pub elasticity_shock_down_20: f64,
     pub elasticity_shock_up_15: f64,
