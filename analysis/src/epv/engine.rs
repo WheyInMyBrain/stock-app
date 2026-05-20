@@ -112,33 +112,65 @@ pub fn execute_rolling_epv_pipeline(
         let tag = tag_name_col.get(idx).unwrap_or("").to_string();
         let raw_val = raw_value_col.get(idx).unwrap_or("");
 
-        let is_valid = match exchange {
-            Exchange::Bse => file.contains("Consolidated") && file.contains("_MC") && date_bounds_col.get(idx).unwrap_or("").contains("-04-01 to "),
-            Exchange::Nse => file.contains("Consolidated"),
+        // 🎯 STAGE 1: Broad candidate collection based on foundational traits
+        let mut is_candidate = match exchange {
+            Exchange::Bse => {
+                file.contains("Consolidated") 
+                    && file.contains("_MC") 
+                    && date_bounds_col.get(idx).unwrap_or("").contains("-04-01 to ")
+            },
+            Exchange::Nse => file.contains("Consolidated"), // Grab all candidates to evaluate dates next
         };
 
-        if is_valid {
-            if !document_matrix.contains_key(&file) {
-                unique_groups.push(file.clone());
-                document_matrix.insert(file.clone(), HashMap::new());
-                
-                let parsed_date = match exchange {
-                    Exchange::Bse => date_bounds_col.get(idx).unwrap_or("").split(" to ").collect::<Vec<&str>>()[1].to_string(),
-                    Exchange::Nse => {
-                        let prefix = file.split('_').next().unwrap_or("31-Mar-2024");
-                        let comps: Vec<&str> = prefix.split('-').collect();
-                        if comps.len() >= 3 {
-                            let m_num = match comps[1].to_lowercase().as_str() {
-                                "jan"=>"01","feb"=>"02","mar"=>"03","apr"=>"04","may"=>"05","jun"=>"06","jul"=>"07","aug"=>"08","sep"=>"09","oct"=>"10","nov"=>"11","dec"=>"12",_=>"03"
-                            };
-                            format!("{}-{}-{}", comps[2], m_num, comps[0])
-                        } else { "2024-03-31".to_string() }
+        if is_candidate {
+            // 🎯 STAGE 2: Standardize the tracking date token down to ISO "YYYY-MM-DD"
+            let parsed_date = match exchange {
+                Exchange::Bse => {
+                    let bounds_str = date_bounds_col.get(idx).unwrap_or("");
+                    bounds_str.split(" to ").collect::<Vec<&str>>().get(1).unwrap_or(&"2024-03-31").to_string()
+                },
+                Exchange::Nse => {
+                    let prefix = file.split('_').next().unwrap_or("31-Mar-2024");
+                    let comps: Vec<&str> = prefix.split('-').collect();
+                    if comps.len() >= 3 {
+                        let m_num = match comps[1].to_lowercase().as_str() {
+                            "jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", 
+                            "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08", 
+                            "sep" => "09", "oct" => "10", "nov" => "11", "dec" => "12", 
+                            _ => "03"
+                        };
+                        format!("{}-{}-{}", comps[2], m_num, comps[0])
+                    } else { 
+                        "2024-03-31".to_string() 
                     }
-                };
-                file_to_date_map.insert(file.clone(), parsed_date);
+                }
+            };
+
+            // 🎯 STAGE 3: THE GATEKEEPER - If it is an NSE filing, it MUST resolve to a March Annual node!
+            // This drops all structural quarterly/interim files completely regardless of filename syntax.
+            if exchange == Exchange::Nse && !parsed_date.ends_with("-03-31") {
+                is_candidate = false;
             }
-            let cleaned_val: f64 = raw_val.replace(",", "").replace(" ", "").trim().parse().unwrap_or(0.0);
-            if let Some(metrics) = document_matrix.get_mut(&file) { metrics.insert(tag, cleaned_val); }
+
+            // 🎯 STAGE 4: WRITE METRICS MAPPED TO VERIFIED MATRIX ENTRIES
+            if is_candidate {
+                if !document_matrix.contains_key(&file) {
+                    unique_groups.push(file.clone());
+                    document_matrix.insert(file.clone(), HashMap::new());
+                    file_to_date_map.insert(file.clone(), parsed_date);
+                }
+
+                let cleaned_val: f64 = raw_val
+                    .replace(",", "")
+                    .replace(" ", "")
+                    .trim()
+                    .parse()
+                    .unwrap_or(0.0);
+
+                if let Some(metrics) = document_matrix.get_mut(&file) {
+                    metrics.insert(tag, cleaned_val);
+                }
+            }
         }
     }
     unique_groups.sort();

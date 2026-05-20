@@ -230,8 +230,23 @@ pub fn execute_multiples_analytical_pipeline(
             // Unify date formatting schemas down to ISO standard strings
             let parsed_snapshot_date = match exchange {
                 Exchange::Bse => {
-                    // Extract closing date boundary string from BSE metadata matrix columns
-                    date_bounds_col.get(idx).unwrap_or("").split(" to ").collect::<Vec<&str>>()[1].to_string()
+                    // 🕵️‍♂️ Parse filenames like: "Consolidated-Mar-24_MC2023-2024..."
+                    if file_key.contains("-Mar-") {
+                        let parts: Vec<&str> = file_key.split("-Mar-").collect();
+                        if parts.len() >= 2 {
+                            // Extract the two-digit year code (e.g., "24" from "24_MC2023...")
+                            let year_short = parts[1].split('_').next().unwrap_or("24");
+                            format!("20{}-03-31", year_short)
+                        } else {
+                            "2024-03-31".to_string()
+                        }
+                    } else if file_key.contains("-Sep-") {
+                        let parts: Vec<&str> = file_key.split("-Sep-").collect();
+                        let year_short = parts.get(1).unwrap_or(&"24").split('_').next().unwrap_or("24");
+                        format!("20{}-09-30", year_short)
+                    } else {
+                        "2024-03-31".to_string() // Stable safety proxy fallback
+                    }
                 },
                 Exchange::Nse => {
                     let clean_file_prefix = file_key.split('_').next().unwrap_or("31-Mar-2024");

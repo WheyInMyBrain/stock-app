@@ -35,7 +35,9 @@ pub fn run_all_analysis_pipelines(
     let ticker_ref = ticker;
 
     rayon::scope(|scope| {
-        // Track A-1: High-Resolution Deterministic Matrix Grid for BSE
+        // ==============================================================================
+        // 📊 Track A-1: High-Resolution Deterministic Matrix Grid for BSE
+        // ==============================================================================
         scope.spawn(move |_| {
             let dcf_timer = Instant::now();
             match dcf::engine::execute_dual_dcf_pipeline(ticker_ref, dcf::Exchange::Bse, wacc, terminal_g) {
@@ -56,7 +58,9 @@ pub fn run_all_analysis_pipelines(
             }
         });
 
-        // Track A-2: High-Resolution Deterministic Matrix Grid for NSE
+        // ==============================================================================
+        // 📊 Track A-2: High-Resolution Deterministic Matrix Grid for NSE
+        // ==============================================================================
         scope.spawn(move |_| {
             let dcf_timer = Instant::now();
             match dcf::engine::execute_dual_dcf_pipeline(ticker_ref, dcf::Exchange::Nse, wacc, terminal_g) {
