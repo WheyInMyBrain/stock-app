@@ -6,18 +6,31 @@ use std::fs::File;
 use std::collections::HashMap;
 use serde_json::Value;
 
+use crate::dcf::Exchange;
 use crate::multiples::CorporateMultiplesReport;
 
 /// Ingests historical market pricing arrays and financial statements to extract all valuation multiples
-pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<CorporateMultiplesReport>> {
-    let nse_path = format!("../data/{}/parquets/nse_corporates-financial-results.parquet", ticker);
-    let chart_path = format!("../data/{}/nse_historical-chart-data/10Y.json", ticker);
-    let shp_path = format!("../data/{}/parquets/nse_corporate-shareholding-master.parquet", ticker);
+pub fn execute_multiples_analytical_pipeline(
+    ticker: &str,
+    exchange: Exchange, // 🎯 CHOOSE EXCHANGE DISCRIMINATOR
+) -> PolarsResult<Vec<CorporateMultiplesReport>> {
+    let (fin_path, chart_path, shp_path) = match exchange {
+        Exchange::Bse => (
+            format!("../data/{}/parquets/bse_financial-results-docs.parquet", ticker),
+            format!("../data/{}/bse_historical-chart-data/10Y.json", ticker),
+            format!("../data/{}/parquets/bse_shareholding-pattern-docs.parquet", ticker),
+        ),
+        Exchange::Nse => (
+            format!("../data/{}/parquets/nse_corporates-financial-results.parquet", ticker),
+            format!("../data/{}/nse_historical-chart-data/10Y.json", ticker),
+            format!("../data/{}/parquets/nse_corporate-shareholding-master.parquet", ticker),
+        ),
+    };
 
-    if !Path::new(&nse_path).exists() || !Path::new(&chart_path).exists() {
-        return Err(PolarsError::ComputeError(
-            format!("Missing financial parquet tables or JSON market chart files for ticker: {}.", ticker).into()
-        ));
+    // 🛡️ LISTING GUARD: Gracefully step over missing records if asset is an exclusive listing
+    if !Path::new(&fin_path).exists() || !Path::new(&chart_path).exists() {
+        println!("⚠️  [MULTIPLES BYPASS]: Ingestion tables absent for [{}] on {:?}. Stepping down.", ticker, exchange);
+        return Ok(Vec::new());
     }
 
     // ==============================================================================
@@ -158,10 +171,11 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
         }
     };
 
-    // ==============================================================================
+// ==============================================================================
     // 📊 STEP 3: PARQUET INGESTION & IN-MEMORY PIVOT MATCHING
     // ==============================================================================
-    let df_raw = LazyFrame::scan_parquet(&nse_path, Default::default())?.collect()?;
+    // 🎯 FIXED: Changed &nse_path to &fin_path to support dual-exchange data routing
+    let df_raw = LazyFrame::scan_parquet(&fin_path, Default::default())?.collect()?;
 
     let target_tags = [
         "RevenueFromOperations", "ProfitBeforeTax", "FinanceCosts", "TaxExpense",
@@ -175,18 +189,27 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
     let mask: BooleanChunked = tag_col.into_iter().map(|opt| opt.map_or(false, |v| target_tags.contains(&v))).collect();
     let df_filtered = df_raw.filter(&mask)?;
 
+    // 🎯 FIXED: Explicitly extracted the date_bounds column from df_filtered so the loops can read it
+    let date_bounds_col = df_filtered.column("date_bounds")?.str()?;
     let file_col = df_filtered.column("source_file")?.str()?;
     let tag_name_col = df_filtered.column("tag_name")?.str()?;
     let raw_value_col = df_filtered.column("raw_value")?.str()?;
 
     let mut document_matrix: HashMap<String, HashMap<String, f64>> = HashMap::new();
 
+    // Loop through rows using the multi-compliant exchange structural matching logic
     for idx in 0..df_filtered.shape().0 {
         let file = file_col.get(idx).unwrap_or("").to_string();
         let tag = tag_name_col.get(idx).unwrap_or("").to_string();
         let raw_val = raw_value_col.get(idx).unwrap_or("");
 
-        if file.contains("Consolidated") {
+        // Dynamically adjust operational row constraints based on the exchange source structure
+        let is_valid = match exchange {
+            Exchange::Bse => file.contains("Consolidated") && file.contains("_MC") && date_bounds_col.get(idx).unwrap_or("").contains("-04-01 to "),
+            Exchange::Nse => file.contains("Consolidated"),
+        };
+
+        if is_valid {
             let cleaned_val: f64 = raw_val.replace(",", "").replace(" ", "").trim().parse().unwrap_or(0.0);
             document_matrix.entry(file).or_insert_with(HashMap::new).insert(tag, cleaned_val);
         }
@@ -200,26 +223,32 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
     // ==============================================================================
     // 📊 STEP 4: EXECUTE HIGH-SPEED RATIO MULTIPLIERS GENERATION
     // ==============================================================================
+    // Replace the top section inside the main loop for generating ratios with this logic:
     for (idx, file_key) in chron_files.iter().enumerate() {
         if let Some(metrics) = document_matrix.get(file_key) {
             
-            let clean_file_prefix = file_key.split('_').next().unwrap_or("31-Mar-2024");
-            let components: Vec<&str> = clean_file_prefix.split('-').collect();
-
-            let parsed_snapshot_date = if components.len() >= 3 {
-                let day = components[0];
-                let month_str = components[1].to_lowercase();
-                let year = components[2];
-                
-                let month_num = match month_str.as_str() {
-                    "jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04",
-                    "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08",
-                    "sep" => "09", "oct" => "10", "nov" => "11", "dec" => "12",
-                    _ => "03",
-                };
-                format!("{}-{}-{}", year, month_num, day)
-            } else {
-                "2024-03-31".to_string()
+            // Unify date formatting schemas down to ISO standard strings
+            let parsed_snapshot_date = match exchange {
+                Exchange::Bse => {
+                    // Extract closing date boundary string from BSE metadata matrix columns
+                    date_bounds_col.get(idx).unwrap_or("").split(" to ").collect::<Vec<&str>>()[1].to_string()
+                },
+                Exchange::Nse => {
+                    let clean_file_prefix = file_key.split('_').next().unwrap_or("31-Mar-2024");
+                    let components: Vec<&str> = clean_file_prefix.split('-').collect();
+                    if components.len() >= 3 {
+                        let day = components[0];
+                        let month_str = components[1].to_lowercase();
+                        let year = components[2];
+                        let month_num = match month_str.as_str() {
+                            "jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", 
+                            "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10", "nov" => "11", "dec" => "12", _ => "03",
+                        };
+                        format!("{}-{}-{}", year, month_num, day)
+                    } else {
+                        "2024-03-31".to_string()
+                    }
+                }
             };
 
             let rev = *metrics.get("RevenueFromOperations").unwrap_or(&0.0);

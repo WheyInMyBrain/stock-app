@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -83,33 +86,135 @@ func (t BSEStockTradingDataAPI) ParseResponse(body io.Reader) ([]UniversalRecord
 // ============================================================================
 // STRATEGY 4: Historical Chart Data Multi-Timeframe Sweeper
 // ============================================================================
+
+// Structural blueprints mapping raw BSE JSON anomalies
+type RawBseChartResponse struct {
+	ScripName  string `json:"Scripname"`
+	DataString string `json:"Data"` // Contains an escaped internal JSON string block!
+}
+
+type RawBseDataRow struct {
+	Dttm  string `json:"dttm"`  // e.g., "Fri May 20 2016 00:00:00"
+	Vale1 string `json:"vale1"` // Closing price as a string
+	Vole  string `json:"vole"`  // Volume as a string
+}
+
+// NormalizedNseStructure recreates your exact standard NSE chart tracking layout
+type NormalizedNseStructure struct {
+	GraphData [][]interface{} `json:"grapthData"` // Retains the exact spelling artifact "grapthData"
+}
+
 type BSEHistoricalChartAPI struct{}
 
 func (h BSEHistoricalChartAPI) Name() string { return "historical-chart-data" }
 
 func (h BSEHistoricalChartAPI) BuildURL(scripCode string) string {
-	// Dummy fallback implementation to satisfy interface boundaries
-	return ""
+	now := time.Now().UTC()
+	fromDate := now.AddDate(-10, 0, 0).Format("20060102") 
+	toDate := now.Format("20060102")                     
+
+	return fmt.Sprintf(
+		"https://api.bseindia.com/BseIndiaAPI/api/StockReachGraph/w?scripcode=%s&flag=1&fromdate=%s&todate=%s&seriesid=",
+		scripCode, fromDate, toDate,
+	)
+}
+
+// 🎯 THE TRANSFORMER: Normalizes BSE raw response text directly into standard layouts on the fly
+func (h BSEHistoricalChartAPI) ProcessAndNormalize(outputDir, period string, rawBytes []byte) error {
+	var rawResp RawBseChartResponse
+	if err := json.Unmarshal(rawBytes, &rawResp); err != nil {
+		return fmt.Errorf("failed to decode root BSE chart json framework: %w", err)
+	}
+
+	// Unpack the escaped internal text stream array
+	var rows []RawBseDataRow
+	if err := json.Unmarshal([]byte(rawResp.DataString), &rows); err != nil {
+		return fmt.Errorf("failed decoding internal escaped BSE Data array block: %w", err)
+	}
+
+	var normalizedData [][]interface{}
+
+	// Convert raw text coordinates to flat Unix millisecond arrays
+	for _, row := range rows {
+		// Clean text parsing: "Fri May 20 2016 00:00:00" -> Parse using standard Go layout constraints
+		parsedTime, err := time.Parse("Mon Jan 2 2006 15:04:05", strings.TrimSpace(row.Dttm))
+		if err != nil {
+			continue // Skip single corrupt date nodes gracefully
+		}
+		unixMillis := parsedTime.UnixNano() / int64(time.Millisecond)
+
+		// Parse string price value down to standard float64
+		priceFloat, err := strconv.ParseFloat(row.Vale1, 64)
+		if err != nil {
+			continue
+		}
+
+		// 🐋 BONUS UPGRADE: Extract trading volume as float64 so it can be appended securely
+		volumeFloat, err := strconv.ParseFloat(row.Vole, 64)
+		if err != nil {
+			volumeFloat = 0.0 // Default proxy fallback for quiet transaction records
+		}
+
+		// Create standard layout array mapping: [timestamp, price, volume]
+		// Your Rust Multiples code reads index 0 and 1, completely ignoring index 2!
+		tuple := []interface{}{unixMillis, priceFloat, volumeFloat}
+		normalizedData = append(normalizedData, tuple)
+	}
+
+	finalStructure := NormalizedNseStructure{
+		GraphData: normalizedData,
+	}
+
+	// Encode back down to high-performance flat structural JSON
+	finalJSON, err := json.MarshalIndent(finalStructure, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed marshaling normalized output layout structure: %w", err)
+	}
+
+	// Flush clean results straight onto disk storage targets
+	targetPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", period))
+	return os.WriteFile(targetPath, finalJSON, 0644)
 }
 
 func (h BSEHistoricalChartAPI) ParseResponse(body io.Reader) ([]UniversalRecord, error) {
-	// Dummy fallback implementation to satisfy interface boundaries
 	return nil, nil
 }
 
 // Custom ParseMultiHorizons generates direct query configurations for all targeted tracking horizons
 func (h BSEHistoricalChartAPI) ParseMultiHorizons(scripCode string) []UniversalRecord {
-	horizons := []string{"1D", "5D", "1M", "12M"}
 	var results []UniversalRecord
 
-	for _, flag := range horizons {
-		url := fmt.Sprintf("https://api.bseindia.com/BseIndiaAPI/api/StockReachGraph/w?scripcode=%s&flag=%s&fromdate=&todate=&seriesid=", scripCode, flag)
+	// ⏳ Compute chronological bounds anchors relative to today
+	now := time.Now().UTC()
+	todayStr := now.Format("20060102")
+
+	// Map explicit tracking horizons to their calendar lookback intervals
+	horizons := []struct {
+		Label    string
+		Lookback time.Time
+	}{
+		{"1D", now.AddDate(0, 0, -1)},
+		{"5D", now.AddDate(0, 0, -5)},
+		{"1M", now.AddDate(0, -1, 0)},
+		{"12M", now.AddDate(-1, 0, 0)},
+		{"10Y", now.AddDate(-10, 0, 0)}, // Crucial anchor for your Rust Engine matching block
+	}
+
+	for _, hz := range horizons {
+		fromDateStr := hz.Lookback.Format("20060102")
+		
+		// 🎯 flag=1 commands historical tracking; dates bound the response matrix array
+		url := fmt.Sprintf(
+			"https://api.bseindia.com/BseIndiaAPI/api/StockReachGraph/w?scripcode=%s&flag=1&fromdate=%s&todate=%s&seriesid=", 
+			scripCode, fromDateStr, todayStr,
+		)
 		
 		results = append(results, UniversalRecord{
-			Period:      flag,
-			DownloadURL: "BSE_CHART_FETCH:" + url,
+			Period:      hz.Label,
+			DownloadURL: "BSE_CHART_FETCH:/" + url, // 🟢 Kept your 17 character prefix match
 		})
 	}
+	
 	return results
 }
 

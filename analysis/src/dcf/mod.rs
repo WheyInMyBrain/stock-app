@@ -4,6 +4,13 @@ pub mod engine;
 
 use serde::Serialize;
 
+/// Discriminator to route data ingestion streams dynamically
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Exchange {
+    Bse,
+    Nse,
+}
+
 /// New high-resolution multidimensional grid container for persistent storage.
 #[derive(Debug, Clone, Serialize)]
 pub struct DcfMatrixCell {

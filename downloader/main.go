@@ -31,16 +31,29 @@ func main() {
 
 	// 4. Extract target positional symbol
 	args := flag.Args()
-	if len(args) < 1 {
-		fmt.Println("❌ Error: Missing stock symbol argument.")
-		flag.Usage()
-		os.Exit(1)
-	}
+	var ticker string
+    if len(args) >= 1 {
+        // Assume the first clean non-flag argument is our ticker (e.g., "IMFA")
+        ticker = args[0]
+        
+        // Manual scan for trailing misplaced flag strings like "-mode=bse"
+        for _, customArg := range args[1:] {
+            if strings.HasPrefix(customArg, "-mode=") {
+                *modePtr = strings.Split(customArg, "=")[1]
+            } else if customArg == "-mode" {
+                // Catches split arguments like: IMFA -mode bse
+                fmt.Println("❌ Syntax Error: Misplaced flag order. Use clean syntax format: -mode=bse")
+            }
+        }
+    } else {
+        fmt.Println("❌ Error: Missing stock symbol argument.")
+        flag.Usage()
+        os.Exit(1)
+    }
 
-	ticker := args[0]
-	workerCount := *workerCountPtr
-	mode := strings.ToLower(strings.TrimSpace(*modePtr))
-	startTime := time.Now()
+    workerCount := *workerCountPtr
+    mode := strings.ToLower(strings.TrimSpace(*modePtr))
+    startTime := time.Now()
 
 	// Validation guard for the execution mode flag
 	if mode != "nse" && mode != "bse" && mode != "both" {

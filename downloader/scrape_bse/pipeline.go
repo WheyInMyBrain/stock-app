@@ -123,6 +123,56 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
 		return nil // Complete institutional sweep finished cleanly! Skip standard workflow loop.
 	}
 
+	// 🛡️ INTERCEPT DEALS STRATEGY: Handle History chart timewise dynamics sequentially
+	if endpoint.Name() == "historical-chart-data" {
+        // 🎯 FIX: Assert against an anonymous interface validating the method signature directly. 
+        // This is bulletproof in Go regardless of value or pointer receivers!
+        chartAPI, ok := endpoint.(interface {
+            ParseMultiHorizons(scripCode string) []UniversalRecord
+            ProcessAndNormalize(outputDir, period string, rawBytes []byte) error
+        })
+        if !ok {
+            return fmt.Errorf("failed interface contract lookup for historical-chart-data transformer")
+        }
+
+        directives := chartAPI.ParseMultiHorizons(scripCode)
+
+        for _, dir := range directives {
+            targetURL := dir.DownloadURL[17:] // Cut off exactly "BSE_CHART_FETCH:/"
+            fmt.Printf("[bse_scrape] 📈 Processing and transforming tracking metrics: %s\n", dir.Period)
+
+            req, err := http.NewRequest("GET", targetURL, nil)
+            if err != nil {
+                return err
+            }
+            req.Header.Set("User-Agent", UserAgent)
+            req.Header.Set("Accept", "application/json, text/plain, */*")
+            req.Header.Set("Origin", Origin)
+            req.Header.Set("Referer", Referer)
+
+            resp, err := client.HTTPClient.Do(req)
+            if err != nil {
+                fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Connection failure for chart horizon %s: %v\n", dir.Period, err)
+                continue
+            }
+
+            chartBytes, err := io.ReadAll(resp.Body)
+            resp.Body.Close()
+            if err != nil {
+                fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Read failed for chart stream %s: %v\n", dir.Period, err)
+                continue
+            }
+
+            // ⚡ CALL TRANSFORM ENGINE: This explicitly runs your custom data converter block
+            if err := chartAPI.ProcessAndNormalize(outputDir, dir.Period, chartBytes); err != nil {
+                fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Transformation loop failed for %s: %v\n", dir.Period, err)
+            }
+
+            time.Sleep(150 * time.Millisecond)
+        }
+        return nil // 🏁 Success! Exits cleanly here and completely bypasses the standard file dumps.
+    }
+
 	// ============================================================================
 	// STANDARD 1-TO-1 FILE DOWNLOAD PIPELINE FOR ALL BSE ENDPOINTS
 	// ============================================================================
