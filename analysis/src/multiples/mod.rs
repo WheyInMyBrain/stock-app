@@ -38,7 +38,7 @@ pub struct CorporateMultiplesReport {
     pub beneish_m_score: Option<f64>,
     pub altman_z_score: Option<f64>,
 
-    // 🎯 NEW TIER 2 ADDITIONS: Stress Testing & Dissolution Value
+    // NEW TIER 2 ADDITIONS: Stress Testing & Dissolution Value
     pub defensive_cash_burn_months: Option<f64>,
     pub net_liquidating_dissolution_cash: Option<f64>,
     pub simulated_assets_post_10_percent_slump: Option<f64>,
@@ -46,4 +46,25 @@ pub struct CorporateMultiplesReport {
     pub simulated_assets_post_30_percent_slump: Option<f64>,
     pub simulated_assets_post_40_percent_slump: Option<f64>,
     pub simulated_assets_post_50_percent_slump: Option<f64>,
+
+    // New Tier 2: Ownership & Market Sentiment Multipliers
+    pub promoter_pct: f64,
+    pub fii_pct: f64,
+    pub dii_pct: f64,
+    pub government_pct: f64,
+    pub public_retail_pct: f64,
+    pub margin_of_safety_pct: f64,
+    pub dupond_tax_burden: f64,
+    pub dupond_interest_burden: f64,
+    pub dupond_operating_margin: f64,
+    pub dupond_asset_turnover: f64,
+    pub dupond_leverage_multiplier: f64,
+    pub elasticity_shock_up_20: f64,
+    pub elasticity_shock_down_20: f64,
+    pub elasticity_shock_up_15: f64,
+    pub elasticity_shock_down_15: f64,
+    pub elasticity_shock_up_10: f64,
+    pub elasticity_shock_down_10: f64,
+    pub elasticity_shock_up_5: f64,
+    pub elasticity_shock_down_5: f64,
 }

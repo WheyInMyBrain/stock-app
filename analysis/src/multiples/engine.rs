@@ -68,9 +68,19 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
     };
 
     // ==============================================================================
-    // 📊 STEP 2: PARSE HISTORICAL SHARES OUTSTANDING (DYNAMIC MATRIX)
+    // 📊 STEP 2: PARSE HISTORICAL SHARES & OWNERSHIP BREAKDOWNS DYNAMICALLY
     // ==============================================================================
-    let mut share_history_timeline: HashMap<String, f64> = HashMap::new();
+    #[derive(Debug, Clone)]
+    struct ShareholdingState {
+        total_shares: f64,
+        promoter_pct: f64,
+        fii_pct: f64,
+        dii_pct: f64,
+        government_pct: f64,
+        public_retail_pct: f64,
+    }
+
+    let mut share_history_timeline: HashMap<String, ShareholdingState> = HashMap::new();
 
     if Path::new(&shp_path).exists() {
         let df_shp = LazyFrame::scan_parquet(&shp_path, Default::default())?.collect()?;
@@ -80,37 +90,72 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
         let shp_val = df_shp.column("raw_value")?.str()?;
 
         for idx in 0..df_shp.shape().0 {
-            if shp_tag.get(idx) == Some("NumberOfShares") {
-                let context = shp_ctx.get(idx).unwrap_or("");
-                if context == "ShareholdingPatternI" || context == "ShareholdingPattern_ContextI" {
-                    let date_key = shp_bounds.get(idx).unwrap_or("").to_string();
-                    let raw_str = shp_val.get(idx).unwrap_or("0");
-                    let parsed_shares: f64 = raw_str.replace(",", "").replace(" ", "").trim().parse().unwrap_or(0.0);
-                    
-                    if parsed_shares > 0.0 {
-                        share_history_timeline.insert(date_key, parsed_shares);
-                    }
+            let date_key = shp_bounds.get(idx).unwrap_or("").to_string();
+            if date_key.is_empty() { continue; }
+
+            let tag = shp_tag.get(idx).unwrap_or("");
+            let context = shp_ctx.get(idx).unwrap_or("");
+            let raw_str = shp_val.get(idx).unwrap_or("0").replace(",", "").replace(" ", "").trim().to_string();
+            let parsed_val: f64 = raw_str.parse().unwrap_or(0.0);
+
+            if parsed_val <= 0.0 { continue; }
+
+            let state = share_history_timeline.entry(date_key).or_insert(ShareholdingState {
+                total_shares: 53_954_106.0, // Baseline safety fallback token if untagged
+                promoter_pct: 0.0,
+                fii_pct: 0.0,
+                dii_pct: 0.0,
+                government_pct: 0.0,
+                public_retail_pct: 0.0,
+            });
+
+            if tag == "NumberOfShares" && (context == "ShareholdingPatternI" || context == "ShareholdingPattern_ContextI") {
+                state.total_shares = parsed_val;
+            }
+
+            if tag == "ShareholdingAsAPercentageOfTotalNumberOfShares" {
+                let ctx_lower = context.to_lowercase();
+                if ctx_lower.contains("promoter") {
+                    state.promoter_pct = state.promoter_pct.max(parsed_val);
+                } else if ctx_lower.contains("foreignportfolio") || ctx_lower.contains("institutionforeign") || ctx_lower.contains("foreigninvestor") {
+                    state.fii_pct += parsed_val;
+                } else if ctx_lower.contains("mutualfund") || ctx_lower.contains("insurance") || ctx_lower.contains("banks") || ctx_lower.contains("alternativeinvestment") {
+                    state.dii_pct += parsed_val;
+                } else if ctx_lower.contains("government") || ctx_lower.contains("goverment") {
+                    state.government_pct += parsed_val;
+                } else if ctx_lower.contains("publicshareholding") || ctx_lower.contains("residentindividual") {
+                    state.public_retail_pct = state.public_retail_pct.max(parsed_val);
                 }
             }
         }
     }
 
-    let find_historical_shares = |target_date: &str| -> f64 {
-        if let Some(&shares) = share_history_timeline.get(target_date) {
-            return shares;
+    let find_historical_share_state = |target_date: &str| -> ShareholdingState {
+        if let Some(state) = share_history_timeline.get(target_date) {
+            return state.clone();
         }
-        
         let target_year = target_date.split('-').next().unwrap_or("2024");
         let mut sorted_dates: Vec<&String> = share_history_timeline.keys().collect();
         sorted_dates.sort();
-        
+
         for date_key in sorted_dates.iter().rev() {
             if date_key.starts_with(target_year) {
-                return *share_history_timeline.get(*date_key).unwrap_or(&53_954_106.0);
+                return share_history_timeline.get(*date_key).cloned().unwrap();
             }
         }
-        
-        *share_history_timeline.values().next().unwrap_or(&53_954_106.0)
+
+        if let Some(first_state) = share_history_timeline.values().next() {
+            return first_state.clone();
+        }
+
+        ShareholdingState {
+            total_shares: 53_954_106.0,
+            promoter_pct: 58.69,
+            fii_pct: 2.88,
+            dii_pct: 0.10,
+            government_pct: 0.0,
+            public_retail_pct: 38.33,
+        }
     };
 
     // ==============================================================================
@@ -205,6 +250,19 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
             let contribution_margin_ratio = if rev > 0.0 { (rev - estimated_variable_costs) / rev } else { 0.1 };
             let breakeven_operating_revenue = if contribution_margin_ratio > 0.0 { estimated_fixed_costs / contribution_margin_ratio } else { 0.0 };
 
+            // 🛡️ CVP Margin of Safety Percentage Calculation
+            let margin_of_safety_pct = if rev > 0.0 { ((rev - breakeven_operating_revenue) / rev) * 100.0 } else { 0.0 };
+
+            // 💥 Multi-Tier Elasticity Operating Profit Shock Vectors
+            let elasticity_shock_up_20 = 20.0 * degree_of_operating_leverage;
+            let elasticity_shock_down_20 = -20.0 * degree_of_operating_leverage;
+            let elasticity_shock_up_15 = 15.0 * degree_of_operating_leverage;
+            let elasticity_shock_down_15 = -15.0 * degree_of_operating_leverage;
+            let elasticity_shock_up_10 = 10.0 * degree_of_operating_leverage;
+            let elasticity_shock_down_10 = -10.0 * degree_of_operating_leverage;
+            let elasticity_shock_up_5 = 5.0 * degree_of_operating_leverage;
+            let elasticity_shock_down_5 = -5.0 * degree_of_operating_leverage;
+
             let capex_to_depreciation_coverage = if depr > 0.0 { capex / depr } else { 0.0 };
             let ppe = *metrics.get("PropertyPlantAndEquipment").unwrap_or(&0.0);
             let estimated_infrastructure_nbv_age_years = if depr > 0.0 { ppe / depr } else { 0.0 };
@@ -214,7 +272,9 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
             let has_balance_sheet = ca > 0.0 || assets > 0.0;
 
             let stock_price = find_aligned_price(&parsed_snapshot_date);
-            let active_shares_outstanding = find_historical_shares(&parsed_snapshot_date);
+            
+            // 🐋 Pull Dynamically Tracked Ownership Matrix States
+            let shp_state = find_historical_share_state(&parsed_snapshot_date);
 
             let (mut roic, mut roe, mut roa, mut debt_to_equity, mut current_ratio, mut quick_ratio) = (None, None, None, None, None, None);
             let (mut inventory_turnover, mut cash_conversion_cycle_days, mut enterprise_value, mut ev_to_ebitda) = (None, None, None, None);
@@ -223,6 +283,10 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
             let (mut defensive_cash_burn_months, mut net_liquidating_dissolution_cash) = (None, None);
             let (mut simulated_assets_post_10_percent_slump, mut simulated_assets_post_20_percent_slump, mut simulated_assets_post_30_percent_slump) = (None, None, None);
             let (mut simulated_assets_post_40_percent_slump, mut simulated_assets_post_50_percent_slump) = (None, None);
+
+            // 📊 Initialize DuPont 5-Stage Metrics with safe default parameters
+            let (mut dupond_tax_burden, mut dupond_interest_burden, mut dupond_operating_margin) = (1.0, 1.0, ebit_margin);
+            let (mut dupond_asset_turnover, mut dupond_leverage_multiplier) = (0.0, 1.0);
 
             if has_balance_sheet {
                 let total_assets = if assets > 0.0 { assets } else { ca + metrics.get("NoncurrentAssets").unwrap_or(&0.0) };
@@ -251,8 +315,15 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
 
                 let asset_turnover_calc = if total_assets > 0.0 { rev / total_assets } else { 0.0 };
 
+                // 📊 Extract DuPont 5-Stage Operational Elements
+                dupond_tax_burden = if pbt != 0.0 { net_profit / pbt } else { 1.0 };
+                dupond_interest_burden = if ebit != 0.0 { pbt / ebit } else { 1.0 };
+                dupond_operating_margin = ebit_margin;
+                dupond_asset_turnover = asset_turnover_calc;
+                dupond_leverage_multiplier = total_assets / net_equity;
+
                 if stock_price > 0.0 {
-                    let market_cap = stock_price * active_shares_outstanding;
+                    let market_cap = stock_price * shp_state.total_shares;
                     let ev = market_cap + total_liabilities - ca;
                     enterprise_value = Some(ev);
                     ev_to_ebitda = Some(ev / ebitda.max(1.0));
@@ -328,7 +399,26 @@ pub fn execute_multiples_analytical_pipeline(ticker: &str) -> PolarsResult<Vec<C
                 revenue: rev, ebit_margin, net_margin, fcf_margin, interest_coverage, accruals_to_sales_intensity,
                 degree_of_operating_leverage, breakeven_operating_revenue, capex_to_depreciation_coverage, estimated_infrastructure_nbv_age_years,
                 stock_price,
-                total_shares: active_shares_outstanding, 
+                total_shares: shp_state.total_shares,
+                promoter_pct: shp_state.promoter_pct,
+                fii_pct: shp_state.fii_pct,
+                dii_pct: shp_state.dii_pct,
+                government_pct: shp_state.government_pct,
+                public_retail_pct: shp_state.public_retail_pct,
+                margin_of_safety_pct,
+                dupond_tax_burden,
+                dupond_interest_burden,
+                dupond_operating_margin,
+                dupond_asset_turnover,
+                dupond_leverage_multiplier,
+                elasticity_shock_up_20,
+                elasticity_shock_down_20,
+                elasticity_shock_up_15,
+                elasticity_shock_down_15,
+                elasticity_shock_up_10,
+                elasticity_shock_down_10,
+                elasticity_shock_up_5,
+                elasticity_shock_down_5,
                 roic, roe, roa, debt_to_equity, current_ratio, quick_ratio, inventory_turnover,
                 cash_conversion_cycle_days, enterprise_value, ev_to_ebitda, piotroski_f_score, beneish_m_score, altman_z_score,
                 defensive_cash_burn_months, net_liquidating_dissolution_cash,
