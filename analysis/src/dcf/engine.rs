@@ -111,6 +111,8 @@ pub fn execute_dual_dcf_pipeline(
         }
     }
 
+    println!("⚡ [DCF Picker]: Computing {} high-precision valuation cells concurrently...", calculation_tasks.len());
+
     let matrix_grid_output: Vec<DcfMatrixCell> = calculation_tasks
         .par_iter()
         .map(|&(idx, wacc, mult)| {

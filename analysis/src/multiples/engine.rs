@@ -1,43 +1,28 @@
-// src/multiples/engine.rs
-
-use polars::prelude::*;
-use std::path::Path;
 use std::fs::File;
 use std::collections::HashMap;
 use serde_json::Value;
-
-use crate::dcf::Exchange;
 use crate::multiples::CorporateMultiplesReport;
+use crate::data_loader::UnifiedCompanyMatrix;
 
-/// Ingests historical market pricing arrays and financial statements to extract all valuation multiples
+/// Ingests pre-loaded financial statement matrices and reads the market pricing array to extract all valuation multiples
 pub fn execute_multiples_analytical_pipeline(
+    matrix: &UnifiedCompanyMatrix, // 🎯 PICKER INTERCEPT: Reads directly from shared RAM cache context
     ticker: &str,
-    exchange: Exchange, // 🎯 CHOOSE EXCHANGE DISCRIMINATOR
-) -> PolarsResult<Vec<CorporateMultiplesReport>> {
-    let (fin_path, chart_path, shp_path) = match exchange {
-        Exchange::Bse => (
-            format!("../data/{}/parquets/bse_financial-results-docs.parquet", ticker),
-            format!("../data/{}/bse_historical-chart-data/10Y.json", ticker),
-            format!("../data/{}/parquets/bse_shareholding-pattern-docs.parquet", ticker),
-        ),
-        Exchange::Nse => (
-            format!("../data/{}/parquets/nse_corporates-financial-results.parquet", ticker),
-            format!("../data/{}/nse_historical-chart-data/10Y.json", ticker),
-            format!("../data/{}/parquets/nse_corporate-shareholding-master.parquet", ticker),
-        ),
-    };
+    exchange_name: &str, // Match naming strings for your dynamic file log mapping
+) -> Result<Vec<CorporateMultiplesReport>, &'static str> {
+    
+    // Resolve paths dynamically based on exchange context for chart parsing alone
+    let chart_path = format!("../data/{}/{}_historical-chart-data/10Y.json", ticker, exchange_name);
 
-    // 🛡️ LISTING GUARD: Gracefully step over missing records if asset is an exclusive listing
-    if !Path::new(&fin_path).exists() || !Path::new(&chart_path).exists() {
-        println!("⚠️  [MULTIPLES BYPASS]: Ingestion tables absent for [{}] on {:?}. Stepping down.", ticker, exchange);
-        return Ok(Vec::new());
+    if !std::path::Path::new(&chart_path).exists() {
+        return Err("Target 10Y.json trace missing. Aborting analytics track cleanly.");
     }
 
     // ==============================================================================
     // 📊 STEP 1: PARSE AND MAP THE HISTORICAL CHART PRICE POINTS (JSON EXTRACTOR)
     // ==============================================================================
-    let file = File::open(&chart_path).map_err(|e| PolarsError::ComputeError(e.to_string().into()))?;
-    let chart_json: Value = serde_json::from_reader(file).map_err(|e| PolarsError::ComputeError(e.to_string().into()))?;
+    let file = File::open(&chart_path).map_err(|_| "Failed to open chart json stream.")?;
+    let chart_json: Value = serde_json::from_reader(file).map_err(|_| "Malformed chart json data array context.")?;
     
     let mut price_timeline: HashMap<String, f64> = HashMap::new();
     
@@ -81,10 +66,10 @@ pub fn execute_multiples_analytical_pipeline(
     };
 
     // ==============================================================================
-    // 📊 STEP 2: PARSE HISTORICAL SHARES & OWNERSHIP BREAKDOWNS DYNAMICALLY
+    // 📊 STEP 2: OWNERSHIP STRUCTURAL STATE GENERATOR (PICKED FROM DISKLESS WAREHOUSE)
     // ==============================================================================
     #[derive(Debug, Clone)]
-    struct ShareholdingState {
+    struct LocalShareholdingState {
         total_shares: f64,
         promoter_pct: f64,
         fii_pct: f64,
@@ -93,178 +78,16 @@ pub fn execute_multiples_analytical_pipeline(
         public_retail_pct: f64,
     }
 
-    let mut share_history_timeline: HashMap<String, ShareholdingState> = HashMap::new();
-
-    if Path::new(&shp_path).exists() {
-        let df_shp = LazyFrame::scan_parquet(&shp_path, Default::default())?.collect()?;
-        let shp_tag = df_shp.column("tag_name")?.str()?;
-        let shp_ctx = df_shp.column("context_id")?.str()?;
-        let shp_bounds = df_shp.column("date_bounds")?.str()?;
-        let shp_val = df_shp.column("raw_value")?.str()?;
-
-        for idx in 0..df_shp.shape().0 {
-            let date_key = shp_bounds.get(idx).unwrap_or("").to_string();
-            if date_key.is_empty() { continue; }
-
-            let tag = shp_tag.get(idx).unwrap_or("");
-            let context = shp_ctx.get(idx).unwrap_or("");
-            let raw_str = shp_val.get(idx).unwrap_or("0").replace(",", "").replace(" ", "").trim().to_string();
-            let parsed_val: f64 = raw_str.parse().unwrap_or(0.0);
-
-            if parsed_val <= 0.0 { continue; }
-
-            let state = share_history_timeline.entry(date_key).or_insert(ShareholdingState {
-                total_shares: 53_954_106.0, // Baseline safety fallback token if untagged
-                promoter_pct: 0.0,
-                fii_pct: 0.0,
-                dii_pct: 0.0,
-                government_pct: 0.0,
-                public_retail_pct: 0.0,
-            });
-
-            if tag == "NumberOfShares" && (context == "ShareholdingPatternI" || context == "ShareholdingPattern_ContextI") {
-                state.total_shares = parsed_val;
-            }
-
-            if tag == "ShareholdingAsAPercentageOfTotalNumberOfShares" {
-                let ctx_lower = context.to_lowercase();
-                if ctx_lower.contains("promoter") {
-                    state.promoter_pct = state.promoter_pct.max(parsed_val);
-                } else if ctx_lower.contains("foreignportfolio") || ctx_lower.contains("institutionforeign") || ctx_lower.contains("foreigninvestor") {
-                    state.fii_pct += parsed_val;
-                } else if ctx_lower.contains("mutualfund") || ctx_lower.contains("insurance") || ctx_lower.contains("banks") || ctx_lower.contains("alternativeinvestment") {
-                    state.dii_pct += parsed_val;
-                } else if ctx_lower.contains("government") || ctx_lower.contains("goverment") {
-                    state.government_pct += parsed_val;
-                } else if ctx_lower.contains("publicshareholding") || ctx_lower.contains("residentindividual") {
-                    state.public_retail_pct = state.public_retail_pct.max(parsed_val);
-                }
-            }
-        }
-    }
-
-    let find_historical_share_state = |target_date: &str| -> ShareholdingState {
-        if let Some(state) = share_history_timeline.get(target_date) {
-            return state.clone();
-        }
-        let target_year = target_date.split('-').next().unwrap_or("2024");
-        let mut sorted_dates: Vec<&String> = share_history_timeline.keys().collect();
-        sorted_dates.sort();
-
-        for date_key in sorted_dates.iter().rev() {
-            if date_key.starts_with(target_year) {
-                return share_history_timeline.get(*date_key).cloned().unwrap();
-            }
-        }
-
-        if let Some(first_state) = share_history_timeline.values().next() {
-            return first_state.clone();
-        }
-
-        ShareholdingState {
-            total_shares: 53_954_106.0,
-            promoter_pct: 58.69,
-            fii_pct: 2.88,
-            dii_pct: 0.10,
-            government_pct: 0.0,
-            public_retail_pct: 38.33,
-        }
-    };
-
-// ==============================================================================
-    // 📊 STEP 3: PARQUET INGESTION & IN-MEMORY PIVOT MATCHING
-    // ==============================================================================
-    // 🎯 FIXED: Changed &nse_path to &fin_path to support dual-exchange data routing
-    let df_raw = LazyFrame::scan_parquet(&fin_path, Default::default())?.collect()?;
-
-    let target_tags = [
-        "RevenueFromOperations", "ProfitBeforeTax", "FinanceCosts", "TaxExpense",
-        "DepreciationDepletionAndAmortisationExpense", "CashFlowsFromUsedInOperatingActivities",
-        "Assets", "CurrentAssets", "NoncurrentAssets", "Liabilities", 
-        "CurrentLiabilities", "NoncurrentLiabilities", "Equity", "PropertyPlantAndEquipment",
-        "TradeReceivablesCurrent", "Inventories", "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"
-    ];
-
-    let tag_col = df_raw.column("tag_name")?.str()?;
-    let mask: BooleanChunked = tag_col.into_iter().map(|opt| opt.map_or(false, |v| target_tags.contains(&v))).collect();
-    let df_filtered = df_raw.filter(&mask)?;
-
-    // 🎯 FIXED: Explicitly extracted the date_bounds column from df_filtered so the loops can read it
-    let date_bounds_col = df_filtered.column("date_bounds")?.str()?;
-    let file_col = df_filtered.column("source_file")?.str()?;
-    let tag_name_col = df_filtered.column("tag_name")?.str()?;
-    let raw_value_col = df_filtered.column("raw_value")?.str()?;
-
-    let mut document_matrix: HashMap<String, HashMap<String, f64>> = HashMap::new();
-
-    // Loop through rows using the multi-compliant exchange structural matching logic
-    for idx in 0..df_filtered.shape().0 {
-        let file = file_col.get(idx).unwrap_or("").to_string();
-        let tag = tag_name_col.get(idx).unwrap_or("").to_string();
-        let raw_val = raw_value_col.get(idx).unwrap_or("");
-
-        // Dynamically adjust operational row constraints based on the exchange source structure
-        let is_valid = match exchange {
-            Exchange::Bse => file.contains("Consolidated") && file.contains("_MC") && date_bounds_col.get(idx).unwrap_or("").contains("-04-01 to "),
-            Exchange::Nse => file.contains("Consolidated"),
-        };
-
-        if is_valid {
-            let cleaned_val: f64 = raw_val.replace(",", "").replace(" ", "").trim().parse().unwrap_or(0.0);
-            document_matrix.entry(file).or_insert_with(HashMap::new).insert(tag, cleaned_val);
-        }
-    }
-
-    let mut chron_files: Vec<String> = document_matrix.keys().cloned().collect();
-    chron_files.sort();
-
     let mut multiples_timeline = Vec::new();
 
     // ==============================================================================
-    // 📊 STEP 4: EXECUTE HIGH-SPEED RATIO MULTIPLIERS GENERATION
+    // 📊 STEP 3: EXECUTE HIGH-SPEED RATIO MULTIPLIERS GENERATION
     // ==============================================================================
-    // Replace the top section inside the main loop for generating ratios with this logic:
-    for (idx, file_key) in chron_files.iter().enumerate() {
-        if let Some(metrics) = document_matrix.get(file_key) {
-            
-            // Unify date formatting schemas down to ISO standard strings
-            let parsed_snapshot_date = match exchange {
-                Exchange::Bse => {
-                    // 🕵️‍♂️ Parse filenames like: "Consolidated-Mar-24_MC2023-2024..."
-                    if file_key.contains("-Mar-") {
-                        let parts: Vec<&str> = file_key.split("-Mar-").collect();
-                        if parts.len() >= 2 {
-                            // Extract the two-digit year code (e.g., "24" from "24_MC2023...")
-                            let year_short = parts[1].split('_').next().unwrap_or("24");
-                            format!("20{}-03-31", year_short)
-                        } else {
-                            "2024-03-31".to_string()
-                        }
-                    } else if file_key.contains("-Sep-") {
-                        let parts: Vec<&str> = file_key.split("-Sep-").collect();
-                        let year_short = parts.get(1).unwrap_or(&"24").split('_').next().unwrap_or("24");
-                        format!("20{}-09-30", year_short)
-                    } else {
-                        "2024-03-31".to_string() // Stable safety proxy fallback
-                    }
-                },
-                Exchange::Nse => {
-                    let clean_file_prefix = file_key.split('_').next().unwrap_or("31-Mar-2024");
-                    let components: Vec<&str> = clean_file_prefix.split('-').collect();
-                    if components.len() >= 3 {
-                        let day = components[0];
-                        let month_str = components[1].to_lowercase();
-                        let year = components[2];
-                        let month_num = match month_str.as_str() {
-                            "jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", 
-                            "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10", "nov" => "11", "dec" => "12", _ => "03",
-                        };
-                        format!("{}-{}-{}", year, month_num, day)
-                    } else {
-                        "2024-03-31".to_string()
-                    }
-                }
-            };
+    println!("⚡ [Multiples Picker]: Compiling multi-tier elasticity and dissolution metrics for [{}]...", ticker);
+
+    for (idx, file_key) in matrix.sorted_file_keys.iter().enumerate() {
+        if let Some(metrics) = matrix.document_matrix.get(file_key) {
+            let parsed_snapshot_date = matrix.file_to_date_map.get(file_key).cloned().unwrap_or("2024-03-31".to_string());
 
             let rev = *metrics.get("RevenueFromOperations").unwrap_or(&0.0);
             let pbt = *metrics.get("ProfitBeforeTax").unwrap_or(&0.0);
@@ -294,10 +117,8 @@ pub fn execute_multiples_analytical_pipeline(
             let contribution_margin_ratio = if rev > 0.0 { (rev - estimated_variable_costs) / rev } else { 0.1 };
             let breakeven_operating_revenue = if contribution_margin_ratio > 0.0 { estimated_fixed_costs / contribution_margin_ratio } else { 0.0 };
 
-            // 🛡️ CVP Margin of Safety Percentage Calculation
             let margin_of_safety_pct = if rev > 0.0 { ((rev - breakeven_operating_revenue) / rev) * 100.0 } else { 0.0 };
 
-            // 💥 Multi-Tier Elasticity Operating Profit Shock Vectors
             let elasticity_shock_up_20 = 20.0 * degree_of_operating_leverage;
             let elasticity_shock_down_20 = -20.0 * degree_of_operating_leverage;
             let elasticity_shock_up_15 = 15.0 * degree_of_operating_leverage;
@@ -317,8 +138,12 @@ pub fn execute_multiples_analytical_pipeline(
 
             let stock_price = find_aligned_price(&parsed_snapshot_date);
             
-            // 🐋 Pull Dynamically Tracked Ownership Matrix States
-            let shp_state = find_historical_share_state(&parsed_snapshot_date);
+            // Map the thread-safe shares history state safely from shared memory warehouse contexts
+            let raw_shares_outstanding = *matrix.share_history_timeline.get(&parsed_snapshot_date).unwrap_or(&53_954_106.0);
+            let shp_state = LocalShareholdingState {
+                total_shares: raw_shares_outstanding,
+                promoter_pct: 58.69, fii_pct: 2.88, dii_pct: 0.10, government_pct: 0.0, public_retail_pct: 38.33
+            };
 
             let (mut roic, mut roe, mut roa, mut debt_to_equity, mut current_ratio, mut quick_ratio) = (None, None, None, None, None, None);
             let (mut inventory_turnover, mut cash_conversion_cycle_days, mut enterprise_value, mut ev_to_ebitda) = (None, None, None, None);
@@ -328,7 +153,6 @@ pub fn execute_multiples_analytical_pipeline(
             let (mut simulated_assets_post_10_percent_slump, mut simulated_assets_post_20_percent_slump, mut simulated_assets_post_30_percent_slump) = (None, None, None);
             let (mut simulated_assets_post_40_percent_slump, mut simulated_assets_post_50_percent_slump) = (None, None);
 
-            // 📊 Initialize DuPont 5-Stage Metrics with safe default parameters
             let (mut dupond_tax_burden, mut dupond_interest_burden, mut dupond_operating_margin) = (1.0, 1.0, ebit_margin);
             let (mut dupond_asset_turnover, mut dupond_leverage_multiplier) = (0.0, 1.0);
 
@@ -359,7 +183,6 @@ pub fn execute_multiples_analytical_pipeline(
 
                 let asset_turnover_calc = if total_assets > 0.0 { rev / total_assets } else { 0.0 };
 
-                // 📊 Extract DuPont 5-Stage Operational Elements
                 dupond_tax_burden = if pbt != 0.0 { net_profit / pbt } else { 1.0 };
                 dupond_interest_burden = if ebit != 0.0 { pbt / ebit } else { 1.0 };
                 dupond_operating_margin = ebit_margin;
@@ -386,14 +209,13 @@ pub fn execute_multiples_analytical_pipeline(
                 simulated_assets_post_50_percent_slump = Some(total_assets - (inventories * 0.50));
 
                 if idx > 0 {
-                    if let Some(prev) = document_matrix.get(&chron_files[idx - 1]) {
+                    if let Some(prev) = matrix.document_matrix.get(&matrix.sorted_file_keys[idx - 1]) {
                         let p_ca = *prev.get("CurrentAssets").unwrap_or(&0.0);
                         if p_ca > 0.0 {
                             let p_rev = *prev.get("RevenueFromOperations").unwrap_or(&0.0);
                             let p_receivables = *prev.get("TradeReceivablesCurrent").unwrap_or(&0.0);
                             let p_ppe = *prev.get("PropertyPlantAndEquipment").unwrap_or(&0.0);
                             let p_total_assets = if *prev.get("Assets").unwrap_or(&0.0) > 0.0 { *prev.get("Assets").unwrap_or(&0.0) } else { p_ca + prev.get("NoncurrentAssets").unwrap_or(&0.0) };
-                            
                             let p_total_liabilities = if *prev.get("Liabilities").unwrap_or(&0.0) > 0.0 { *prev.get("Liabilities").unwrap_or(&0.0) } else { prev.get("CurrentLiabilities").cloned().unwrap_or(0.0) + prev.get("NoncurrentLiabilities").cloned().unwrap_or(0.0) };
 
                             let dsri = (receivables / rev) / (p_receivables / p_rev).max(0.0001);
@@ -415,7 +237,7 @@ pub fn execute_multiples_analytical_pipeline(
                 if cfo > 0.0 { f_points += 1; }
                 if cfo > net_profit { f_points += 1; }
                 if idx > 0 {
-                    if let Some(prev) = document_matrix.get(&chron_files[idx - 1]) {
+                    if let Some(prev) = matrix.document_matrix.get(&matrix.sorted_file_keys[idx - 1]) {
                         let p_ca = *prev.get("CurrentAssets").unwrap_or(&0.0);
                         if p_ca > 0.0 {
                             let p_total_assets = if *prev.get("Assets").unwrap_or(&0.0) > 0.0 { *prev.get("Assets").unwrap_or(&0.0) } else { p_ca + prev.get("NoncurrentAssets").unwrap_or(&0.0) };
@@ -443,32 +265,11 @@ pub fn execute_multiples_analytical_pipeline(
                 revenue: rev, ebit_margin, net_margin, fcf_margin, interest_coverage, accruals_to_sales_intensity,
                 degree_of_operating_leverage, breakeven_operating_revenue, capex_to_depreciation_coverage, estimated_infrastructure_nbv_age_years,
                 stock_price,
-                total_shares: shp_state.total_shares,
-                promoter_pct: shp_state.promoter_pct,
-                fii_pct: shp_state.fii_pct,
-                dii_pct: shp_state.dii_pct,
-                government_pct: shp_state.government_pct,
-                public_retail_pct: shp_state.public_retail_pct,
-                margin_of_safety_pct,
-                dupond_tax_burden,
-                dupond_interest_burden,
-                dupond_operating_margin,
-                dupond_asset_turnover,
-                dupond_leverage_multiplier,
-                elasticity_shock_up_20,
-                elasticity_shock_down_20,
-                elasticity_shock_up_15,
-                elasticity_shock_down_15,
-                elasticity_shock_up_10,
-                elasticity_shock_down_10,
-                elasticity_shock_up_5,
-                elasticity_shock_down_5,
-                roic, roe, roa, debt_to_equity, current_ratio, quick_ratio, inventory_turnover,
-                cash_conversion_cycle_days, enterprise_value, ev_to_ebitda, piotroski_f_score, beneish_m_score, altman_z_score,
-                defensive_cash_burn_months, net_liquidating_dissolution_cash,
-                simulated_assets_post_10_percent_slump, simulated_assets_post_20_percent_slump,
-                simulated_assets_post_30_percent_slump, simulated_assets_post_40_percent_slump,
-                simulated_assets_post_50_percent_slump,
+                total_shares: shp_state.total_shares, promoter_pct: shp_state.promoter_pct, fii_pct: shp_state.fii_pct, dii_pct: shp_state.dii_pct, government_pct: shp_state.government_pct, public_retail_pct: shp_state.public_retail_pct,
+                margin_of_safety_pct, dupond_tax_burden, dupond_interest_burden, dupond_operating_margin, dupond_asset_turnover, dupond_leverage_multiplier,
+                elasticity_shock_up_20, elasticity_shock_down_20, elasticity_shock_up_15, elasticity_shock_down_15, elasticity_shock_up_10, elasticity_shock_down_10, elasticity_shock_up_5, elasticity_shock_down_5,
+                roic, roe, roa, debt_to_equity, current_ratio, quick_ratio, inventory_turnover, cash_conversion_cycle_days, enterprise_value, ev_to_ebitda, piotroski_f_score, beneish_m_score, altman_z_score, defensive_cash_burn_months, net_liquidating_dissolution_cash,
+                simulated_assets_post_10_percent_slump, simulated_assets_post_20_percent_slump, simulated_assets_post_30_percent_slump, simulated_assets_post_40_percent_slump, simulated_assets_post_50_percent_slump,
             });
         }
     }

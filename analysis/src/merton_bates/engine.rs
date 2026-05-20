@@ -7,9 +7,7 @@ use rayon::prelude::*;
 use rand_distr::{Normal, Distribution, Poisson};
 use serde::Deserialize;
 use crate::merton_bates::MertonBatesCell;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Exchange { Bse, Nse }
+use crate::data_loader::Exchange; // 🎯 Unified discriminator enum imported from central core
 
 #[derive(Debug, Deserialize)]
 struct ChartDataWrapper {
@@ -155,8 +153,9 @@ pub fn execute_merton_bates_pipeline(
     let trading_days = 63;                    
     let total_paths = 10_000;                 
 
-    // 🏎️ THE HIGH-VELOCITY FLAT GENERATION INTERCEPT:
-    // Generate an in-memory task grid of all variations first
+    // ==============================================================================
+    // 📊 STEP 1: TASK GRID GENERATION MATRIX
+    // ==============================================================================
     let mut evaluation_tasks = Vec::new();
     for date_key in &timeline_dates {
         let current_price = *historical_prices.get(date_key).unwrap_or(&0.0);
@@ -171,7 +170,11 @@ pub fn execute_merton_bates_pipeline(
         }
     }
 
-    // Execute the complete grid concurrently using Rayon thread-pool work-stealing loops
+    // ==============================================================================
+    // 📊 STEP 2: CONCURRENT JUMP-DIFFUSION SIMULATIONS via RAYON
+    // ==============================================================================
+    println!("🎯 [Merton-Bates Picker]: Simulating trajectory distributions for [{}]...", ticker);
+
     let grid_results: Vec<MertonBatesCell> = evaluation_tasks
         .par_iter()
         .map(|(date_key, current_price, current_vol, lambda, mu_j)| {

@@ -4,9 +4,9 @@ use polars::prelude::PolarsResult;
 use std::env;
 
 mod data_loader;
+mod dcf;
 mod helper;
 mod runner;
-mod dcf;
 mod monte_carlo;
 mod epv;
 mod multiples;
@@ -20,10 +20,8 @@ fn main() -> PolarsResult<()> {
         println!("\n👉 Usage: cargo run --release <TICKER> [key=value] [key=value]...");
         println!("💡 Available Keys:");
         println!("   ├── wacc=<number>         (Default: 0.12)");
-        println!("   ├── term_g=<number>       (Default: 0.04)");
-        println!("   ├── growth_mult=<number>  (Default: 1.0)");
-        println!("   └── margin_mult=<number>  (Default: 1.0)");
-        println!("\n👉 Example: cargo run --release IMFA wacc=0.13 margin_mult=0.95");
+        println!("   └── term_g=<number>       (Default: 0.04)");
+        println!("\n👉 Example: cargo run --release IMFA wacc=0.13 term_g=0.03");
         return Ok(());
     }
 
@@ -33,8 +31,6 @@ fn main() -> PolarsResult<()> {
     // Core fallback defaults
     let mut wacc: f64 = 0.12;
     let mut terminal_g: f64 = 0.04;
-    let mut growth_mult: f64 = 1.0;
-    let mut margin_mult: f64 = 1.0;
 
     // Iterate through key-value overrides passed anywhere after the ticker parameter
     for arg in args.iter().skip(2) {
@@ -44,8 +40,6 @@ fn main() -> PolarsResult<()> {
                 match key_cleaned.as_str() {
                     "wacc" => wacc = parsed_val,
                     "term_g" | "terminal_g" => terminal_g = parsed_val,
-                    "growth_mult" | "growth_multiplier" => growth_mult = parsed_val,
-                    "margin_mult" | "margin_multiplier" => margin_mult = parsed_val,
                     unknown => {
                         println!("⚠️ WARNING: Ignored unrecognized parameter key: '{}'", unknown);
                     }
@@ -58,11 +52,8 @@ fn main() -> PolarsResult<()> {
         }
     }
 
-    // 🎯 Step 1: Execute your optimized centralized data picker pipeline
+    // 🎯 Execute your clean consolidated data broker picker pipeline matrix
     runner::run_global_analysis_pipeline(ticker, wacc, terminal_g);
-
-    // 🎯 Step 2: Hand off to your standard baseline multi-threaded engines 
-    runner::run_all_analysis_pipelines(ticker, wacc, terminal_g, growth_mult, margin_mult)?;
 
     Ok(())
 }
