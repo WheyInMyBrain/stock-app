@@ -12,6 +12,7 @@ mod epv;
 mod multiples;
 mod merton_bates;
 mod markov_regime;
+mod merton_kmv;
 
 fn main() -> PolarsResult<()> {
     let args: Vec<String> = env::args().collect();

@@ -250,5 +250,39 @@ pub fn run_global_analysis_pipeline(ticker: &str, wacc: f64, terminal_g: f64) {
             }
         });
 
+        // ==============================================================================
+        // 📊 TRACK G-1: BSE MERTON-KMV DISTANCE-TO-DEFAULT CREDIT MATRIX
+        // ==============================================================================
+        let bse_kmv_ref = Arc::clone(&shared_bse);
+        scope.spawn(move |_| {
+            let kmv_timer = Instant::now();
+            if let Some(ref matrix) = *bse_kmv_ref {
+                let kmv_report = crate::merton_kmv::engine::execute_merton_kmv_pipeline(matrix, ticker_ref, "bse");
+                crate::helper::dump_matrix_report_to_disk(
+                    &kmv_report,
+                    &format!("{}/bse_merton_kmv_default_risk.json", dir_ref),
+                    "THREAD G-1",
+                    kmv_timer,
+                );
+            }
+        });
+
+        // ==============================================================================
+        // 📊 TRACK G-2: NSE MERTON-KMV DISTANCE-TO-DEFAULT CREDIT MATRIX
+        // ==============================================================================
+        let nse_kmv_ref = Arc::clone(&shared_nse);
+        scope.spawn(move |_| {
+            let kmv_timer = Instant::now();
+            if let Some(ref matrix) = *nse_kmv_ref {
+                let kmv_report = crate::merton_kmv::engine::execute_merton_kmv_pipeline(matrix, ticker_ref, "nse");
+                crate::helper::dump_matrix_report_to_disk(
+                    &kmv_report,
+                    &format!("{}/nse_merton_kmv_default_risk.json", dir_ref),
+                    "THREAD G-2",
+                    kmv_timer,
+                );
+            }
+        });
+
     });
 }
