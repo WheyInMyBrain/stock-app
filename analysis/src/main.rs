@@ -8,6 +8,7 @@ mod runner;
 mod monte_carlo;
 mod epv;
 mod multiples;
+mod merton_bates;
 
 fn main() -> PolarsResult<()> {
     let args: Vec<String> = env::args().collect();

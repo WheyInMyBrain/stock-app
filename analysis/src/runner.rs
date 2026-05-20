@@ -10,6 +10,7 @@ use crate::dcf::Exchange;
 use crate::monte_carlo;
 use crate::epv;
 use crate::multiples;
+use crate::merton_bates::engine::execute_merton_bates_pipeline;
 
 pub fn run_all_analysis_pipelines(
     ticker: &str,
@@ -207,6 +208,47 @@ pub fn run_all_analysis_pipelines(
                 Err(err) => println!("❌ [THREAD D-2 ERROR]: NSE Multiples Pipeline Engine crashed: {}", err),
             }
         });
+
+        // ==============================================================================
+        // 📊 TRACK E-1: BSE MERTON-BATES JUMP-DIFFUSION MATRIX
+        // ==============================================================================
+        scope.spawn(move |_| {
+            let merton_bates_timer = Instant::now();
+            let local_mb_exchange = crate::merton_bates::engine::Exchange::Bse;
+            
+            let merton_bates_report = execute_merton_bates_pipeline(ticker_ref, local_mb_exchange);
+            
+            if !merton_bates_report.is_empty() {
+                let json_out_path = format!("{}/bse_merton_bates_credit_risk.json", dir_ref);
+                if let Ok(json_string) = serde_json::to_string_pretty(&merton_bates_report) {
+                    let _ = File::create(&json_out_path).map(|mut f| f.write_all(json_string.as_bytes()));
+                    println!("💾 [THREAD E-1 SUCCESS]: High-Coverage BSE Merton-Bates Credit Risk saved. Runtime: {:?}", merton_bates_timer.elapsed());
+                }
+            } else {
+                println!("⚠️  [THREAD E-1 BYPASS]: Empty dataset or 10Y chart trace missing for [{}] on BSE.", ticker_ref);
+            }
+        });
+
+        // ==============================================================================
+        // 📊 TRACK E-2: NSE MERTON-BATES JUMP-DIFFUSION MATRIX
+        // ==============================================================================
+        scope.spawn(move |_| {
+            let merton_bates_timer = Instant::now();
+            let local_mb_exchange = crate::merton_bates::engine::Exchange::Nse;
+            
+            let merton_bates_report = execute_merton_bates_pipeline(ticker_ref, local_mb_exchange);
+            
+            if !merton_bates_report.is_empty() {
+                let json_out_path = format!("{}/nse_merton_bates_credit_risk.json", dir_ref);
+                if let Ok(json_string) = serde_json::to_string_pretty(&merton_bates_report) {
+                    let _ = File::create(&json_out_path).map(|mut f| f.write_all(json_string.as_bytes()));
+                    println!("💾 [THREAD E-2 SUCCESS]: High-Coverage NSE Merton-Bates Credit Risk saved. Runtime: {:?}", merton_bates_timer.elapsed());
+                }
+            } else {
+                println!("⚠️  [THREAD E-2 BYPASS]: Empty dataset or 10Y chart trace missing for [{}] on NSE.", ticker_ref);
+            }
+        });
+
     });
 
     println!("=======================================================================================");
