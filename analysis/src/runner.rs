@@ -249,6 +249,43 @@ pub fn run_all_analysis_pipelines(
             }
         });
 
+        // ==============================================================================
+        // 📊 TRACK F-1: BSE MARKOV SWITCHING STATE MATRIX REGIME
+        // ==============================================================================
+        scope.spawn(move |_| {
+            let regime_timer = Instant::now();
+            let local_mr_exchange = crate::markov_regime::engine::Exchange::Bse;
+
+            let markov_report = crate::markov_regime::engine::execute_markov_regime_pipeline(ticker_ref, local_mr_exchange);
+
+            if !markov_report.is_empty() {
+                let json_out_path = format!("{}/bse_markov_regime_transitions.json", dir_ref);
+                if let Ok(json_string) = serde_json::to_string_pretty(&markov_report) {
+                    let _ = File::create(&json_out_path).map(|mut f| f.write_all(json_string.as_bytes()));
+                    println!("💾 [THREAD F-1 SUCCESS]: High-Coverage BSE Markov Transition Grid saved. Runtime: {:?}", regime_timer.elapsed());
+                }
+            }
+        });
+
+        // ==============================================================================
+        // 📊 TRACK F-2: NSE MARKOV SWITCHING STATE MATRIX REGIME
+        // ==============================================================================
+        scope.spawn(move |_| {
+            let regime_timer = Instant::now();
+            let local_mr_exchange = crate::markov_regime::engine::Exchange::Nse;
+
+            let markov_report = crate::markov_regime::engine::execute_markov_regime_pipeline(ticker_ref, local_mr_exchange);
+
+            if !markov_report.is_empty() {
+                // 🎯 FIXED: Old duplicate json_out_path assignment line completely removed
+                let json_out_path = format!("{}/nse_markov_regime_transitions.json", dir_ref);
+                if let Ok(json_string) = serde_json::to_string_pretty(&markov_report) {
+                    let _ = File::create(&json_out_path).map(|mut f| f.write_all(json_string.as_bytes()));
+                    println!("💾 [THREAD F-2 SUCCESS]: High-Coverage NSE Markov Transition Grid saved. Runtime: {:?}", regime_timer.elapsed());
+                }
+            }
+        });
+
     });
 
     println!("=======================================================================================");
