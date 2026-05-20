@@ -3,8 +3,10 @@
 use polars::prelude::PolarsResult;
 use std::env;
 
-mod dcf;
+mod data_loader;
+mod helper;
 mod runner;
+mod dcf;
 mod monte_carlo;
 mod epv;
 mod multiples;
@@ -56,7 +58,10 @@ fn main() -> PolarsResult<()> {
         }
     }
 
-    // Hand off processed configuration keys cleanly to the orchestrator runner
+    // 🎯 Step 1: Execute your optimized centralized data picker pipeline
+    runner::run_global_analysis_pipeline(ticker, wacc, terminal_g);
+
+    // 🎯 Step 2: Hand off to your standard baseline multi-threaded engines 
     runner::run_all_analysis_pipelines(ticker, wacc, terminal_g, growth_mult, margin_mult)?;
 
     Ok(())

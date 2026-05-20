@@ -4,13 +4,76 @@ use polars::prelude::PolarsResult;
 use std::fs::{create_dir_all, File};
 use std::io::Write;
 use std::time::Instant;
+use std::sync::Arc;
+use crate::data_loader::{CentralFinancialsDB, Exchange as LoaderExchange};
 
-use crate::dcf;
 use crate::dcf::Exchange;
 use crate::monte_carlo;
 use crate::epv;
 use crate::multiples;
 use crate::merton_bates::engine::execute_merton_bates_pipeline;
+
+pub fn run_global_analysis_pipeline(ticker: &str, wacc: f64, terminal_g: f64) {
+    // 🎯 Establish output folder path hierarchy natively inside the runner logic
+    let target_dir = format!("../data/{}/analysis", ticker);
+    if let Err(e) = create_dir_all(&target_dir) {
+        println!("❌ [SYSTEM ERROR]: Failed to establish output folder path hierarchy: {}", e);
+        return;
+    }
+
+    let dir_ref = &target_dir;
+    let _ticker_ref = ticker; // Clears the unused variable compiler warning
+    
+    println!("🏛️  [DATA BROKER]: Pre-fetching unrestricted Parquet tables for [{}]...", ticker);
+    
+    // Ingest the raw parquet data blocks exactly once on the main execution thread
+    let bse_data_matrix = CentralFinancialsDB::load_exchange_matrix(ticker, LoaderExchange::Bse);
+    let nse_data_matrix = CentralFinancialsDB::load_exchange_matrix(ticker, LoaderExchange::Nse);
+
+    // Wrap the structured data blocks in read-only thread-safe atomic references
+    let shared_bse = Arc::new(bse_data_matrix);
+    let shared_nse = Arc::new(nse_data_matrix);
+
+    rayon::scope(|scope| {
+
+        // ==============================================================================
+        // 📊 Track A-1: High-Resolution Deterministic Matrix Grid for BSE
+        // ==============================================================================
+        let bse_ref = Arc::clone(&shared_bse);
+        scope.spawn(move |_| {
+            let dcf_timer = Instant::now();
+            if let Some(ref matrix) = *bse_ref {
+                if let Ok(matrix_report) = crate::dcf::engine::execute_dual_dcf_pipeline(matrix, wacc, terminal_g) {
+                    crate::helper::dump_matrix_report_to_disk(
+                        &matrix_report,
+                        &format!("{}/bse_dcf_projections.json", dir_ref),
+                        "THREAD A-1",
+                        dcf_timer,
+                    );
+                }
+            }
+        });
+
+        // ==============================================================================
+        // 📊 Track A-2: High-Resolution Deterministic Matrix Grid for NSE
+        // ==============================================================================
+        let nse_ref = Arc::clone(&shared_nse);
+        scope.spawn(move |_| {
+            let dcf_timer = Instant::now();
+            if let Some(ref matrix) = *nse_ref {
+                if let Ok(matrix_report) = crate::dcf::engine::execute_dual_dcf_pipeline(matrix, wacc, terminal_g) {
+                    crate::helper::dump_matrix_report_to_disk(
+                        &matrix_report,
+                        &format!("{}/nse_dcf_projections.json", dir_ref),
+                        "THREAD A-2",
+                        dcf_timer,
+                    );
+                }
+            }
+        });
+
+    });
+}
 
 pub fn run_all_analysis_pipelines(
     ticker: &str,
@@ -36,51 +99,6 @@ pub fn run_all_analysis_pipelines(
     let ticker_ref = ticker;
 
     rayon::scope(|scope| {
-        // ==============================================================================
-        // 📊 Track A-1: High-Resolution Deterministic Matrix Grid for BSE
-        // ==============================================================================
-        scope.spawn(move |_| {
-            let dcf_timer = Instant::now();
-            match dcf::engine::execute_dual_dcf_pipeline(ticker_ref, dcf::Exchange::Bse, wacc, terminal_g) {
-                Ok(matrix_report) => {
-                    // Only write to disk if the exchange data actually exists!
-                    if !matrix_report.is_empty() {
-                        let target_file_path = format!("{}/bse_dcf_projections.json", dir_ref);
-                        if let Ok(json_str) = serde_json::to_string_pretty(&matrix_report) {
-                            if let Ok(mut file) = File::create(&target_file_path) {
-                                if file.write_all(json_str.as_bytes()).is_ok() {
-                                    println!("💾 [THREAD A-1 SUCCESS]: High-Res BSE DCF Matrix saved. Runtime: {:?}", dcf_timer.elapsed());
-                                }
-                            }
-                        }
-                    }
-                },
-                Err(e) => println!("❌ [THREAD A-1 ERROR]: BSE DCF Matrix Pipeline crash: {}", e),
-            }
-        });
-
-        // ==============================================================================
-        // 📊 Track A-2: High-Resolution Deterministic Matrix Grid for NSE
-        // ==============================================================================
-        scope.spawn(move |_| {
-            let dcf_timer = Instant::now();
-            match dcf::engine::execute_dual_dcf_pipeline(ticker_ref, dcf::Exchange::Nse, wacc, terminal_g) {
-                Ok(matrix_report) => {
-                    // Only write to disk if the exchange data actually exists!
-                    if !matrix_report.is_empty() {
-                        let target_file_path = format!("{}/nse_dcf_projections.json", dir_ref);
-                        if let Ok(json_str) = serde_json::to_string_pretty(&matrix_report) {
-                            if let Ok(mut file) = File::create(&target_file_path) {
-                                if file.write_all(json_str.as_bytes()).is_ok() {
-                                    println!("💾 [THREAD A-2 SUCCESS]: High-Res NSE DCF Matrix saved. Runtime: {:?}", dcf_timer.elapsed());
-                                }
-                            }
-                        }
-                    }
-                },
-                Err(e) => println!("❌ [THREAD A-2 ERROR]: NSE DCF Matrix Pipeline crash: {}", e),
-            }
-        });
 
         // ==============================================================================
         // 🎲 TRACK B-1: BSE STOCHASTIC MONTE CARLO PROBABILITIES
