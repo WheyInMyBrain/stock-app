@@ -1,3 +1,3 @@
-module stock-app/downloader
+module downloader
 
-go 1.26
+go 1.26.3
