@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  downloader:
+    build:
+      context: ./downloader
+      dockerfile: Dockerfile
+    container_name: stock-downloader
+    volumes:
+      - ./data:/app/data
+    restart: on-failure
+
+  parser:
+    build:
+      context: ./parser
+      dockerfile: Dockerfile
+    container_name: stock-parser
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - downloader
+    restart: on-failure
+
+  analysis:
+    build:
+      context: ./analysis
+      dockerfile: Dockerfile
+    container_name: stock-analysis
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - parser
+    restart: on-failure

@@ -62,6 +62,48 @@ CMakeUserPresets.json
 *.txt.user
 
 # ============================================================================
+# PYTHON & VIRTUAL ENVIRONMENT ARTIFACTS
+# ============================================================================
+# Ignore local virtual environment cages (including your new localized ocr workspace)
+.venv/
+venv/
+ENV/
+env/
+
+# Ignore byte-compiled/optimized execution runtime targets
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore diagnostic distributions, package manifests, and wheel setups
+.Python
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Ignore testing caches and structural workspace layout tracks
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Ignore downstream multi-modal layout weights downloaded locally via Docling
+.models/
+
+# ============================================================================
 # MACHINE LEARNING BINARY ENGINE WEIGHTS (CRITICAL)
 # ============================================================================
 # Blocks massive neural network model files from accidentally syncing to Git

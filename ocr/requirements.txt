@@ -1,0 +1,5 @@
+# OpenCV light core dependency for image extraction matrices
+opencv-python
+
+# Core OCR engine
+docling
