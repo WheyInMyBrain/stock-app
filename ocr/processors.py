@@ -1,66 +1,54 @@
 import os
-import io
-import json
-import logging
+import sys
+import time
+import threading
 from typing import BinaryIO
 from interfaces import BaseDocumentProcessor
+from docling.document_converter import DocumentConverter, DocumentStream
+from docling.datamodel.base_models import InputFormat
 
-logging.getLogger("rapidocr").setLevel(logging.ERROR)
-logging.getLogger("docling").setLevel(logging.WARNING)
-os.environ["DOCLING_DEVICE"] = "cpu"
-
-from docling.datamodel.base_models import InputFormat, DocItemLabel
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.document_converter import DocumentConverter, PdfFormatOption, DocumentStream
-
-class DoclingCPUProcessor(BaseDocumentProcessor):
+class DoclingProcessor(BaseDocumentProcessor):
     def __init__(self):
-        # 🎯 SWITCH: Initialize standard lightweight PDF options (defaults to RapidOCR)
-        pipeline_options = PdfPipelineOptions()
-        pipeline_options.do_ocr = True  # Explicitly guarantee OCR is engaged
+        self.converter = DocumentConverter()
+        print("🚀 [Docling Engine] Standard DocumentConverter initialized.")
         
-        self.converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(
-                    pipeline_options=pipeline_options
-                )
-            }
-        )
-        print("⚡ [Docling Engine] Lightweight RapidOCR Engine Initialized.")
-        
-    def process(self, file_stream: BinaryIO, total_pages: int, output_path: str) -> dict:
+    def process(self, file_stream: BinaryIO, total_pages: int, output_path: str) -> str:
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         
-        structured_data = {"pages": {}, "merged": {"markdown": ""}}
-        merged_markdown_accum = []
+        doc_stream = DocumentStream(
+            name="2024-2025.pdf", 
+            stream=file_stream, 
+            format=InputFormat.PDF
+        )
         
-        raw_pdf_bytes = file_stream.read()
+        # Dynamic Terminal Loading Animation Routine
+        done = False
+        def animate_loader():
+            animation_frames = ["▖", "▘", "▝", "▗"]
+            idx = 0
+            start_time = time.time()
+            while not done:
+                elapsed = time.time() - start_time
+                sys.stdout.write(f"\r⏳ [Docling] Parsing {total_pages} pages natively... {animation_frames[idx]} ({elapsed:.1f}s elapsed)")
+                sys.stdout.flush()
+                idx = (idx + 1) % len(animation_frames)
+                time.sleep(0.15)
+            sys.stdout.write("\r" + " " * 70 + "\r")
+            sys.stdout.flush()
+
+        loader_thread = threading.Thread(target=animate_loader)
+        loader_thread.start()
         
-        for page_num in range(1, total_pages + 1):
-            fresh_stream = io.BytesIO(raw_pdf_bytes)
-            doc_stream = DocumentStream(name="document.pdf", stream=fresh_stream, format=InputFormat.PDF)
+        try:
+            result = self.converter.convert(doc_stream)
+            full_markdown = result.document.export_to_markdown()
+        finally:
+            done = True
+            loader_thread.join()
+        
+        # 🎯 CHANGED: Writing the raw markdown block string natively with no formatting modifications
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(full_markdown)
             
-            result = self.converter.convert(doc_stream, page_range=(page_num, page_num))
-            doc = result.document
-            
-            page_key = f"page_{page_num}"
-            structured_data["pages"][page_key] = {"headers": [], "tables": [], "paragraphs": []}
-            
-            for item, level in doc.iterate_items():
-                if item.label in [DocItemLabel.TITLE, DocItemLabel.SECTION_HEADER]:
-                    structured_data["pages"][page_key]["headers"].append(item.text)
-                elif item.label == DocItemLabel.TABLE:
-                    structured_data["pages"][page_key]["tables"].append(item.export_to_markdown() if hasattr(item, 'export_to_markdown') else item.text)
-                elif item.label in [DocItemLabel.PARAGRAPH, DocItemLabel.TEXT, DocItemLabel.LIST_ITEM]:
-                    structured_data["pages"][page_key]["paragraphs"].append(item.text)
-            
-            page_md = doc.export_to_markdown()
-            merged_markdown_accum.append(page_md)
-            structured_data["merged"]["markdown"] = "\n\n--- \n\n".join(merged_markdown_accum)
-            
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(structured_data, f, indent=2, ensure_ascii=False)
-                
-            print(f"▓ Page {page_num}/{total_pages} autosaved via RapidOCR.")
-            
-        return structured_data
+        print(f"✅ Processing complete! Raw markdown file saved inside: {output_path}")
+        return full_markdown

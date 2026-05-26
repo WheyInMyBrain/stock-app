@@ -1,22 +1,25 @@
 import os
 import sys
 import re
+import traceback  
 from pathlib import Path
 from loaders import InMemoryPDFLoader
-from processors import DoclingCPUProcessor
+from processors import DoclingProcessor
 
-def run_step_by_step_pipeline(ticker: str):
+def run_ocr_pipeline(ticker: str):
     try:
         script_dir = Path(__file__).resolve().parent
         data_root = script_dir.parent / "data"
         
-        pdf_path = data_root / ticker / "nse_annual-reports" / "2023-2024.pdf"
-        output_path = data_root / ticker / "ocr" / "annual-reports" / "2023-2024.json"
+        pdf_path = data_root / ticker / "nse_annual-reports" / "2024-2025.pdf"
+        # 🎯 CHANGED: Swapped target destination path to output an .md file
+        output_path = data_root / ticker / "ocr" / "annual-reports" / "2024-2025.md"
         
         if not pdf_path.exists():
-            print(f"❌ Error: File not found: {pdf_path}")
+            print(f"❌ Error: Targeted report file missing: {pdf_path}")
             return
 
+        print("📂 [Memory Loader] Streaming file bytes into RAM...")
         loader = InMemoryPDFLoader()
         pdf_buffer = loader.load(str(pdf_path))
         
@@ -24,18 +27,20 @@ def run_step_by_step_pipeline(ticker: str):
         total_pages = len(re.findall(b'/Type\\s*/Page', view.tobytes()))
         del view
         
-        print(f"⏳ Processing {total_pages} pages sequentially...")
+        print(f"📋 Target: {ticker} | Size: {total_pages} pages")
+        print("--------------------------------------------------------")
         
-        processor = DoclingCPUProcessor()
-        # Hand off execution and save dynamically
+        processor = DoclingProcessor()
         processor.process(pdf_buffer, total_pages=total_pages, output_path=str(output_path))
         
-        print(f"\n✅ Pipeline Complete! Output safely written to: {output_path}")
+        # 🎯 CHANGED: Fixed completion print text message
+        print(f"\n✅ Pipeline Complete! Markdown file generated at: {output_path}")
         
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print("\n💥 CRITICAL PIPELINE FAILURE:")
+        traceback.print_exc()
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit("❌ Usage Error: Provide ticker symbol.")
-    run_step_by_step_pipeline(sys.argv[1].upper().strip())
+    run_ocr_pipeline(sys.argv[1].upper().strip())
