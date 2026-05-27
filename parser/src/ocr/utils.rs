@@ -5,9 +5,10 @@ pub struct UnifiedOcrOutput {
     pub source_file: String,
     pub statement_type: String,
     pub context: String,
-    pub tag: String,
-    pub date_bounds: String,
-    pub payload_value: String,
+    pub particulars: String, // Natively un-packaged particulars
+    pub notes: String,       // Dedicated isolated note references
+    pub curr_year: String,   // Clean extracted active financial number values
+    pub prev_year: String,   // Clean historical comparative metrics
 }
 
 pub trait OcrStatementExtractor: Send + Sync {

@@ -81,37 +81,40 @@ fn main() -> PolarsResult<()> {
                 if records.is_empty() { continue; }
 
                 let mut files_vec = Vec::with_capacity(records.len());
-                let mut tags_vec = Vec::with_capacity(records.len());
+                let mut statement_vec = Vec::with_capacity(records.len());
                 let mut contexts_vec = Vec::with_capacity(records.len());
-                let mut dates_vec = Vec::with_capacity(records.len());
-                let mut values_vec = Vec::with_capacity(records.len());
+                let mut particulars_vec = Vec::with_capacity(records.len());
+                let mut notes_vec = Vec::with_capacity(records.len());
+                let mut curr_vec = Vec::with_capacity(records.len());
+                let mut prev_vec = Vec::with_capacity(records.len());
 
                 for r in records {
-                    files_vec.push(r.source_file); 
-                    contexts_vec.push(r.context);  
-                    tags_vec.push(r.tag);
-                    dates_vec.push(r.date_bounds);
-                    values_vec.push(r.payload_value);
+                    files_vec.push(r.source_file);
+                    statement_vec.push(r.statement_type.clone());
+                    contexts_vec.push(r.context);
+                    particulars_vec.push(r.particulars);
+                    notes_vec.push(r.notes);
+                    curr_vec.push(r.curr_year);
+                    prev_vec.push(r.prev_year);
                 }
 
-                // 🎯 FIXED: No balance sheet folder layer anymore. Drops right into annual_report/
                 let dynamic_hierarchy = vec!["annual_report"];
-
-                // 🎯 CRITICAL PASS: Change input_folder_path string parameter dynamically 
-                // to explicitly carry the statement type token name down into utils.rs
                 let route_with_statement_metadata = format!("{}/{}", target_folder, statement_type);
 
-                match parser::utils::save_to_parquet(
+                // Call the new isolated function signature explicitly 
+                match parser::utils::save_ocr_to_parquet(
                     &route_with_statement_metadata,
                     &dynamic_hierarchy,
                     &files_vec,
-                    &tags_vec,
+                    &statement_vec,
                     &contexts_vec,
-                    &dates_vec,
-                    &values_vec,
+                    &particulars_vec,
+                    &notes_vec,
+                    &curr_vec,
+                    &prev_vec,
                 ) {
                     Ok(_saved_path) => {
-                        grand_total_rows += files_vec.len();
+                        grand_total_rows += particulars_vec.len();
                     }
                     Err(e) => println!("❌ Error saving merged OCR Parquet track: {}\n", e),
                 }

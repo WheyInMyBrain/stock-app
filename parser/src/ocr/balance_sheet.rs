@@ -131,45 +131,48 @@ pub fn process_markdown_table(file_name: &str, header_text: &str, table_str: &st
     }
 
     let mut final_processed_rows = Vec::with_capacity(repaired_rows.len());
-    for (particulars, notes_val, right_side_data) in repaired_rows {
-        let active_candidates: Vec<String> = right_side_data
-            .iter()
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .collect();
+        for (particulars, notes_val, right_side_data) in repaired_rows {
+            let active_candidates: Vec<String> = right_side_data
+                .iter()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect();
 
-        let mut curr_year_val = String::new();
-        let mut prev_year_val = String::new();
+            let mut curr_year_val = String::new();
+            let mut prev_year_val = String::new();
 
-        if active_candidates.len() == 1 {
-            curr_year_val = active_candidates[0].clone();
-        } else if active_candidates.len() >= 2 {
-            curr_year_val = active_candidates[0].clone();
-            prev_year_val = active_candidates[1].clone();
+            if active_candidates.len() == 1 {
+                curr_year_val = active_candidates[0].clone();
+            } else if active_candidates.len() >= 2 {
+                curr_year_val = active_candidates[0].clone();
+                prev_year_val = active_candidates[1].clone();
+            }
+
+            // Upgraded directly to map explicit data attributes natively
+            final_processed_rows.push(UnifiedOcrOutput {
+                source_file: file_name.to_string(),
+                statement_type: "balance_sheet".to_string(),
+                particulars,
+                context: report_type.clone(),
+                notes: notes_val,
+                curr_year: curr_year_val,
+                prev_year: prev_year_val,
+            });
         }
 
-        final_processed_rows.push(UnifiedOcrOutput {
-            source_file: file_name.to_string(),
-            statement_type: "balance_sheet".to_string(),
-            tag: particulars,
-            context: report_type.clone(),
-            date_bounds: notes_val,
-            payload_value: format!("{},{}", curr_year_val, prev_year_val),
-        });
-    }
+        if final_processed_rows.len() < 25 {
+            return Vec::new();
+        }
 
-    if final_processed_rows.len() < 25 {
-        return Vec::new();
-    }
+        // 6. Slice away split multi-line layout remnants
+        let mut slice_start_idx = 0;
+        let mut check_header_str = String::new();
+        for i in 0..std::cmp::min(3, final_processed_rows.len()) {
+            check_header_str.push_str(&final_processed_rows[i].particulars);
+        }
+        if split_header_regex.is_match(&check_header_str) && final_processed_rows.len() > 3 {
+            slice_start_idx = 3;
+        }
 
-    let mut slice_start_idx = 0;
-    let mut check_header_str = String::new();
-    for i in 0..std::cmp::min(3, final_processed_rows.len()) {
-        check_header_str.push_str(&final_processed_rows[i].tag);
-    }
-    if split_header_regex.is_match(&check_header_str) && final_processed_rows.len() > 3 {
-        slice_start_idx = 3;
-    }
-
-    final_processed_rows[slice_start_idx..].to_vec()
+        final_processed_rows[slice_start_idx..].to_vec()
 }
