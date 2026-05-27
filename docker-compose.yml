@@ -10,6 +10,17 @@ services:
       - ./data:/app/data
     restart: on-failure
 
+  ocr:
+    build:
+      context: ./ocr
+      dockerfile: Dockerfile
+    container_name: stock-ocr
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - downloader
+    restart: on-failure
+
   parser:
     build:
       context: ./parser
