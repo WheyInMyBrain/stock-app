@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::ocr::utils::{OcrStatementExtractor, UnifiedOcrOutput};
 use crate::ocr::balance_sheet::BalanceSheetExtractor;
 use crate::ocr::revenue::RevenueStatementExtractor;
+use crate::ocr::cash_flow::CashFlowStatementExtractor;
 
 pub fn extract_all_statements_from_file(file_path: &Path) -> Result<Vec<UnifiedOcrOutput>, String> {
     let file_name = file_path.file_name().unwrap().to_string_lossy().to_string();
@@ -13,6 +14,7 @@ pub fn extract_all_statements_from_file(file_path: &Path) -> Result<Vec<UnifiedO
     let extractors: Vec<Box<dyn OcrStatementExtractor>> = vec![
         Box::new(BalanceSheetExtractor),
         Box::new(RevenueStatementExtractor),
+        Box::new(CashFlowStatementExtractor),
     ];
 
     let mut combined_file_records = Vec::new();
