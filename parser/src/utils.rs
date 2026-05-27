@@ -2,9 +2,9 @@ use polars::prelude::*;
 use std::fs::{self, File};
 use std::path::Path;
 
-/// Automatically derives the ticker and folder name from the input path to structure the Parquet file.
 pub fn save_to_parquet(
-    input_folder_path: &str, // E.g., "../data/IMFA/bse_financial-results-docs"
+    input_folder_path: &str,
+    sub_hierarchy: &[&str], 
     files: &Vec<String>,
     tags: &Vec<String>,
     contexts: &Vec<String>,
@@ -12,40 +12,55 @@ pub fn save_to_parquet(
     values: &Vec<String>,
 ) -> PolarsResult<String> {
     
-    // Parse the path to isolate the ticker and the folder name
     let path_obj = Path::new(input_folder_path);
-    let folder_name = path_obj.file_name().unwrap().to_string_lossy().into_owned(); // "bse_financial-results-docs"
     
-    let ticker = path_obj
-        .parent()
-        .unwrap()
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .into_owned(); // "IMFA"
+    // Non-destructive parsing logic fallback 
+    let (ticker, file_base_name) = if sub_hierarchy.is_empty() {
+        let legacy_folder_name = path_obj.file_name().unwrap().to_string_lossy().into_owned();
+        let legacy_ticker = path_obj
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        (legacy_ticker, legacy_folder_name)
+    } else {
+        // For OCR paths, main.rs passed custom target path format metadata tokens down
+        let extracted_statement_filename = path_obj.file_name().unwrap().to_string_lossy().into_owned();
+        
+        let mut check_ancestor = path_obj;
+        while let Some(parent) = check_ancestor.parent() {
+            if parent.file_name().map(|f| f.to_string_lossy()) == Some("data".into()) {
+                break;
+            }
+            check_ancestor = parent;
+        }
+        let dynamic_ticker = check_ancestor.file_name().unwrap().to_string_lossy().into_owned();
+        (dynamic_ticker, extracted_statement_filename)
+    };
 
-    // Construct the output directory and file path
-    let output_dir = format!("../data/{}/parquets", ticker);
-    let output_file_path = format!("{}/{}.parquet", output_dir, folder_name);
+    let mut output_dir = format!("../data/{}/parquets", ticker);
+    for subfolder in sub_hierarchy {
+        output_dir.push_str(&format!("/{}", subfolder));
+    }
 
-    // Create the output directory if it doesn't exist
+    let output_file_path = format!("{}/{}.parquet", output_dir, file_base_name);
+
     if let Err(e) = fs::create_dir_all(&output_dir) {
         return Err(PolarsError::ComputeError(
             format!("Failed to create directory structure {}: {}", output_dir, e).into()
         ));
     }
 
-    // Build Polars Series structures directly from the vectors
     let s_files = Series::new("source_file".into(), files);
     let s_tags = Series::new("tag_name".into(), tags);
     let s_contexts = Series::new("context_id".into(), contexts);
     let s_dates = Series::new("date_bounds".into(), dates);
     let s_values = Series::new("raw_value".into(), values);
 
-    // Assemble the DataFrame
     let mut df = DataFrame::new(vec![s_files, s_tags, s_contexts, s_dates, s_values])?;
 
-    // Write compressed data chunks to disk
     let output_file = File::create(Path::new(&output_file_path)).map_err(|e| {
         PolarsError::ComputeError(format!("Failed to build physical output track: {}", e).into())
     })?;

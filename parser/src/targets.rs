@@ -6,4 +6,5 @@ pub const TARGET_REPORT_FOLDERS: &[&str] = &[
     "nse_investor-complaints",
     "nse_corporate-governance-master",
     "nse_corporate-shareholding-master",
+    "ocr/annual-reports",
 ];
