@@ -18,14 +18,14 @@ export default function Header({
   colors 
 }: HeaderProps) {
   return (
-    <header className={`h-16 border-b ${colors.border} px-6 flex items-center justify-between font-mono select-none`}>
+    <header className={`h-16 border-b ${colors.border} px-6 flex items-center justify-between font-sans tracking-normal select-none`}>
       
-      {/* Dynamic Environment Section Header */}
+      {/* Calm Typography Section Header Mapping */}
       <div className="flex items-center pl-10 h-full transition-all duration-300">
-        <span className="text-xs font-bold tracking-[0.3em] uppercase transition-all duration-200">
+        <span className="text-xs font-medium tracking-wider uppercase transition-all duration-200">
           {selectedTicker ? (
             <span className="animate-fadeIn">
-              // ACTIVE // <span className={isDark ? "text-white" : "text-black"}>{selectedTicker}</span>
+              // ACTIVE // <span className={`font-semibold ${isDark ? "text-white" : "text-black"}`}>{selectedTicker}</span>
             </span>
           ) : (
             <span className={`${colors.textMuted} animate-fadeIn`}>STOCK APP</span>
@@ -36,15 +36,13 @@ export default function Header({
       {/* Action Controller Buttons Group */}
       <div className="flex items-center gap-2">
         
-        {/* 🚀 THE LAYOUT RESET BUTTON
-            Only mounts if an active corporate directory is working and configuration mode is engaged */}
+        {/* 1. THE LAYOUT RESET BUTTON (Only mounts inside active customization mode) */}
         {selectedTicker && isEditing && (
           <button
             onClick={onResetLayout}
-            className={`w-8 h-8 flex items-center justify-center border cursor-pointer rounded transition-all duration-150 text-neutral-400 hover:text-red-400 hover:border-red-500/40 bg-transparent`}
+            className="w-8 h-8 flex items-center justify-center border cursor-pointer rounded-lg transition-all duration-150 text-neutral-400 hover:text-red-400 hover:border-red-500/40 bg-transparent border-neutral-700/40 active:scale-95"
             title="Reset Grid Layout Parameters to Default"
           >
-            {/* Minimalist Counter-Clockwise Rotation Loop SVG */}
             <svg
               xmlns="http://www.w3.org/2000/svg"
               viewBox="0 0 24 24"
@@ -60,12 +58,34 @@ export default function Header({
             </svg>
           </button>
         )}
+
+        {/* 2. MINIMALIST THEME TOGGLE BUTTON (Moved inwards for clean balance) */}
+        <button
+          onClick={onToggleTheme}
+          className={`w-8 h-8 flex items-center justify-center border cursor-pointer rounded-lg transition-all duration-200 ${colors.border} ${colors.hover} active:scale-95`}
+          title={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill={isDark ? "none" : "currentColor"}
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="w-4 h-4"
+          >
+            <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A5 5 0 0 0 8 8c0 1.3.5 2.6 1.5 3.5.8.8 1.3 1.5 1.5 2.5" />
+            <path d="M9 18h6" />
+            <path d="M10 22h4" />
+          </svg>
+        </button>
         
-        {/* The Configuration Wrench Icon */}
+        {/* 3. THE CONFIGURATION WRENCH ICON (🎯 SWAPPED: Placed on the anchor edge position) */}
         {selectedTicker && (
           <button
             onClick={onToggleEdit}
-            className={`w-8 h-8 flex items-center justify-center border cursor-pointer rounded transition-all duration-200 ${colors.border} ${
+            className={`w-8 h-8 flex items-center justify-center border cursor-pointer rounded-lg transition-all duration-200 active:scale-95 ${colors.border} ${
               isEditing 
                 ? "bg-red-500/10 border-red-500 text-red-500" 
                 : colors.hover
@@ -86,28 +106,6 @@ export default function Header({
             </svg>
           </button>
         )}
-
-        {/* Minimalist Theme Toggle Button */}
-        <button
-          onClick={onToggleTheme}
-          className={`w-8 h-8 flex items-center justify-center border cursor-pointer rounded transition-all duration-200 ${colors.border} ${colors.hover}`}
-          title={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill={isDark ? "none" : "currentColor"}
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="w-4 h-4"
-          >
-            <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A5 5 0 0 0 8 8c0 1.3.5 2.6 1.5 3.5.8.8 1.3 1.5 1.5 2.5" />
-            <path d="M9 18h6" />
-            <path d="M10 22h4" />
-          </svg>
-        </button>
       </div>
     </header>
   );
