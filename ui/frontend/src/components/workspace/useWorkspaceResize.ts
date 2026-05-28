@@ -9,7 +9,7 @@ export function useWorkspaceResize(isEditing: boolean, setActiveModules: React.D
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const pad = 20;
+    const pad = 24; 
 
     const nearRight = x >= rect.width - pad;
     const nearBottom = y >= rect.height - pad;
@@ -29,23 +29,43 @@ export function useWorkspaceResize(isEditing: boolean, setActiveModules: React.D
     const startX = e.clientX;
     const startY = e.clientY;
     
-    // 🎯 FIX: Read values straight from the layout bounding container to prevent state race-conditions
-    const currentContainer = e.currentTarget as HTMLDivElement;
-    const startWidth = currentContainer.clientWidth;
-    const startHeight = currentContainer.clientHeight;
+    let startW = 1;
+    let startH = 2;
+
+    setActiveModules((prev) => {
+      const target = prev.find(m => m.id === targetId);
+      if (target) {
+        startW = target.w;
+        startH = target.h;
+      }
+      return prev;
+    });
+
     const initialZone = isResizingZone;
+    const mainCanvas = document.querySelector("main") as HTMLElement;
+    
+    // 🎯 FIXED: Synced calculations to the new smooth 12-column and 20px cell block settings
+    const gridUnitWidth = mainCanvas ? (mainCanvas.clientWidth - 48) / 12 : 90;
+    const gridUnitHeight = 20; 
 
     const executeResize = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      const deltaY = moveEvent.clientY - startY;
+
       setActiveModules((prev) =>
         prev.map((m) => {
           if (m.id !== targetId) return m;
           const updated = { ...m };
           
           if (initialZone === "ns" || initialZone === "nwse") {
-            updated.height = Math.max(150, Math.min(800, startHeight + (moveEvent.clientY - startY)));
+            const rowSteps = Math.round(deltaY / gridUnitHeight);
+            // Height tracking bounds: minimum 2 units (40px) up to 60 units high
+            updated.h = Math.max(2, Math.min(60, startH + rowSteps));
           }
           if (initialZone === "ew" || initialZone === "nwse") {
-            updated.width = Math.max(320, startWidth + (moveEvent.clientX - startX));
+            const colSteps = Math.round(deltaX / gridUnitWidth);
+            // 🎯 FIXED: Broadened horizontal scale cap up to the full 12 columns
+            updated.w = Math.max(1, Math.min(12 - m.x, startW + colSteps));
           }
           return updated;
         })

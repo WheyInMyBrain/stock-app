@@ -34,7 +34,7 @@ export default function WorkspaceCard({
   isBeingDragged,
   colors,
   cardBg,
-  /* 🎯 FIXED: Destructure these missing event hooks from your incoming props stream */
+  /* Destructure these missing event hooks from your incoming props stream */
   onMouseMove,
   onMouseLeave,
   onMouseDown,
