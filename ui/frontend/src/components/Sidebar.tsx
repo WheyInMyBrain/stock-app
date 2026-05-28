@@ -29,27 +29,27 @@ export default function Sidebar({ isOpen, setIsOpen, tickers, selected, onSelect
 
   return (
     /* 🏛️ UNIFIED SINGLE SIDEBAR PANEL
-       Locks frame scale exactly between 56px and 296px */
+       Maintains your perfect structural 56px to 256px footprint */
     <div 
       className={`h-full border-r ${colors.bgSidebar} ${colors.border} flex relative transition-all duration-300 ease-in-out flex-shrink-0 select-none z-40`}
       style={{ width: isOpen ? "256px" : "56px" }}
     >
       
-      {/* 🏛️ SLIDING CONTENT LAYER
-          Now utilizes a perfectly proportioned 240px bounds for ideal layout breathing space */}
+      {/* 🏛️ FULL-WIDTH SLIDING CONTENT ENGINE
+          Now maps flawlessly edge-to-edge across the entire open panel width */}
       <div 
-        className="h-full flex flex-col font-mono transition-all duration-300 ease-in-out overflow-hidden absolute left-0 top-0 z-30"
+        className="h-full flex flex-col font-mono transition-all duration-300 ease-in-out overflow-hidden absolute left-0 top-0 z-30 w-full"
         style={{ 
-          width: isOpen ? "240px" : "0px", 
           opacity: isOpen ? 1 : 0,
-          paddingLeft: isOpen ? "16px" : "0px" 
+          paddingLeft: isOpen ? "16px" : "0px",
+          paddingRight: isOpen ? "16px" : "0px"
         }}
       >
-        <div className="w-[240px] flex flex-col h-full">
-          {/* Header Area */}
-          <div className="pt-5 h-28 flex flex-col justify-between pb-4 pr-2">
+        <div className="w-full flex flex-col h-full">
+          {/* Header Area: Search bar stretches naturally underneath the traveling button */}
+          <div className="pt-5 h-28 flex flex-col justify-between pb-4">
             <div className="flex items-center h-8">
-              <div className="text-[10px] tracking-[0.2em] uppercase font-bold opacity-80">
+              <div className="text-[10px] tracking-[0.2em] uppercase font-bold opacity-80 pl-1">
                 History Vault
               </div>
             </div>
@@ -65,12 +65,10 @@ export default function Sidebar({ isOpen, setIsOpen, tickers, selected, onSelect
           </div>
 
           {/* Clean Interior Separation Line */}
-          <div className="h-[1px] w-full pr-2">
-            <div className={`h-[1px] w-full border-b ${colors.border}`} />
-          </div>
+          <div className={`h-[1px] w-full border-b ${colors.border}`} />
 
-          {/* Scrollable File Directory Entries */}
-          <div className="flex-1 overflow-y-auto pt-2 pb-2 pr-2 flex flex-col gap-0.5">
+          {/* Scrollable File Directory Entries: Stretches beautifully to mirror your search layout */}
+          <div className="flex-1 overflow-y-auto pt-2 pb-2 flex flex-col gap-0.5">
             {filtered.length === 0 ? (
               <div className={`text-[11px] text-center py-6 ${colors.textMuted}`}>Empty Index</div>
             ) : (
@@ -91,7 +89,7 @@ export default function Sidebar({ isOpen, setIsOpen, tickers, selected, onSelect
       </div>
 
       {/* 🎛️ TRAVELING TOGGLE BUTTON
-          Maintains absolute right rim alignment relative to the layout bounds */}
+          Maintains your custom, perfectly tested alignment coordinates */}
       <button
         onClick={() => setIsOpen(!isOpen)}
         onMouseEnter={() => setIsHovered(true)}
