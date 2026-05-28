@@ -29,7 +29,9 @@ export default function App() {
       />
 
       <div className="flex-1 h-full flex flex-col overflow-hidden">
+        {/* 🎯 Pass the active state hook context down here */}
         <Header
+          selectedTicker={selectedTicker}
           isDark={isDarkMode}
           onToggleTheme={toggleTheme}
           colors={colors}

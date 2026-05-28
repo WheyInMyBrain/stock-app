@@ -1,15 +1,27 @@
 interface HeaderProps {
+  selectedTicker: string | null; // 🎯 Prop to catch the active company selection from the sidebar
   isDark: boolean;
   onToggleTheme: () => void;
   colors: any;
 }
 
-export default function Header({ isDark, onToggleTheme, colors }: HeaderProps) {
+export default function Header({ selectedTicker, isDark, onToggleTheme, colors }: HeaderProps) {
   return (
     <header className={`h-16 border-b ${colors.border} px-6 flex items-center justify-between font-mono select-none`}>
-      {/* Retain padding to compensate for the sliding panel button space natively */}
-      <div className="flex items-center pl-10">
-        <span className="text-xs font-bold tracking-[0.3em] uppercase">Core Engine Panel</span>
+      
+      {/* Padded Container ensuring perfectly aligned text relative to the sliding panels */}
+      <div className="flex items-center pl-10 h-full transition-all duration-300">
+        <span className="text-xs font-bold tracking-[0.3em] uppercase transition-all duration-200">
+          {selectedTicker ? (
+            /* 🎯 Renders a stark terminal path if a company is selected */
+            <span className="animate-fadeIn">
+              // ACTIVE // <span className={isDark ? "text-white" : "text-black"}>{selectedTicker}</span>
+            </span>
+          ) : (
+            /* Baseline view title if workspace is empty */
+            <span className={`${colors.textMuted} animate-fadeIn`}>STOCK APP</span>
+          )}
+        </span>
       </div>
 
       {/* Minimalist Theme Toggle Button */}
@@ -22,8 +34,8 @@ export default function Header({ isDark, onToggleTheme, colors }: HeaderProps) {
         <svg
           xmlns="http://www.w3.org/2000/svg"
           viewBox="0 0 24 24"
-          fill={isDark ? "none" : "currentColor"} /* Fills flat black in light mode, stays outlined in dark mode */
-          stroke="currentColor" /* Inherits inverted text color automatically */
+          fill={isDark ? "none" : "currentColor"}
+          stroke="currentColor"
           strokeWidth="1.5"
           strokeLinecap="round"
           strokeLinejoin="round"
