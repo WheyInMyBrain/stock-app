@@ -1,29 +1,38 @@
 interface HeaderProps {
-  sidebarOpen: boolean;
-  setSidebarOpen: (open: boolean) => void;
   isDark: boolean;
   onToggleTheme: () => void;
   colors: any;
 }
 
-export default function Header({ sidebarOpen, setSidebarOpen, isDark, onToggleTheme, colors }: HeaderProps) {
+export default function Header({ isDark, onToggleTheme, colors }: HeaderProps) {
   return (
-    <header className={`h-12 border-b ${colors.border} px-4 flex items-center justify-between font-mono select-none`}>
-      <div className="flex items-center gap-4">
-        <button
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          className={`text-[11px] px-2.5 py-1 border ${colors.border} ${colors.hover} transition-all duration-150 rounded`}
-        >
-          {sidebarOpen ? "[-]" : "[+]"}
-        </button>
+    <header className={`h-16 border-b ${colors.border} px-6 flex items-center justify-between font-mono select-none`}>
+      {/* Retain padding to compensate for the sliding panel button space natively */}
+      <div className="flex items-center pl-10">
         <span className="text-xs font-bold tracking-[0.3em] uppercase">Core Engine Panel</span>
       </div>
 
+      {/* Minimalist Theme Toggle Button */}
       <button
         onClick={onToggleTheme}
-        className={`text-[10px] tracking-widest px-3 py-1 border ${colors.border} ${colors.hover} rounded transition-all duration-150`}
+        className={`w-8 h-8 flex items-center justify-center border cursor-pointer rounded transition-all duration-200 ${colors.border} ${colors.hover}`}
+        title={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}
       >
-        {isDark ? "STARK LIGHT" : "JET BLACK"}
+        {/* Stark Vector Lightbulb Icon */}
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill={isDark ? "none" : "currentColor"} /* Fills flat black in light mode, stays outlined in dark mode */
+          stroke="currentColor" /* Inherits inverted text color automatically */
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="w-4 h-4 transition-transform duration-200 hover:scale-105 active:scale-95"
+        >
+          <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A5 5 0 0 0 8 8c0 1.3.5 2.6 1.5 3.5.8.8 1.3 1.5 1.5 2.5" />
+          <path d="M9 18h6" />
+          <path d="M10 22h4" />
+        </svg>
       </button>
     </header>
   );
