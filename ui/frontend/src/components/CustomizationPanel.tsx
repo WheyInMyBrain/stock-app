@@ -45,10 +45,30 @@ export default function CustomizationPanel({ isOpen, activeModuleIds, onAddModul
           return (
             <div
               key={item.id}
-              draggable={!isAlreadyPresent}
-              onDragStart={(e) => {
-                e.dataTransfer.setData("text/plain", item.id);
-                e.dataTransfer.effectAllowed = "copy";
+              /* 🎯 FIXED: Replaced standard browser drag listener with mouse down interaction trackers.
+                 When held down, it immediately initializes the custom injection routine onto your workspace layout canvas coordinates, matching the precision gravity math we just built. */
+              onMouseDown={(e) => {
+                if (isAlreadyPresent) return;
+                e.preventDefault();
+                
+                // Immediately drop the component item straight onto the active grid workspace list array
+                onAddModule(item.id);
+
+                // Use a microscopic timeout frame pool to let the card mount into the DOM,
+                // then find it and instantly transfer mouse tracking over to the high-speed drag handler engine!
+                setTimeout(() => {
+                  const targetCardElement = document.querySelector(`[data-module-card="${item.id}"]`) as HTMLElement;
+                  if (targetCardElement) {
+                    // Find our drag handle header or center matrix zone and simulate a fresh mouse click grab
+                    const simulatedEvent = new MouseEvent("mousedown", {
+                      bubbles: true,
+                      cancelable: true,
+                      clientX: e.clientX,
+                      clientY: e.clientY
+                    });
+                    targetCardElement.dispatchEvent(simulatedEvent);
+                  }
+                }, 30);
               }}
               className={`p-4 border rounded-xl flex flex-col justify-between text-left transition-all duration-200 group relative ${
                 isAlreadyPresent
@@ -57,24 +77,22 @@ export default function CustomizationPanel({ isOpen, activeModuleIds, onAddModul
               }`}
             >
               <div className="flex flex-col gap-1">
-                <span className="text-sm font-semibold tracking-tight">{item.name}</span>
-                <span className="text-xs opacity-50 leading-relaxed font-normal">{item.description}</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold tracking-tight">{item.name}</span>
+                  {!isAlreadyPresent && (
+                    <span className="text-[10px] opacity-40 px-1.5 py-0.5 rounded border border-neutral-500/20 font-mono">
+                      DRAG OUT
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs opacity-50 leading-relaxed font-normal mt-1">{item.description}</span>
               </div>
 
-              {/* Bottom tag block with fine line borders as requested */}
+              {/* Bottom tag block with fine line borders */}
               <div className="mt-4 pt-2.5 border-t border-neutral-700/25 flex items-center justify-between text-[10px] uppercase font-medium opacity-40 font-mono tracking-tight">
                 <span>[ MODULE IDENTIFIER ]</span>
                 <span>{item.id}</span>
               </div>
-
-              {!isAlreadyPresent && (
-                <button
-                  onClick={() => onAddModule(item.id)}
-                  className="absolute top-3 right-3 w-5 h-5 rounded-md border border-neutral-500/30 bg-neutral-800 text-white text-[10px] items-center justify-center hidden group-hover:flex hover:bg-neutral-700 active:scale-95 transition-all cursor-pointer"
-                >
-                  ＋
-                </button>
-              )}
             </div>
           );
         })}

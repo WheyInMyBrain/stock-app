@@ -13,7 +13,7 @@ export interface ServerModuleConfig {
   root_node: UiPrimitiveNode;
 }
 
-// 🎯 UNIVERSAL 4-WAY COMPACTION ENGINE: Enforces both Top-Gravity and Left-Gravity with multi-directional shifting
+// 🎯 DYNAMIC BIDIRECTIONAL OMNI-COMPACTION ENGINE: Prioritizes horizontal sliding before cascading items downward
 function compactLayoutWithGravity(items: ServerModuleConfig[], movingId: string | null): ServerModuleConfig[] {
   // Sort items primarily from top-to-bottom (Y), and secondarily left-to-right (X)
   const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
@@ -23,7 +23,6 @@ function compactLayoutWithGravity(items: ServerModuleConfig[], movingId: string 
   let itemsChanged = true;
   let loopsCounter = 0;
 
-  // Run the physics loops until all components stabilize into their tightest geometric configuration
   while (itemsChanged && loopsCounter < 150) {
     itemsChanged = false;
     loopsCounter++;
@@ -84,7 +83,7 @@ function compactLayoutWithGravity(items: ServerModuleConfig[], movingId: string 
         }
       }
 
-      // 3. 🗺️ OMNIDIRECTIONAL COLLISION PASS (Handles Left, Right, Top, and Bottom overlaps natively)
+      // 3. 🗺️ SMART HORIZONTAL-FIRST COLLISION RESOLUTION (Locks X axis limits, overflows strictly downward)
       for (let j = 0; j < sorted.length; j++) {
         if (sorted[j].id === current.id) continue;
         const other = layoutMap[sorted[j].id];
@@ -99,29 +98,34 @@ function compactLayoutWithGravity(items: ServerModuleConfig[], movingId: string 
         if (collides) {
           itemsChanged = true;
 
-          // If one of the overlapping blocks is the item actively dragged, it has physical priority
+          // Check if there is enough open room on the right side of the row to shift horizontal elements
+          const roomOnRight = 12 - (current.x + current.w);
+          const canSlideNeighborRight = (other.x >= current.x) && (other.x + other.w + 1 <= 12);
+
           if (current.id === movingId) {
-            // Determine the overlap direction based on previous matrix indices
             const cameFromLeft = current.x <= other.x;
             
-            // If dragging into an item from its left side, push the neighbor cleanly to the right
-            if (cameFromLeft && other.x + other.w < 12) {
-              other.x = Math.min(12 - other.w, other.x + 1);
+            // 🎯 FIXED: If resizing/dragging causes an overlap, try to slide the neighbor right instead of pushing it down
+            if (cameFromLeft && canSlideNeighborRight) {
+              other.x = Math.max(other.x + 1, current.x + current.w);
             } else {
-              // Otherwise, cascade the element downward out of the active cursor frame
+              // Scrollable overflow priority: Fall back to a downward cascade if the horizontal row space is full
               other.y = current.y + current.h;
             }
           } else if (other.id === movingId) {
             const cameFromLeft = other.x <= current.x;
+            const canSlideCurrentRight = (current.x >= other.x) && (current.x + current.w + 1 <= 12);
 
-            if (cameFromLeft && current.x + current.w < 12) {
-              current.x = Math.min(12 - current.w, current.x + 1);
+            if (cameFromLeft && canSlideCurrentRight) {
+              current.x = Math.max(current.x + 1, other.x + other.w);
             } else {
               current.y = other.y + other.h;
             }
           } else {
-            // Static background grid structures default to a clean sequential waterfall cascade
-            if (current.y <= other.y) {
+            // General layout sizing adaptations fallback logic
+            if (current.x + current.w <= 12 && canSlideNeighborRight) {
+              other.x = current.x + current.w;
+            } else if (current.y <= other.y) {
               other.y = current.y + current.h;
             } else {
               current.y = other.y + other.h;
