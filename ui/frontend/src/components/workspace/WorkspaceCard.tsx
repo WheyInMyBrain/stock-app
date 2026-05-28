@@ -29,15 +29,12 @@ export default function WorkspaceCard({
   height,
   width,
   rootNode,
-  index,
   isEditing,
   isResizingZone,
   isBeingDragged,
   colors,
   cardBg,
-  onDragStart,
-  onDragOver,
-  onDragEnd,
+  /* 🎯 FIXED: Destructure these missing event hooks from your incoming props stream */
   onMouseMove,
   onMouseLeave,
   onMouseDown,
@@ -52,18 +49,15 @@ export default function WorkspaceCard({
 
   return (
     <div
-      draggable={isEditing && !isResizingZone}
-      onDragStart={() => onDragStart(index)}
-      onDragOver={(e) => onDragOver(e, index)}
-      onDragEnd={onDragEnd}
-      onMouseMove={onMouseMove}
-      onMouseLeave={onMouseLeave}
-      onMouseDown={(e) => onMouseDown(e, id)}
-      className={`relative rounded-xl p-5 flex flex-col overflow-hidden ${cursorClass} ${
+      onMouseDown={(e) => isEditing && onMouseDown(e, id)}
+      /* 🎯 FIXED: Bind the move and leave listeners straight onto the core layout box container frame */
+      onMouseMove={isEditing ? onMouseMove : undefined}
+      onMouseLeave={isEditing ? onMouseLeave : undefined}
+      className={`relative rounded-xl p-5 flex flex-col overflow-hidden transition-all duration-200 ease-out select-none ${cursorClass} ${
         isEditing 
-          ? "border border-dashed border-neutral-600/60 bg-neutral-500/[0.02]" 
+          ? "border border-neutral-500/30 bg-neutral-500/[0.02]" 
           : "border border-transparent"
-      } ${isBeingDragged ? "opacity-30 scale-[0.99]" : "opacity-100"}`}
+      } ${isBeingDragged ? "opacity-25 scale-[0.98] bg-neutral-500/[0.06] border-dashed border-neutral-500/50 shadow-inner" : "opacity-100 scale-100"}`}
       style={{ 
         height: `${height}px`, 
         width: currentWidth, 
@@ -80,10 +74,9 @@ export default function WorkspaceCard({
 
       {isEditing && (
         <>
-          {/* 🎯 FIXED: Cleaned up the rogue semicolon syntax error here */}
           <div className="absolute top-3 right-3 flex items-center gap-2 font-sans text-[10px] animate-fadeIn pointer-events-auto z-50">
             <span className={`px-2 py-1 border ${colors.border} rounded-md bg-neutral-900/80 backdrop-blur-sm text-[10px] opacity-60 font-medium tracking-wide`}>
-              ⠿ DRAG OR SHAPE BY EDGES
+              ⠿ PRESS & DRAG CARD CENTER
             </span>
             <button
               onClick={(e) => {
@@ -91,13 +84,11 @@ export default function WorkspaceCard({
                 e.stopPropagation();
                 onRemove(id);
               }}
-              className="w-6 h-6 rounded-md border border-red-500/30 bg-red-500 text-white flex items-center justify-center font-bold text-xs cursor-pointer shadow-md hover:bg-red-600 active:scale-95 transition-all pointer-events-auto"
-              title="Remove Module Component from Workspace"
+              className="w-6 h-6 rounded-md border border-red-500/30 bg-red-500 text-white flex items-center justify-center font-bold text-xs cursor-pointer shadow-md hover:bg-red-600 active:scale-95 transition-all"
             >
               ✕
             </button>
           </div>
-          
           <div className="absolute bottom-1.5 right-1.5 p-0.5 opacity-45 text-xs font-sans selection:bg-transparent pointer-events-none">
             ◢
           </div>

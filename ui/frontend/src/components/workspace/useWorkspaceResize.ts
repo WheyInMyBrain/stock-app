@@ -22,24 +22,17 @@ export function useWorkspaceResize(isEditing: boolean, setActiveModules: React.D
 
   const startResizeExecution = (e: React.MouseEvent<HTMLDivElement>, targetId: string) => {
     if (!isResizingZone || !isEditing) return;
+    
     e.preventDefault();
     e.stopPropagation();
 
     const startX = e.clientX;
     const startY = e.clientY;
-
-    let startWidth = 0;
-    let startHeight = 220;
-
-    setActiveModules((prev) => {
-      const target = prev.find((m) => m.id === targetId);
-      if (target) {
-        startWidth = target.width || e.currentTarget.clientWidth;
-        startHeight = target.height || 220;
-      }
-      return prev;
-    });
-
+    
+    // 🎯 FIX: Read values straight from the layout bounding container to prevent state race-conditions
+    const currentContainer = e.currentTarget as HTMLDivElement;
+    const startWidth = currentContainer.clientWidth;
+    const startHeight = currentContainer.clientHeight;
     const initialZone = isResizingZone;
 
     const executeResize = (moveEvent: MouseEvent) => {
@@ -47,6 +40,7 @@ export function useWorkspaceResize(isEditing: boolean, setActiveModules: React.D
         prev.map((m) => {
           if (m.id !== targetId) return m;
           const updated = { ...m };
+          
           if (initialZone === "ns" || initialZone === "nwse") {
             updated.height = Math.max(150, Math.min(800, startHeight + (moveEvent.clientY - startY)));
           }
