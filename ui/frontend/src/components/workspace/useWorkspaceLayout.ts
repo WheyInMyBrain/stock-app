@@ -14,6 +14,13 @@ export interface ServerModuleConfig {
   root_node: UiPrimitiveNode;
 }
 
+// 🎯 Simple structure definition matching the backend catalog signature
+interface CatalogItem {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export function useWorkspaceLayout(selectedTicker: string | null, isEditing: boolean, resetSignal: number) {
   const [activeModules, setActiveModules] = useState<ServerModuleConfig[]>([]);
   const [draggedId, setDraggedId] = useState<string | null>(null);
@@ -32,17 +39,33 @@ export function useWorkspaceLayout(selectedTicker: string | null, isEditing: boo
   const loadLayoutForTicker = (tickerStr: string) => {
     invoke<string>("load_workspace_layout")
       .then(async (rawJson) => {
-        let savedBlocks: Record<string, { x: number; y: number; w: number; h: number }> = {
-          "overview_metrics": { x: 0, y: 0, w: 6, h: 12 },
-          "performance_chart": { x: 6, y: 0, w: 6, h: 16 }
-        };
+        let savedBlocks: Record<string, { x: number; y: number; w: number; h: number }> = {};
 
+        // 1. If we have a saved user layout configuration cache, use it!
         if (rawJson && rawJson !== "{}" && rawJson.trim() !== "") {
           const parsed = JSON.parse(rawJson);
           if (parsed.blocks) savedBlocks = parsed.blocks;
         }
 
-        const compileTasks = Object.keys(savedBlocks).map(async (moduleId) => {
+        // 2. 🎯 NO HARDCODING FALLBACKS: If it's empty, pull the module list straight from the Backend Catalog!
+        let activeModuleIds = Object.keys(savedBlocks);
+        if (activeModuleIds.length === 0) {
+          try {
+            const catalog = await invoke<CatalogItem[]>("fetch_component_catalog");
+            catalog.forEach((item, index) => {
+              // Automatically arrange default blueprints sequentially side-by-side (6 cols wide each)
+              const xPos = (index % 2) * 6;
+              const yPos = Math.floor(index / 2) * 14;
+              savedBlocks[item.id] = { x: xPos, y: yPos, w: 6, h: 14 };
+            });
+            activeModuleIds = Object.keys(savedBlocks);
+          } catch (catalogErr) {
+            console.error("Failed to fetch abstract server layout components catalog:", catalogErr);
+          }
+        }
+
+        // 3. Blindly fetch telemetry data and compile layout blocks for whichever items the server told us to load
+        const compileTasks = activeModuleIds.map(async (moduleId) => {
           try {
             const res: any = await invoke("fetch_component_telemetry", { ticker: tickerStr, moduleId });
             const coords = savedBlocks[moduleId];

@@ -1,7 +1,8 @@
 import React from "react";
 
 export interface UiPrimitiveNode {
-  type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container";
+  // 🎯 GENERIC ARCHITECTURE: Added abstract select controls and vector layout primitives
+  type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container" | "select" | "vector_canvas" | "vector_path" | "vector_rect";
   className?: string;
   style?: React.CSSProperties;
   children?: UiPrimitiveNode[];
@@ -12,6 +13,21 @@ export interface UiPrimitiveNode {
   status?: "up" | "down" | "neutral";
   percentage_height?: number;
   color_token?: string;
+
+  // Abstract Configuration Fields for Select Inputs
+  options?: string[];
+  default_value?: string;
+  action_target?: string;
+
+  // Generic Vector Render Properties (Calculated 100% on the Backend)
+  d?: string;          // SVG path data command string (e.g., M 0 0 L 10 10 Z)
+  fill?: string;       // Vector fill color token
+  stroke?: string;     // Vector outline stroke token
+  stroke_width?: number;
+  x?: number;          // Position parameters for rectangle primitives
+  y?: number;
+  width?: number;      // Bounding box dimensions
+  height?: number;
 }
 
 interface PrimitiveCompilerProps {
@@ -87,6 +103,65 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
             );
           })}
         </div>
+      );
+
+    // 🎯 UNIVERSAL AUTOMATED SELECT BOX PRIMITIVE
+    case "select":
+      return (
+        <select
+          key={keyIndex}
+          defaultValue={node.default_value || ""}
+          onChange={(e) => {
+            // Emits an interactive configuration override up to the workspace layout hooks framework
+            window.dispatchEvent(new CustomEvent("WORKSPACE_TIMEFRAME_OVERRIDE", {
+              detail: { moduleId: node.action_target, timeframe: e.target.value }
+            }));
+          }}
+          className={`text-xs px-2 py-1 rounded border ${colors.border} bg-neutral-900/40 text-neutral-300 font-mono font-medium outline-none cursor-pointer`}
+        >
+          {node.options?.map((opt: string) => (
+            <option key={opt} value={opt} className="bg-neutral-950 text-neutral-200">
+              {opt}
+            </option>
+          ))}
+        </select>
+      );
+
+    // 🎯 UNIVERSAL VECTOR DRAWING PANEL: Handles production stock line splines, MACD waves, volume bars, anything
+    case "vector_canvas":
+      return (
+        <div key={keyIndex} className="w-full flex-1 flex flex-col justify-end pt-4 min-h-[140px]">
+          <svg viewBox="0 0 500 180" className="w-full h-full overflow-visible">
+            {nestedChildren}
+          </svg>
+        </div>
+      );
+
+    case "vector_path":
+      return (
+        <path 
+          key={keyIndex} 
+          d={node.d} 
+          fill={node.fill || "none"} 
+          stroke={node.stroke} 
+          strokeWidth={node.stroke_width || 1} 
+          strokeLinecap="round" 
+          strokeLinejoin="round" 
+          className={node.className} 
+        />
+      );
+
+    case "vector_rect":
+      return (
+        <rect 
+          key={keyIndex} 
+          x={node.x} 
+          y={node.y} 
+          width={node.width} 
+          height={node.height} 
+          fill={node.fill} 
+          className={node.className} 
+        />
       );
 
     case "text":

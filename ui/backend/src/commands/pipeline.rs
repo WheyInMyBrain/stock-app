@@ -1,14 +1,16 @@
 use serde::{Serialize, Deserialize};
-use crate::pipeline;
+use serde_json::Value;
+use crate::pipeline::WorkspaceModule;
+use crate::pipeline::overview_metrics::OverviewMetricsCard;
+use crate::pipeline::performance_chart::PerformanceChartCard;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UiModulePayload {
     pub id: String,
     pub title: String,
-    pub root_node: serde_json::Value,
+    pub root_node: Value,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CatalogItem {
     pub id: String,
@@ -16,43 +18,37 @@ pub struct CatalogItem {
     pub description: String,
 }
 
-// 🎯 ENSURE THIS ATTRIBUTE WRAPPER SITS DIRECTLY ABOVE THIS FUNCTION:
-#[tauri::command]
-pub fn fetch_component_telemetry(ticker: String, module_id: String) -> Result<UiModulePayload, String> {
-    match module_id.as_str() {
-        "overview_metrics" => {
-            let layout_tree = pipeline::overview_metrics::compile_metrics_card(&ticker);
-            Ok(UiModulePayload {
-                id: "overview_metrics".to_string(),
-                title: "Data Matrix Processing Core".to_string(),
-                root_node: layout_tree,
-            })
-        },
-        "performance_chart" => {
-            let layout_tree = pipeline::overview_metrics::compile_chart_card(&ticker);
-            Ok(UiModulePayload {
-                id: "performance_chart".to_string(),
-                title: "Volatility Velocity Stream Matrix".to_string(),
-                root_node: layout_tree,
-            })
-        },
-        _ => Err(format!("Unrecognized module request identifier '{}'", module_id)),
-    }
+fn get_module_registry() -> Vec<Box<dyn WorkspaceModule>> {
+    vec![
+        Box::new(OverviewMetricsCard),
+        Box::new(PerformanceChartCard),
+    ]
 }
 
-// 🎯 ENSURE THIS ATTRIBUTE WRAPPER SITS DIRECTLY ABOVE THIS FUNCTION:
+#[tauri::command]
+pub fn fetch_component_telemetry(ticker: String, module_id: String, timeframe: Option<String>) -> Result<UiModulePayload, String> {
+    let active_tf = timeframe.unwrap_or_else(|| "10Y".to_string());
+    let registry = get_module_registry();
+
+    if let Some(module) = registry.iter().find(|m| m.catalog_definition().id == module_id) {
+        let definition = module.catalog_definition();
+        let layout_tree = module.compile(&ticker, &active_tf)?;
+
+        return Ok(UiModulePayload {
+            id: module_id,
+            title: definition.name,
+            root_node: layout_tree,
+        });
+    }
+
+    Err(format!("Unrecognized module request identifier '{}'", module_id))
+}
+
 #[tauri::command]
 pub fn fetch_component_catalog() -> Result<Vec<CatalogItem>, String> {
-    Ok(vec![
-        CatalogItem {
-            id: "overview_metrics".to_string(),
-            name: "Metrics Grid Matrix".to_string(),
-            description: "Live summary monitoring stream covering market yield totals and parquet pool streams.".to_string(),
-        },
-        CatalogItem {
-            id: "performance_chart".to_string(),
-            name: "Volatility Velocity Stream".to_string(),
-            description: "Asynchronous bar telemetry scaling smoothly via backend calculations.".to_string(),
-        },
-    ])
+    let items = get_module_registry()
+        .iter()
+        .map(|module| module.catalog_definition())
+        .collect();
+    Ok(items)
 }
