@@ -91,7 +91,7 @@ export function useWorkspaceLayout(selectedTicker: string | null, isEditing: boo
 
   useEffect(() => {
     if (selectedTicker) loadLayoutForTicker(selectedTicker);
-  }, [selectedTicker]);
+  }, [selectedTicker, resetSignal]);
 
   useEffect(() => {
     if (wasEditingRef.current && !isEditing && activeModules.length > 0) {
