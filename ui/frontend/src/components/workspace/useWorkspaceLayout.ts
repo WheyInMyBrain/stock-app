@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { UiPrimitiveNode } from "./PrimitiveCompiler";
 import { useWorkspaceResize } from "./useWorkspaceResize";
+import { compactLayoutWithGravity } from "./layoutGravity";
 
 export interface ServerModuleConfig {
   id: string;
@@ -13,132 +14,6 @@ export interface ServerModuleConfig {
   root_node: UiPrimitiveNode;
 }
 
-// 🎯 DYNAMIC BIDIRECTIONAL OMNI-COMPACTION ENGINE: Prioritizes horizontal sliding before cascading items downward
-function compactLayoutWithGravity(items: ServerModuleConfig[], movingId: string | null): ServerModuleConfig[] {
-  // Sort items primarily from top-to-bottom (Y), and secondarily left-to-right (X)
-  const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
-  const layoutMap: Record<string, ServerModuleConfig> = {};
-  sorted.forEach(m => { layoutMap[m.id] = { ...m }; });
-
-  let itemsChanged = true;
-  let loopsCounter = 0;
-
-  while (itemsChanged && loopsCounter < 150) {
-    itemsChanged = false;
-    loopsCounter++;
-
-    for (let i = 0; i < sorted.length; i++) {
-      const current = layoutMap[sorted[i].id];
-      if (current.id === movingId) continue; // Allow the item under the user's cursor to glide freely
-
-      // 1. 🔺 VERTICAL UPWARD COMPACTION PASS (Top Gravity)
-      if (current.y > 0) {
-        let canFloatUp = true;
-        const proposedY = current.y - 1;
-
-        for (let j = 0; j < sorted.length; j++) {
-          if (sorted[j].id === current.id) continue;
-          const other = layoutMap[sorted[j].id];
-
-          if (
-            current.x < other.x + other.w &&
-            current.x + current.w > other.x &&
-            proposedY < other.y + other.h &&
-            proposedY + current.h > other.y
-          ) {
-            canFloatUp = false;
-            break;
-          }
-        }
-
-        if (canFloatUp) {
-          current.y = proposedY;
-          itemsChanged = true;
-        }
-      }
-
-      // 2. ◀️ HORIZONTAL LEFTWARD COMPACTION PASS (Left Gravity)
-      if (current.x > 0) {
-        let canFloatLeft = true;
-        const proposedX = current.x - 1;
-
-        for (let j = 0; j < sorted.length; j++) {
-          if (sorted[j].id === current.id) continue;
-          const other = layoutMap[sorted[j].id];
-
-          if (
-            proposedX < other.x + other.w &&
-            proposedX + current.w > other.x &&
-            current.y < other.y + other.h &&
-            current.y + current.h > other.y
-          ) {
-            canFloatLeft = false;
-            break;
-          }
-        }
-
-        if (canFloatLeft) {
-          current.x = proposedX;
-          itemsChanged = true;
-        }
-      }
-
-      // 3. 🗺️ SMART HORIZONTAL-FIRST COLLISION RESOLUTION (Locks X axis limits, overflows strictly downward)
-      for (let j = 0; j < sorted.length; j++) {
-        if (sorted[j].id === current.id) continue;
-        const other = layoutMap[sorted[j].id];
-
-        const collides = (
-          current.x < other.x + other.w &&
-          current.x + current.w > other.x &&
-          current.y < other.y + other.h &&
-          current.y + current.h > other.y
-        );
-
-        if (collides) {
-          itemsChanged = true;
-
-          // Check if there is enough open room on the right side of the row to shift horizontal elements
-          const roomOnRight = 12 - (current.x + current.w);
-          const canSlideNeighborRight = (other.x >= current.x) && (other.x + other.w + 1 <= 12);
-
-          if (current.id === movingId) {
-            const cameFromLeft = current.x <= other.x;
-            
-            // 🎯 FIXED: If resizing/dragging causes an overlap, try to slide the neighbor right instead of pushing it down
-            if (cameFromLeft && canSlideNeighborRight) {
-              other.x = Math.max(other.x + 1, current.x + current.w);
-            } else {
-              // Scrollable overflow priority: Fall back to a downward cascade if the horizontal row space is full
-              other.y = current.y + current.h;
-            }
-          } else if (other.id === movingId) {
-            const cameFromLeft = other.x <= current.x;
-            const canSlideCurrentRight = (current.x >= other.x) && (current.x + current.w + 1 <= 12);
-
-            if (cameFromLeft && canSlideCurrentRight) {
-              current.x = Math.max(current.x + 1, other.x + other.w);
-            } else {
-              current.y = other.y + other.h;
-            }
-          } else {
-            // General layout sizing adaptations fallback logic
-            if (current.x + current.w <= 12 && canSlideNeighborRight) {
-              other.x = current.x + current.w;
-            } else if (current.y <= other.y) {
-              other.y = current.y + current.h;
-            } else {
-              current.y = other.y + other.h;
-            }
-          }
-        }
-      }
-    }
-  }
-
-  return sorted.map(item => layoutMap[item.id]);
-}
-
 export function useWorkspaceLayout(selectedTicker: string | null, isEditing: boolean, resetSignal: number) {
   const [activeModules, setActiveModules] = useState<ServerModuleConfig[]>([]);
   const [draggedId, setDraggedId] = useState<string | null>(null);
@@ -146,7 +21,6 @@ export function useWorkspaceLayout(selectedTicker: string | null, isEditing: boo
   const [clickOffset, setClickOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const wasEditingRef = useRef(isEditing);
 
-  // Wire up the single-source resize hook context link
   const { isResizingZone, setIsResizingZone, handleMouseMove, startResizeExecution } = 
     useWorkspaceResize(isEditing, (updater) => {
       setActiveModules((prev) => {
@@ -207,7 +81,6 @@ export function useWorkspaceLayout(selectedTicker: string | null, isEditing: boo
     wasEditingRef.current = isEditing;
   }, [isEditing, activeModules]);
 
-  // 🚀 INTERACTIVE DYNAMIC PUSH AND FLUID REORDER GESTURE HANDLING ENGINE
   const startDragExecution = (e: React.MouseEvent, targetId: string) => {
     const target = e.target as HTMLElement;
     if (!isEditing || isResizingZone || target.closest('button')) return;
@@ -241,7 +114,6 @@ export function useWorkspaceLayout(selectedTicker: string | null, isEditing: boo
       const relativeX = moveEvent.clientX - canvasRect.left - localOffsetX;
       const relativeY = moveEvent.clientY - canvasRect.top - localOffsetY + mainCanvas.scrollTop;
 
-      // Map positions smoothly against the tight 12-column limits
       const targetX = Math.max(0, Math.min(11, Math.round(relativeX / gridUnitWidth)));
       const targetY = Math.max(0, Math.round(relativeY / gridUnitHeight));
 
