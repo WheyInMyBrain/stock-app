@@ -1,5 +1,5 @@
-pub mod overview_metrics;
-pub mod performance_chart;
+pub mod company_profile;
+pub mod stock_stats;
 
 use serde_json::Value;
 use crate::commands::pipeline::CatalogItem;

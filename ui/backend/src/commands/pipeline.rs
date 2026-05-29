@@ -1,8 +1,6 @@
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use crate::pipeline::WorkspaceModule;
-use crate::pipeline::overview_metrics::OverviewMetricsCard;
-use crate::pipeline::performance_chart::PerformanceChartCard;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UiModulePayload {
@@ -20,8 +18,8 @@ pub struct CatalogItem {
 
 fn get_module_registry() -> Vec<Box<dyn WorkspaceModule>> {
     vec![
-        Box::new(OverviewMetricsCard),
-        Box::new(PerformanceChartCard),
+        Box::new(crate::pipeline::company_profile::CompanyProfileCard),
+        Box::new(crate::pipeline::stock_stats::StockStatsCard),
     ]
 }
 

@@ -14,11 +14,55 @@ export interface ServerModuleConfig {
   root_node: UiPrimitiveNode;
 }
 
-// 🎯 Simple structure definition matching the backend catalog signature
 interface CatalogItem {
   id: string;
   name: string;
   description: string;
+}
+
+// 🎯 HELPER FUNCTION: Mounts card content off-screen for a split second to compute its natural height units
+async function calculateIdealHeightUnits(rootNode: UiPrimitiveNode, targetWCols: number): Promise<number> {
+  const scratchpad = document.createElement("div");
+  scratchpad.style.position = "absolute";
+  scratchpad.style.visibility = "hidden";
+  scratchpad.style.top = "-9999px";
+  scratchpad.style.left = "-9999px";
+
+  const mainCanvas = document.querySelector("main") as HTMLElement;
+  const canvasRect = mainCanvas?.getBoundingClientRect();
+  const gridUnitWidth = canvasRect ? (canvasRect.width - 48) / 12 : 90;
+  
+  scratchpad.style.width = `${gridUnitWidth * targetWCols}px`;
+  document.body.appendChild(scratchpad);
+
+  try {
+    const ReactDOM = await import("react-dom/client");
+    const React = await import("react");
+    const PrimitiveCompiler = (await import("./PrimitiveCompiler")).default;
+    
+    const root = ReactDOM.createRoot(scratchpad);
+    root.render(
+      React.createElement(PrimitiveCompiler, {
+        node: rootNode,
+        colors: { border: "border-neutral-800", textMuted: "text-neutral-500" },
+        cardBg: "bg-[#0A0A0B]"
+      })
+    );
+
+    // Give browser a tiny frame window to calculate typography constraints
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const naturalPixelHeight = scratchpad.scrollHeight;
+
+    root.unmount();
+    scratchpad.remove();
+
+    const gridUnitHeight = 20;
+    // Base card chrome/padding needs roughly 40-60px extra headroom
+    return Math.max(8, Math.ceil((naturalPixelHeight + 50) / gridUnitHeight));
+  } catch (err) {
+    scratchpad.remove();
+    return 14; // Clean fallback if calculation fails
+  }
 }
 
 export function useWorkspaceLayout(selectedTicker: string | null, isEditing: boolean, resetSignal: number) {
@@ -40,35 +84,42 @@ export function useWorkspaceLayout(selectedTicker: string | null, isEditing: boo
     invoke<string>("load_workspace_layout")
       .then(async (rawJson) => {
         let savedBlocks: Record<string, { x: number; y: number; w: number; h: number }> = {};
+        let isFreshDefaultLayout = false;
 
-        // 1. If we have a saved user layout configuration cache, use it!
         if (rawJson && rawJson !== "{}" && rawJson.trim() !== "") {
           const parsed = JSON.parse(rawJson);
           if (parsed.blocks) savedBlocks = parsed.blocks;
         }
 
-        // 2. 🎯 NO HARDCODING FALLBACKS: If it's empty, pull the module list straight from the Backend Catalog!
         let activeModuleIds = Object.keys(savedBlocks);
         if (activeModuleIds.length === 0) {
           try {
+            isFreshDefaultLayout = true;
             const catalog = await invoke<CatalogItem[]>("fetch_component_catalog");
             catalog.forEach((item, index) => {
-              // Automatically arrange default blueprints sequentially side-by-side (6 cols wide each)
               const xPos = (index % 2) * 6;
               const yPos = Math.floor(index / 2) * 14;
-              savedBlocks[item.id] = { x: xPos, y: yPos, w: 6, h: 14 };
+              // Provide a safe temporary width of 6 columns (half screen) or full width (12) for profiles
+              const targetW = item.id.includes("profile") ? 12 : 6;
+              savedBlocks[item.id] = { x: xPos, y: yPos, w: targetW, h: 10 };
             });
             activeModuleIds = Object.keys(savedBlocks);
           } catch (catalogErr) {
-            console.error("Failed to fetch abstract server layout components catalog:", catalogErr);
+            console.error("Failed to fetch layout catalog:", catalogErr);
           }
         }
 
-        // 3. Blindly fetch telemetry data and compile layout blocks for whichever items the server told us to load
         const compileTasks = activeModuleIds.map(async (moduleId) => {
           try {
             const res: any = await invoke("fetch_component_telemetry", { ticker: tickerStr, moduleId });
-            const coords = savedBlocks[moduleId];
+            let coords = savedBlocks[moduleId];
+
+            // 🎯 AUTO-CALCULATE IF FRESH: If there's no saved config, measure the height automatically right now!
+            if (isFreshDefaultLayout) {
+              const perfectH = await calculateIdealHeightUnits(res.root_node, coords.w);
+              coords = { ...coords, h: perfectH };
+            }
+
             return {
               id: res.id,
               title: res.title,
@@ -172,10 +223,15 @@ export function useWorkspaceLayout(selectedTicker: string | null, isEditing: boo
     if (!selectedTicker || activeModules.some((m) => m.id === moduleId)) return;
     try {
       const res: any = await invoke("fetch_component_telemetry", { ticker: selectedTicker, moduleId });
+      
+      // 🎯 AUTO-CALCULATE ON APPEND: Set ideal width span based on card type, then auto-measure exact height
+      const idealW = moduleId.includes("profile") ? 12 : 6;
+      const perfectH = await calculateIdealHeightUnits(res.root_node, idealW);
+
       const highestY = activeModules.reduce((max, m) => Math.max(max, m.y + m.h), 0);
       setActiveModules((prev) => compactLayoutWithGravity([
         ...prev, 
-        { id: res.id, title: res.title, x: 0, y: highestY, w: 4, h: 12, root_node: res.root_node }
+        { id: res.id, title: res.title, x: 0, y: highestY, w: idealW, h: perfectH, root_node: res.root_node }
       ], null));
     } catch (err) {
       console.error(err);
