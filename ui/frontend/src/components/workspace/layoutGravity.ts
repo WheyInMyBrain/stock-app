@@ -84,7 +84,6 @@ export function compactLayoutWithGravity(items: ServerModuleConfig[], movingId: 
         if (collides) {
           itemsChanged = true;
 
-          const roomOnRight = 12 - (current.x + current.w);
           const canSlideNeighborRight = (other.x >= current.x) && (other.x + other.w + 1 <= 12);
 
           if (current.id === movingId) {

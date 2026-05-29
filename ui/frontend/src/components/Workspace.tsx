@@ -1,4 +1,3 @@
-import { useState } from "react";
 import WorkspaceCard from "./workspace/WorkspaceCard";
 import CustomizationPanel from "./CustomizationPanel";
 import { useWorkspaceLayout } from "./workspace/useWorkspaceLayout";
