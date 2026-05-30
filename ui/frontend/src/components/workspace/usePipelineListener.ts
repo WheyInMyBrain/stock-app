@@ -14,8 +14,7 @@ interface PipelineInvalidatedPayload {
  */
 export function usePipelineListener(
   currentModuleId: string,
-  currentTicker: string,
-  onRefreshNeeded: () => void
+  currentTicker: string
 ) {
   useEffect(() => {
     let unlistenFn: (() => void) | null = null;
@@ -26,14 +25,18 @@ export function usePipelineListener(
         const { module_id, ticker } = event.payload;
 
         // 🎯 EXACT CHECKPOINT EVALUATION
-        // Only trigger a re-compile if the background update event 
-        // matches this specific card ID and active tracking ticker token
+        // Block mismatching ticker tokens completely from triggering layout flashes
         if (
           module_id === currentModuleId && 
           ticker.toUpperCase() === currentTicker.toUpperCase()
         ) {
-          console.log(`🔄 [PIPELINE WATCHER]: Module '${module_id}' changed on disk. Re-fetching compile trees...`);
-          onRefreshNeeded();
+          console.log(`📡 [LIVE UPDATE]: Card [${currentModuleId}] caught dedicated ticker data change for [${ticker.toUpperCase()}].`);
+          
+          window.dispatchEvent(
+            new CustomEvent("HOT_RELOAD_MODULE_PIPELINE", {
+              detail: { moduleId: currentModuleId }
+            })
+          );
         }
       });
 
@@ -42,9 +45,9 @@ export function usePipelineListener(
 
     setupListener();
 
-    // 🧼 Clean cleanup lifecycle prevents memory leaks on view changes
+    // 🧼 Clean cleanup lifecycle prevents event listener duplication and memory memory leaks
     return () => {
       if (unlistenFn) unlistenFn();
     };
-  }, [currentModuleId, currentTicker, onRefreshNeeded]);
+  }, [currentModuleId, currentTicker]);
 }

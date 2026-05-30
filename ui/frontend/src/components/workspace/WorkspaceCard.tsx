@@ -1,13 +1,14 @@
 // stock-app/ui/frontend/src/components/workspace/WorkspaceCard.tsx
 
 import React, { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import PrimitiveCompiler from "./PrimitiveCompiler";
 import type { UiPrimitiveNode } from "./PrimitiveCompiler";
+import { usePipelineListener } from "./usePipelineListener";
 
 interface WorkspaceCardProps {
   id: string; 
   title: string;
+  ticker: string; // 🎯 ADD THIS: Pull the active ticker prop into your card context
   height: number;
   width?: number;
   rootNode: UiPrimitiveNode; 
@@ -29,6 +30,7 @@ interface WorkspaceCardProps {
 export default function WorkspaceCard({
   id,
   title,
+  ticker,
   height,
   width,
   rootNode,
@@ -48,23 +50,7 @@ export default function WorkspaceCard({
     setCurrentNode(rootNode);
   }, [rootNode]);
 
-  useEffect(() => {
-    let unlistenFn: (() => void) | null = null;
-
-    const setupLiveUpdateBridge = async () => {
-      unlistenFn = await listen<{ module_id: string }>("pipeline-invalidated", (event) => {
-        if (event.payload.module_id === id) {
-          console.log(`📡 [LIVE UPDATE]: Card [${id}] caught disk change signal.`);
-          window.dispatchEvent(new CustomEvent("HOT_RELOAD_MODULE_PIPELINE", {
-            detail: { moduleId: id }
-          }));
-        }
-      });
-    };
-
-    setupLiveUpdateBridge();
-    return () => { if (unlistenFn) unlistenFn(); };
-  }, [id]);
+  usePipelineListener(id, ticker);
 
   const currentWidth = width ? `${width}px` : "100%";
 
@@ -95,7 +81,6 @@ export default function WorkspaceCard({
       </div>
 
       <div className="w-full h-full flex-1 min-h-0">
-        {/* 🎯 FIXED: Forwarding your exact color and cardBg parameters here fixes everything! */}
         <PrimitiveCompiler node={currentNode} colors={colors} cardBg={cardBg} />
       </div>
 
