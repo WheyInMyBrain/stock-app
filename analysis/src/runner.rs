@@ -192,9 +192,9 @@ pub fn run_global_analysis_pipeline(ticker: &str, wacc: f64, terminal_g: f64, da
         let bse_mb_ref = Arc::clone(&shared_bse);
         scope.spawn(move |_| {
             let merton_bates_timer = Instant::now();
-            if let Some(ref _matrix) = *bse_mb_ref {
-                // Modified parameters reflect our newly optimized memory cache design
-                let merton_bates_report = crate::merton_bates::engine::execute_merton_bates_pipeline(ticker_ref, LoaderExchange::Bse);
+            if let Some(ref matrix) = *bse_mb_ref {
+                // 🎯 FIXED: Takes ONLY the matrix reference pointer now!
+                let merton_bates_report = crate::merton_bates::engine::execute_merton_bates_pipeline(matrix);
                 crate::helper::dump_matrix_report_to_disk(
                     &merton_bates_report,
                     &format!("{}/bse_merton_bates_credit_risk.json", dir_ref),
@@ -210,9 +210,9 @@ pub fn run_global_analysis_pipeline(ticker: &str, wacc: f64, terminal_g: f64, da
         let nse_mb_ref = Arc::clone(&shared_nse);
         scope.spawn(move |_| {
             let merton_bates_timer = Instant::now();
-            if let Some(ref _matrix) = *nse_mb_ref {
-                // Modified parameters reflect our newly optimized memory cache design
-                let merton_bates_report = crate::merton_bates::engine::execute_merton_bates_pipeline(ticker_ref, LoaderExchange::Nse);
+            if let Some(ref matrix) = *nse_mb_ref {
+                // 🎯 FIXED: Takes ONLY the matrix reference pointer now!
+                let merton_bates_report = crate::merton_bates::engine::execute_merton_bates_pipeline(matrix);
                 crate::helper::dump_matrix_report_to_disk(
                     &merton_bates_report,
                     &format!("{}/nse_merton_bates_credit_risk.json", dir_ref),
@@ -263,7 +263,8 @@ pub fn run_global_analysis_pipeline(ticker: &str, wacc: f64, terminal_g: f64, da
         scope.spawn(move |_| {
             let kmv_timer = Instant::now();
             if let Some(ref matrix) = *bse_kmv_ref {
-                let kmv_report = crate::merton_kmv::engine::execute_merton_kmv_pipeline(matrix, ticker_ref, "bse");
+                // 🎯 FIXED: Dropped trailing string argument to match your new 2-param layout signature
+                let kmv_report = crate::merton_kmv::engine::execute_merton_kmv_pipeline(matrix, ticker_ref);
                 crate::helper::dump_matrix_report_to_disk(
                     &kmv_report,
                     &format!("{}/bse_merton_kmv_default_risk.json", dir_ref),
@@ -280,7 +281,8 @@ pub fn run_global_analysis_pipeline(ticker: &str, wacc: f64, terminal_g: f64, da
         scope.spawn(move |_| {
             let kmv_timer = Instant::now();
             if let Some(ref matrix) = *nse_kmv_ref {
-                let kmv_report = crate::merton_kmv::engine::execute_merton_kmv_pipeline(matrix, ticker_ref, "nse");
+                // 🎯 FIXED: Dropped trailing string argument to match your new 2-param layout signature
+                let kmv_report = crate::merton_kmv::engine::execute_merton_kmv_pipeline(matrix, ticker_ref);
                 crate::helper::dump_matrix_report_to_disk(
                     &kmv_report,
                     &format!("{}/nse_merton_kmv_default_risk.json", dir_ref),

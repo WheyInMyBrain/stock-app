@@ -1,17 +1,6 @@
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
-use chrono::{TimeZone, Utc};
-use serde::Deserialize;
 use rayon::prelude::*;
 use crate::merton_kmv::MertonKmvCell;
 use crate::data_loader::UnifiedCompanyMatrix;
-
-#[derive(Debug, Deserialize)]
-struct ChartDataWrapper {
-    #[serde(rename = "grapthData")]
-    pub graph_data: Vec<Vec<serde_json::Value>>,
-}
 
 fn standard_normal_cdf(x: f64) -> f64 {
     let t = 1.0 / (1.0 + 0.2316419 * x.abs());
@@ -24,21 +13,40 @@ fn standard_normal_pdf(x: f64) -> f64 {
     0.3989422804014327 * (-x * x * 0.5).exp()
 }
 
-/// Ingests historical charts and extracts ordered records to allow for chronological bisection searching
-/// Extracts historical charts and structural volatility vectors directly from the pre-loaded warehouse matrix cache
+/// Extracts historical charts and processes dynamic structural volatility vectors straight from raw memory chart records
 fn fetch_market_vol_structures(
-    matrix: &crate::data_loader::UnifiedCompanyMatrix, // 🎯 PICKER INTERCEPT: Zero I/O overhead
+    matrix: &UnifiedCompanyMatrix,
 ) -> Vec<(String, f64, f64)> {
-    let mut comprehensive_timeline = Vec::with_capacity(matrix.chronological_dates.len());
+    let mut comprehensive_timeline = Vec::new();
+    let sequential_records = &matrix.raw_chart_records;
 
-    // Reconstruct the ordered trajectory tuples natively using the zero-copy centralized hash records
-    for target_date in &matrix.chronological_dates {
-        let target_price = *matrix.price_timeline.get(target_date).unwrap_or(&0.0);
-        let target_vol = *matrix.volatility_timeline.get(target_date).unwrap_or(&0.35); // Native default fallback
+    if sequential_records.len() < 22 {
+        return comprehensive_timeline;
+    }
 
-        if target_price > 0.0 {
-            comprehensive_timeline.push((target_date.clone(), target_price, target_vol));
+    comprehensive_timeline.reserve(sequential_records.len() - 21);
+
+    for i in 21..sequential_records.len() {
+        let (ref target_date, target_price) = sequential_records[i];
+        let mut log_returns = Vec::with_capacity(21);
+        
+        for j in (i - 20)..=i {
+            let p_curr = sequential_records[j].1;
+            let p_prev = sequential_records[j - 1].1;
+            if p_prev > 0.0 && p_curr > 0.0 {
+                log_returns.push((p_curr / p_prev).ln());
+            }
         }
+        if log_returns.is_empty() { continue; }
+
+        let mean = log_returns.iter().sum::<f64>() / log_returns.len() as f64;
+        let variance = log_returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (log_returns.len() - 1) as f64;
+        let annualized_volatility = variance.sqrt() * (252.0_f64).sqrt();
+        
+        // KMV SPECIFIC DEFAULTS: Preserve your model unique fallback floor volatility constraint
+        let safe_vol = if annualized_volatility.is_nan() || annualized_volatility <= 0.0 { 0.35 } else { annualized_volatility };
+
+        comprehensive_timeline.push((target_date.clone(), target_price, safe_vol));
     }
 
     comprehensive_timeline
@@ -46,11 +54,10 @@ fn fetch_market_vol_structures(
 
 pub fn execute_merton_kmv_pipeline(
     matrix: &UnifiedCompanyMatrix,
-    ticker: &str,
-    exchange_lowercase: &str,
+    _ticker: &str,
 ) -> Vec<MertonKmvCell> {
-    // Fetch trading timeline tracking logs chronologically
-    let trading_timeline = fetch_market_vol_structures(ticker, exchange_lowercase);
+    // Fetch trading timeline tracking logs chronologically with inline volatility processing passes
+    let trading_timeline = fetch_market_vol_structures(matrix);
     if trading_timeline.is_empty() {
         return Vec::new();
     }

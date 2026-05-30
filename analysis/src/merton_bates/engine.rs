@@ -1,33 +1,52 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
-use chrono::{TimeZone, Utc};
 use rayon::prelude::*;
 use rand_distr::{Normal, Distribution, Poisson};
-use serde::Deserialize;
 use crate::merton_bates::MertonBatesCell;
-use crate::data_loader::Exchange; // 🎯 Unified discriminator enum imported from central core
+use crate::data_loader::UnifiedCompanyMatrix;
 
-#[derive(Debug, Deserialize)]
-struct ChartDataWrapper {
-    #[serde(rename = "grapthData")]
-    pub graph_data: Vec<Vec<serde_json::Value>>,
-}
-
-/// Ingests your 10Y timeline chart and computes rolling real-world prices and volatilities
+/// Processes rolling log returns, dynamic real-world prices, and volatilities from raw memory chart records
 fn extract_price_and_vol_vectors(
-    matrix: &crate::data_loader::UnifiedCompanyMatrix, // 🎯 PICKER INTERCEPT: Zero I/O, zero file parsing!
+    matrix: &UnifiedCompanyMatrix,
 ) -> (Vec<String>, HashMap<String, f64>, HashMap<String, f64>) {
-    
-    // Natively clone the pre-computed chronological maps straight from memory cache
-    let dates = matrix.chronological_dates.clone();
-    let prices = matrix.price_timeline.clone();
-    let volatilities = matrix.volatility_timeline.clone();
+    let mut dates = Vec::new();
+    let mut prices = HashMap::new();
+    let mut volatilities = HashMap::new();
 
-    // Boundary check for analytical data density matching your legacy constraints
-    if dates.is_empty() {
-        println!("⚠️  [MERTON_BATES]: Unified company data matrix context contains an empty 10Y pricing trace.");
+    let sequential_records = &matrix.raw_chart_records;
+
+    if sequential_records.len() < 22 {
+        return (dates, prices, volatilities);
+    }
+
+    dates.reserve(sequential_records.len() - 21);
+    prices.reserve(sequential_records.len() - 21);
+    volatilities.reserve(sequential_records.len() - 21);
+
+    for i in 21..sequential_records.len() {
+        let (ref target_date, target_price) = sequential_records[i];
+        
+        let mut log_returns = Vec::with_capacity(21);
+        for j in (i - 20)..=i {
+            let p_curr = sequential_records[j].1;
+            let p_prev = sequential_records[j - 1].1;
+            if p_prev > 0.0 && p_curr > 0.0 {
+                log_returns.push((p_curr / p_prev).ln());
+            }
+        }
+
+        if log_returns.is_empty() { continue; }
+
+        let mean = log_returns.iter().sum::<f64>() / log_returns.len() as f64;
+        let variance = log_returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (log_returns.len() - 1) as f64;
+        
+        let annualized_volatility = variance.sqrt() * (252.0_f64).sqrt();
+        
+        // 🎯 MERTON-BATES DEFAULTS: Preserve model-specific fallback volatility floor constraint (0.20)
+        let safe_vol = if annualized_volatility.is_nan() || annualized_volatility <= 0.0 { 0.20 } else { annualized_volatility };
+
+        dates.push(target_date.clone());
+        prices.insert(target_date.clone(), target_price);
+        volatilities.insert(target_date.clone(), safe_vol);
     }
 
     (dates, prices, volatilities)
@@ -75,10 +94,9 @@ fn simulate_jump_diffusion_paths(
 }
 
 pub fn execute_merton_bates_pipeline(
-    ticker: &str,
-    exchange: Exchange,
+    matrix: &UnifiedCompanyMatrix,
 ) -> Vec<MertonBatesCell> {
-    let (timeline_dates, historical_prices, historical_volatilities) = extract_price_and_vol_vectors(ticker, exchange);
+    let (timeline_dates, historical_prices, historical_volatilities) = extract_price_and_vol_vectors(matrix);
 
     if timeline_dates.is_empty() {
         return Vec::new();

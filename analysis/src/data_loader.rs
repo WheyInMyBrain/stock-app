@@ -17,17 +17,15 @@ pub struct UnifiedCompanyMatrix {
     pub document_matrix: HashMap<String, HashMap<String, f64>>, // Stores ALL tags present in the parquets!
     pub share_history_timeline: HashMap<String, f64>,
     
-    // High-Fidelity Centralized Market Price and Volatility Channels
-    pub chronological_dates: Vec<String>,
+    // 🎯 CLEANED: Retains only raw, sequential timeline vectors and price mappings
+    pub raw_chart_records: Vec<(String, f64)>,
     pub price_timeline: HashMap<String, f64>,
-    pub volatility_timeline: HashMap<String, f64>,
 }
 
 pub struct CentralFinancialsDB;
 
 impl CentralFinancialsDB {
     /// Autonomous Data Broker: Structures and caches every single data tag and price timeline in memory
-    // 🎯 FIXED: Added data_dir string slice mapping to separate system layout variables cleanly
     pub fn load_exchange_matrix(ticker: &str, exchange: Exchange, data_dir: &str) -> Option<UnifiedCompanyMatrix> {
         let (fin_path, shp_path, exchange_prefix) = match exchange {
             Exchange::Bse => (
@@ -147,11 +145,10 @@ impl CentralFinancialsDB {
         });
 
         // ==============================================================================
-        // 📊 🎯 FIXED: DYNAMIC PATH RESOLUTION FOR HISTORICAL CHART DATA
+        // 📊 🎯 PURE INGESTION: HISTORICAL CHART RECORDS BROKER
         // ==============================================================================
-        let mut chronological_dates = Vec::new();
+        let mut raw_chart_records = Vec::new();
         let mut price_timeline = HashMap::new();
-        let mut volatility_timeline = HashMap::new();
 
         let chart_path_str = format!("{}/{}/{}_historical-chart-data/10Y.json", data_dir, ticker, exchange_prefix);
         let chart_path = Path::new(&chart_path_str);
@@ -161,7 +158,8 @@ impl CentralFinancialsDB {
                 let reader = BufReader::new(file);
                 if let Ok(chart_json) = serde_json::from_reader::<_, serde_json::Value>(reader) {
                     if let Some(graph_data) = chart_json.get("grapthData").and_then(|v| v.as_array()) {
-                        let mut sequential_records: Vec<(String, f64)> = Vec::with_capacity(graph_data.len());
+                        raw_chart_records.reserve(graph_data.len());
+                        price_timeline.reserve(graph_data.len());
 
                         for tuple in graph_data {
                             if let (Some(ms_val), Some(price_val)) = (tuple.get(0).and_then(|v| v.as_i64()), tuple.get(1).and_then(|v| v.as_f64())) {
@@ -173,34 +171,8 @@ impl CentralFinancialsDB {
                                     let r_day = (day_raw % 30) + 1;
                                     let clean_date_key = format!("{:04}-{:02}-{:02}", r_year, r_month, r_day);
 
-                                    sequential_records.push((clean_date_key, price_val));
-                                }
-                            }
-                        }
-
-                        if sequential_records.len() >= 22 {
-                            for i in 21..sequential_records.len() {
-                                let (ref target_date, target_price) = sequential_records[i];
-                                
-                                let mut log_returns = Vec::with_capacity(21);
-                                for j in (i - 20)..=i {
-                                    let p_curr = sequential_records[j].1;
-                                    let p_prev = sequential_records[j - 1].1;
-                                    if p_prev > 0.0 && p_curr > 0.0 {
-                                        log_returns.push((p_curr / p_prev).ln());
-                                    }
-                                }
-
-                                if !log_returns.is_empty() {
-                                    let mean = log_returns.iter().sum::<f64>() / log_returns.len() as f64;
-                                    let variance = log_returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (log_returns.len() - 1) as f64;
-                                    let annualized_volatility = variance.sqrt() * (252.0_f64).sqrt();
-                                    
-                                    let safe_vol = if annualized_volatility.is_nan() || annualized_volatility <= 0.0 { 0.25 } else { annualized_volatility };
-
-                                    chronological_dates.push(target_date.clone());
-                                    price_timeline.insert(target_date.clone(), target_price);
-                                    volatility_timeline.insert(target_date.clone(), safe_vol);
+                                    raw_chart_records.push((clean_date_key.clone(), price_val));
+                                    price_timeline.insert(clean_date_key, price_val);
                                 }
                             }
                         }
@@ -214,9 +186,8 @@ impl CentralFinancialsDB {
             file_to_date_map,
             document_matrix,
             share_history_timeline,
-            chronological_dates,
+            raw_chart_records,
             price_timeline,
-            volatility_timeline,
         })
     }
 }
