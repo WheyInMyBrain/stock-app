@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use std::env;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
+use std::path::Path;
 
 // Create a local, unified structural container for the parallel collection loop
 #[derive(Debug, Clone)]
@@ -19,14 +20,28 @@ fn main() -> PolarsResult<()> {
 
     if args.len() < 2 {
         println!("❌ ERROR: Missing target ticker token.");
-        println!("👉 Usage hint: cargo run --release <TICKER>");
+        println!("👉 Usage hint: cargo run --release <TICKER> [--data-dir /path/to/data]");
         return Ok(());
     }
 
     let current_ticker = &args[1].to_uppercase();
 
+    // Explicitly scan for a custom `--data-dir` flag argument.
+    // If not supplied, it falls back natively to your original baseline "../data" relative path coordinate.
+    let mut data_dir_base = "../data".to_string();
+    for i in 2..args.len() {
+        if args[i].starts_with("--data-dir=") {
+            if let Some(val) = args[i].split('=').nth(1) {
+                data_dir_base = val.trim().to_string();
+            }
+        } else if args[i] == "--data-dir" && i + 1 < args.len() {
+            data_dir_base = args[i + 1].trim().to_string();
+        }
+    }
+
     println!("=================================================================================");
     println!("🦀 AUTOMATED PARSING PIPELINE TARGETING SECTOR: [{}]", current_ticker);
+    println!("📍 Data Repository Base Path Context Location: [{}]", data_dir_base);
     println!("=================================================================================\n");
 
     let pipeline_start = Instant::now();
@@ -34,7 +49,9 @@ fn main() -> PolarsResult<()> {
 
     for folder in parser::targets::TARGET_REPORT_FOLDERS {
         let group_start = Instant::now();
-        let target_folder = format!("../data/{}/{}", current_ticker, folder);
+        
+        // 🎯 FIXED: Dynamic destination target directory path construction using our clean base directory anchor
+        let target_folder = format!("{}/{}/{}", data_dir_base, current_ticker, folder);
         let file_extension = if folder.contains("ocr") { "*.md" } else { "*.xml" };
         let target_glob = format!("{}/{}", target_folder, file_extension);
 
@@ -136,7 +153,6 @@ fn main() -> PolarsResult<()> {
                     match parser::bse_parser::parse_bse_file(&path, folder) {
                         Ok(records) => {
                             processed_files.fetch_add(1, Ordering::Relaxed);
-                            // 🚀 Map the distinct BseRecord vectors to your local standard layout
                             let mapped = records.into_iter().map(|r| UnifiedRecord {
                                 source_file: r.source_file,
                                 tag_name: r.tag_name,
@@ -155,7 +171,6 @@ fn main() -> PolarsResult<()> {
                     match parser::nse_parser::parse_nse_file(&path, folder) {
                         Ok(records) => {
                             processed_files.fetch_add(1, Ordering::Relaxed);
-                            // 🚀 Map the distinct NseRecord vectors to the exact same local standard layout
                             let mapped = records.into_iter().map(|r| UnifiedRecord {
                                 source_file: r.source_file,
                                 tag_name: r.tag_name,
