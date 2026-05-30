@@ -26,7 +26,7 @@ type BSEFilingsEndpoint interface {
 }
 
 // ExecuteAll serves as the single execution gateway from main.go for the BSE pipeline network.
-func ExecuteAll(symbol string, workerCount int, targetApi string) error {
+func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir string) error {
     // 1. Initialize your session & cookie handshake once here
     client, err := NewBSEClient()
     if err != nil {
@@ -57,7 +57,7 @@ func ExecuteAll(symbol string, workerCount int, targetApi string) error {
         fmt.Printf("\n[bse_scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
 
         // Execute each strategy using the shared, authenticated client and resolved scripCode
-        if err := executeStrategy(client, symbol, scripCode, endpoint, workerCount); err != nil {
+        if err := executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir); err != nil {
             fmt.Fprintf(os.Stderr, "[bse_scrape] ⚠️ Error running pipeline %s: %v\n", endpoint.Name(), err)
             // Continue to the next API even if one fails
         }
