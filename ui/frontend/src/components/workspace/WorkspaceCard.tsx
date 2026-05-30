@@ -1,5 +1,7 @@
-import React, { useEffect, useState, useCallback } from "react"; // 🎯 ADD useCallback
-import { invoke } from "@tauri-apps/api/core"; // 🎯 IMPORT INVOKE NATIVELY
+// stock-app/ui/frontend/src/components/workspace/WorkspaceCard.tsx
+
+import React, { useEffect, useState, useCallback } from "react"; 
+import { invoke } from "@tauri-apps/api/core"; 
 import PrimitiveCompiler from "./PrimitiveCompiler";
 import type { UiPrimitiveNode } from "./PrimitiveCompiler";
 import { usePipelineListener } from "./usePipelineListener";
@@ -45,14 +47,15 @@ export default function WorkspaceCard({
 }: WorkspaceCardProps) {
   const [currentNode, setCurrentNode] = useState<UiPrimitiveNode>(rootNode);
 
+  // Sync state if the master layout grid changes down from parent context
   useEffect(() => {
     setCurrentNode(rootNode);
   }, [rootNode]);
 
-  // 🎯 THE LIVE HOOK: Hits the backend telemetry engine and updates card primitives state instantly
+  // 🎯 THE OPTIMIZED REFECTH: Updates data values in-memory instantly
   const handleLiveTelemetryRefresh = useCallback(async () => {
     try {
-      console.log(`♻️ [CARD REFRESH]: Re-fetching layout arrays for module [${id}] under context [${ticker}]`);
+      // 🚀 Bypasses calculateIdealHeightUnits entirely. Just pulls values.
       const freshTelemetry: any = await invoke("fetch_component_telemetry", {
         ticker: ticker,
         moduleId: id,
@@ -60,14 +63,15 @@ export default function WorkspaceCard({
       });
 
       if (freshTelemetry && freshTelemetry.root_node) {
+        // Direct state injection without messing with the parent DOM layout tree
         setCurrentNode(freshTelemetry.root_node);
       }
     } catch (err) {
-      console.error(`❌ [CARD REFRESH ERROR]: Refetch task execution crashed for [${id}]:`, err);
+      console.error(`❌ [CARD REFRESH ERROR]: Refetch task failed for [${id}]:`, err);
     }
   }, [id, ticker]);
 
-  // 🎯 BIND REFRESH ACTION DIRECTLY TO THE PIPELINE LISTENER HANDLER
+  // Bind refresh action directly to the background thread bridge
   usePipelineListener(id, ticker, handleLiveTelemetryRefresh);
 
   const currentWidth = width ? `${width}px` : "100%";

@@ -11,7 +11,6 @@ use crate::commands::data_dir::get_active_data_directory;
 static ACTIVE_TICKER: RwLock<Option<String>> = RwLock::new(None);
 
 /// 🎯 THE ONLY BACKEND COMMAND YOU NEED TO CALL
-/// Updates the active asset target instantly across the entire application thread layout
 #[command]
 pub fn set_active_workspace(ticker: Option<String>) {
     let mut active = ACTIVE_TICKER.write().unwrap();
@@ -22,14 +21,16 @@ pub fn set_active_workspace(ticker: Option<String>) {
 /// Helper to replicate your centralized module IDs list safely
 fn get_registered_module_ids() -> Vec<(String, u64, Vec<String>)> {
     vec![
-        // (Module ID, Interval in seconds, Custom API Extra Args)
         (
             "stock_stats".to_string(), 
             30, 
             vec!["--mode=nse".to_string(), "--api=symbol-core-data".to_string()]
         ),
-        // Easily add a new abstract module here next week in 1 line:
-        // ("company_profile".to_string(), 60, vec!["--mode=profile".to_string()])
+        (
+            "company_profile".to_string(), 
+            30, 
+            vec!["--mode=nse".to_string(), "--api=symbol-core-data".to_string()]
+        ),
     ]
 }
 
@@ -49,54 +50,63 @@ pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
                 sleep(Duration::from_secs(1)).await;
                 total_elapsed_seconds += 1;
 
-                // 1. Fetch whatever asset the user currently has open on screen right now
                 let active_ticker = {
                     let current = ACTIVE_TICKER.read().unwrap();
                     current.clone()
                 };
 
-                // If no ticker is open, do absolutely nothing (Dormant State)
                 if let Some(ticker) = active_ticker {
                     let modules = get_registered_module_ids();
+                    
+                    // 🎯 STEP 1: Deduplicate identical execution requests hitting on the same second
+                    let mut unique_execution_groups: Vec<(Vec<String>, Vec<String>)> = Vec::new();
 
                     for (module_id, interval, extra_flags) in modules {
-                        // Check if this module's custom window threshold has hit
                         if total_elapsed_seconds % interval == 0 {
-                            let current_app = app_handle.clone();
-                            let target_ticker = ticker.clone();
-                            let current_module = module_id.clone();
+                            // 🎯 FIXED: Clean execution flags containing ONLY ticker and parameters.
+                            // No data-dir is hardcoded here to prevent duplicate flag injection!
+                            let mut flags = vec![ticker.clone()];
+                            flags.extend(extra_flags);
 
-                            // Reconstruct the dynamic execution arguments array
-                            let mut execution_flags = vec![target_ticker.clone()];
-                            execution_flags.extend(extra_flags);
+                            if let Some(position) = unique_execution_groups.iter().position(|(f, _)| f == &flags) {
+                                unique_execution_groups[position].1.push(module_id);
+                            } else {
+                                unique_execution_groups.push((flags, vec![module_id]));
+                            }
+                        }
+                    }
 
-                            tokio::spawn(async move {
-                                let active_dir = get_active_data_directory(current_app.clone());
-                                execution_flags.push(format!("--data-dir={}", active_dir));
+                    // 🎯 STEP 2: Fire precisely 1 downloader pass per unique flag group
+                    for (execution_flags, dependent_modules) in unique_execution_groups {
+                        let current_app = app_handle.clone();
+                        let target_ticker = ticker.clone();
 
-                                let result = run_sidecar_downloader(
-                                    current_app.clone(),
-                                    Some(active_dir),
-                                    Some(execution_flags)
-                                ).await;
+                        tokio::spawn(async move {
+                            let active_dir = get_active_data_directory(current_app.clone());
+                            
+                            // Passes single directory path + clean deduplicated execution flag arrays
+                            let result = run_sidecar_downloader(
+                                current_app.clone(),
+                                Some(active_dir),
+                                Some(execution_flags)
+                            ).await;
 
-                                if result.is_ok() {
-                                    // Flash cache mapping layers
-                                    WorkspaceDataContext::invalidate_ticker(&target_ticker);
+                            if result.is_ok() {
+                                WorkspaceDataContext::invalidate_ticker(&target_ticker);
 
-                                    // Push update straight out to the window canvas layer
-                                    if let Some(window) = current_app.get_webview_window("main") {
-                                        #[derive(Clone, serde::Serialize)]
-                                        struct GenericPayload { module_id: String, ticker: String }
+                                if let Some(window) = current_app.get_webview_window("main") {
+                                    #[derive(Clone, serde::Serialize)]
+                                    struct GenericPayload { module_id: String, ticker: String }
 
+                                    for current_module in dependent_modules {
                                         let _ = window.emit(
                                             "pipeline-invalidated",
-                                            GenericPayload { module_id: current_module, ticker: target_ticker }
+                                            GenericPayload { module_id: current_module, ticker: target_ticker.clone() }
                                         );
                                     }
                                 }
-                            });
-                        }
+                            }
+                        });
                     }
                 }
             }
