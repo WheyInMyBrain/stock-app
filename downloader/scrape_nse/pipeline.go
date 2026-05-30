@@ -9,40 +9,70 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"strings"
 )
 
 // ExecuteAll is the sole gateway for main.go.
 // It fetches all registered strategies from endpoints.go and runs them sequentially.
-func ExecuteAll(symbol string, workerCount int) error {
-	// Initialize your session & cookie handshake once here
-	client, err := NewNSEClient()
-	if err != nil {
-		return fmt.Errorf("session handshake failed: %w", err)
-	}
+func ExecuteAll(symbol string, workerCount int, targetApi string) error {
+    // Initialize your session & cookie handshake once here
+    client, err := NewNSEClient()
+    if err != nil {
+        return fmt.Errorf("session handshake failed: %w", err)
+    }
 
-	// Dynamic endpoint array loaded from endpoints.go
-	endpoints := GetAllEndpoints()
+    // Dynamic endpoint array loaded from endpoints.go
+    endpoints := GetAllEndpoints()
 
-	for _, endpoint := range endpoints {
-		fmt.Printf("\n[scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
+    for _, endpoint := range endpoints {
+        // If a specific API is requested, skip everything that doesn't match its endpoint name!
+        if targetApi != "" && endpoint.Name() != targetApi {
+            continue
+        }
 
-		// Execute each strategy using the shared, authenticated client
-		if err := executeStrategy(client, symbol, endpoint, workerCount); err != nil {
-			fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Error running pipeline %s: %v\n", endpoint.Name(), err)
-			// Continue to the next API even if one fails
-		}
-	}
+        fmt.Printf("\n[scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
 
-	return nil
+        // Execute each strategy using the shared, authenticated client
+        if err := executeStrategy(client, symbol, endpoint, workerCount); err != nil {
+            fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Error running pipeline %s: %v\n", endpoint.Name(), err)
+            // Continue to the next API even if one fails
+        }
+    }
+
+    return nil
 }
 
 // executeStrategy is unexported (private) to keep the package API surface tiny.
 func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint, workerCount int) error {
 	// Mount automated directory path right away: data/{symbol}/{api_name}
-	outputDir, err := buildSaveDirectory(symbol, endpoint.Name())
-	if err != nil {
-		return fmt.Errorf("failed creating directories: %w", err)
-	}
+	baseDir, err := buildSaveDirectory(symbol, endpoint.Name())
+    if err != nil {
+        return fmt.Errorf("failed creating directories: %w", err)
+    }
+
+    // 2. 🎯 DEFINITIVE ABSOLUTE PATH RESOLUTION
+    // Convert whatever path baseDir generated into a true absolute path clean-cut representation
+    absPath, err := filepath.Abs(baseDir)
+    if err != nil {
+        return fmt.Errorf("failed to compute absolute path context: %w", err)
+    }
+
+    // If "downloader/data" is anywhere in the computed absolute filesystem string, 
+    // we split the path right at the root module block and anchor it back to "stock-app/data" safely.
+    var outputDir string
+    if strings.Contains(absPath, filepath.Join("downloader", "data")) {
+        // Splitting at the exact platform-native representation of "downloader" segment
+        parts := strings.Split(absPath, filepath.Join("downloader", "data"))
+        // parts[0] is now guaranteed to be the clean absolute path straight to: /Users/aseem/Project/stock-app/
+        outputDir = filepath.Join(parts[0], "data", symbol, "nse_"+endpoint.Name())
+        
+        // Regenerate the directory structures safely at the true root coordinates
+        if err := os.MkdirAll(outputDir, 0755); err != nil {
+            return fmt.Errorf("failed generating unified parent directory mapping: %w", err)
+        }
+    } else {
+        outputDir = absPath
+    }
 
 	// 🛡️ INTERCEPT CHART STRATEGY: Handle Multi-Timeframe logic dynamically
 	if endpoint.Name() == "historical-chart-data" {

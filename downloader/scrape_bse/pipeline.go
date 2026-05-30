@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+	"strings"
 )
 
 // UniversalRecord standardizes asset data rows decoded by individual BSE endpoints.
@@ -25,48 +26,70 @@ type BSEFilingsEndpoint interface {
 }
 
 // ExecuteAll serves as the single execution gateway from main.go for the BSE pipeline network.
-func ExecuteAll(symbol string, workerCount int) error {
-	// 1. Initialize your session & cookie handshake once here
-	client, err := NewBSEClient()
-	if err != nil {
-		return fmt.Errorf("BSE session initialization failed: %w", err)
-	}
+func ExecuteAll(symbol string, workerCount int, targetApi string) error {
+    // 1. Initialize your session & cookie handshake once here
+    client, err := NewBSEClient()
+    if err != nil {
+        return fmt.Errorf("BSE session initialization failed: %w", err)
+    }
 
-	// 2. Resolve the alphabetic ticker symbol ("IMFA") into its BSE numeric code ("533047")
-	fmt.Printf("[bse_scrape] 🔍 Performing smart search lookup for ticker token: %s...\n", symbol)
-	scripCode, err := GetScripCode(client, symbol)
-	if err != nil {
-		return fmt.Errorf("BSE identifier mapping failed: %w", err)
-	}
-	fmt.Printf("[bse_scrape] 🎯 Successfully mapped %s ----> BSE Scrip Code: %s\n", symbol, scripCode)
+    // 2. Resolve the alphabetic ticker symbol ("IMFA") into its BSE numeric code ("533047")
+    fmt.Printf("[bse_scrape] 🔍 Performing smart search lookup for ticker token: %s...\n", symbol)
+    scripCode, err := GetScripCode(client, symbol)
+    if err != nil {
+        return fmt.Errorf("BSE identifier mapping failed: %w", err)
+    }
+    fmt.Printf("[bse_scrape] 🎯 Successfully mapped %s ----> BSE Scrip Code: %s\n", symbol, scripCode)
 
-	// 3. Dynamic endpoint array loaded from endpoints.go (We will build endpoints.go next)
-	endpoints := GetAllEndpoints()
-	if len(endpoints) == 0 {
-		fmt.Println("[bse_scrape] ℹ️ No active BSE endpoint strategies registered yet.")
-		return nil
-	}
+    // 3. Dynamic endpoint array loaded from endpoints.go
+    endpoints := GetAllEndpoints()
+    if len(endpoints) == 0 {
+        fmt.Println("[bse_scrape] ℹ️ No active BSE endpoint strategies registered yet.")
+        return nil
+    }
 
-	for _, endpoint := range endpoints {
-		fmt.Printf("\n[bse_scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
+    for _, endpoint := range endpoints {
+        // If a specific API is requested, bypass everything that doesn't match its endpoint name!
+        if targetApi != "" && endpoint.Name() != targetApi {
+            continue
+        }
 
-		// Execute each strategy using the shared, authenticated client and resolved scripCode
-		if err := executeStrategy(client, symbol, scripCode, endpoint, workerCount); err != nil {
-			fmt.Fprintf(os.Stderr, "[bse_scrape] ⚠️ Error running pipeline %s: %v\n", endpoint.Name(), err)
-			// Continue to the next API even if one fails
-		}
-	}
+        fmt.Printf("\n[bse_scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
 
-	return nil
+        // Execute each strategy using the shared, authenticated client and resolved scripCode
+        if err := executeStrategy(client, symbol, scripCode, endpoint, workerCount); err != nil {
+            fmt.Fprintf(os.Stderr, "[bse_scrape] ⚠️ Error running pipeline %s: %v\n", endpoint.Name(), err)
+            // Continue to the next API even if one fails
+        }
+    }
+
+    return nil
 }
 
 // executeStrategy maps out the processing loop safely.
 func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFilingsEndpoint, workerCount int) error {
 	// Mount automated directory path right away: data/{symbol}/bse_{api_name}
-	outputDir, err := buildSaveDirectory(symbol, endpoint.Name())
-	if err != nil {
-		return fmt.Errorf("failed creating directories: %w", err)
-	}
+	baseDir, err := buildSaveDirectory(symbol, endpoint.Name())
+    if err != nil {
+        return fmt.Errorf("failed creating directories: %w", err)
+    }
+
+    // 🎯 DEFINITIVE ABSOLUTE PATH RESOLUTION FOR BSE
+    absPath, err := filepath.Abs(baseDir)
+    if err != nil {
+        return fmt.Errorf("failed to compute absolute path context: %w", err)
+    }
+
+    var outputDir string
+    if strings.Contains(absPath, filepath.Join("downloader", "data")) {
+        parts := strings.Split(absPath, filepath.Join("downloader", "data"))
+        outputDir = filepath.Join(parts[0], "data", symbol, "bse_"+endpoint.Name())
+        if err := os.MkdirAll(outputDir, 0755); err != nil {
+            return fmt.Errorf("failed generating unified parent directory mapping: %w", err)
+        }
+    } else {
+        outputDir = absPath
+    }
 
 	// 🛡️ INTERCEPT DEALS STRATEGY: Handle Bulk (type=1) and Block (type=2) dynamics sequentially
 	if endpoint.Name() == "bulk-block-deals" {
