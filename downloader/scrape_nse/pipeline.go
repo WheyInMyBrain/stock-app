@@ -12,20 +12,30 @@ import (
 	"strings"
 )
 
-func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, targetApi string, globalDataDir string) error {
-	endpoints := GetAllEndpoints()
+// ExecuteWithWarmClient now returns the raw JSON payload as a string alongside any network errors
+func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, targetApi string, globalDataDir string) (string, error) {
+    endpoints := GetAllEndpoints()
+    var capturedJSON string
 
-	for _, endpoint := range endpoints {
-		if targetApi != "" && endpoint.Name() != targetApi {
-			continue
-		}
+    for _, endpoint := range endpoints {
+        if targetApi != "" && endpoint.Name() != targetApi {
+            continue
+        }
 
-		// Executes immediately using the hot browser session context!
-		if err := executeStrategy(client, symbol, endpoint, workerCount, globalDataDir); err != nil {
-			fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Error running warm pipeline %s: %v\n", endpoint.Name(), err)
-		}
-	}
-	return nil
+        // 🎯 CAPTURE BOTH THE RAW BYTES AND ERROR FROM THE STRATEGY PASS
+        rawBytes, err := executeStrategy(client, symbol, endpoint, workerCount, globalDataDir)
+        if err != nil {
+            fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Error running warm pipeline %s: %v\n", endpoint.Name(), err)
+            return "", err
+        }
+
+        // If the execution pulled valid network data bytes, cast them to a string reference frame
+        if len(rawBytes) > 0 {
+            capturedJSON = string(rawBytes)
+        }
+    }
+
+    return capturedJSON, nil
 }
 
 // ExecuteAll is the sole gateway for main.go.
@@ -41,26 +51,25 @@ func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir 
     endpoints := GetAllEndpoints()
 
     for _, endpoint := range endpoints {
-        // If a specific API is requested, skip everything that doesn't match its endpoint name!
-        if targetApi != "" && endpoint.Name() != targetApi {
-            continue
-        }
+		if targetApi != "" && endpoint.Name() != targetApi {
+			continue
+		}
 
-        fmt.Printf("\n[scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
+		fmt.Printf("\n[scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
 
-        // Execute each strategy using the shared, authenticated client
-        if err := executeStrategy(client, symbol, endpoint, workerCount, globalDataDir); err != nil {
-            fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Error running pipeline %s: %v\n", endpoint.Name(), err)
-            // Continue to the next API even if one fails
-        }
-    }
+		// 🎯 FIXED: Change this line to expect 2 return variables instead of 1
+		_, err := executeStrategy(client, symbol, endpoint, workerCount, globalDataDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Error running warm pipeline %s: %v\n", endpoint.Name(), err)
+		}
+	}
 
     return nil
 }
 
 // executeStrategy is unexported (private) to keep the package API surface tiny.
 // Added globalDataDir to signature to handle explicit path injection cleanly
-func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint, workerCount int, globalDataDir string) error {
+func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint, workerCount int, globalDataDir string) ([]byte, error) {
     var outputDir string
 
     // If Rust provides an explicit global data directory path, anchor it instantly!
@@ -68,19 +77,19 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
     if globalDataDir != "" {
         outputDir = filepath.Join(globalDataDir, symbol, "nse_"+endpoint.Name())
         if err := os.MkdirAll(outputDir, 0755); err != nil {
-            return fmt.Errorf("failed creating explicit global target directory: %w", err)
+            return nil, fmt.Errorf("failed creating explicit global target directory: %w", err)
         }
     } else {
         // Mount automated directory path right away: data/{symbol}/{api_name}
         baseDir, err := buildSaveDirectory(symbol, endpoint.Name())
         if err != nil {
-            return fmt.Errorf("failed creating directories: %w", err)
+            return nil, fmt.Errorf("failed creating directories: %w", err)
         }
 
         // Convert whatever path baseDir generated into a true absolute path clean-cut representation
         absPath, err := filepath.Abs(baseDir)
         if err != nil {
-            return fmt.Errorf("failed to compute absolute path context: %w", err)
+            return nil, fmt.Errorf("failed to compute absolute path context: %w", err)
         }
 
         // If "downloader/data" is anywhere in the computed absolute filesystem string, 
@@ -93,7 +102,7 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
             
             // Regenerate the directory structures safely at the true root coordinates
             if err := os.MkdirAll(outputDir, 0755); err != nil {
-                return fmt.Errorf("failed generating unified parent directory mapping: %w", err)
+                return nil, fmt.Errorf("failed generating unified parent directory mapping: %w", err)
             }
         } else {
             outputDir = absPath
@@ -104,7 +113,7 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
     if endpoint.Name() == "historical-chart-data" {
         chartAPI, ok := endpoint.(HistoricalChartAPI)
         if !ok {
-            return fmt.Errorf("failed type assertion for HistoricalChartAPI")
+            return nil, fmt.Errorf("failed type assertion for HistoricalChartAPI")
         }
 
         directives := chartAPI.ParseMultiTimeframes(symbol)
@@ -114,7 +123,7 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 
             req, err := http.NewRequest("GET", targetURL, nil)
             if err != nil {
-                return err
+                return nil, err
             }
             req.Header.Set("User-Agent", UserAgent)
             req.Header.Set("Referer", Referer)
@@ -146,14 +155,14 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 
             time.Sleep(150 * time.Millisecond)
         }
-        return nil
+        return nil, nil // 🎯 Return empty bytes for special sub-file query loops
     }
 
     // 🛡️ INTERCEPT PEER COMPARISON STRATEGY: Matrix Combination Generator Loop
     if endpoint.Name() == "peer-comparison-matrix" {
         peerAPI, ok := endpoint.(PeerComparisonAPI)
         if !ok {
-            return fmt.Errorf("failed type assertion for PeerComparisonAPI")
+            return nil, fmt.Errorf("failed type assertion for PeerComparisonAPI")
         }
 
         combos := peerAPI.GetCombinations(symbol)
@@ -162,7 +171,7 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
         for _, item := range combos {
             req, err := http.NewRequest("GET", item.URL, nil)
             if err != nil {
-                return err
+                return nil, err
             }
             req.Header.Set("User-Agent", UserAgent)
             req.Header.Set("Referer", Referer)
@@ -175,7 +184,6 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
             }
 
             if resp.StatusCode != http.StatusOK {
-                // Don't log a scary warning for 400 or 404 since companies don't sit in all indices simultaneously
                 resp.Body.Close()
                 continue
             }
@@ -186,16 +194,14 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
                 continue
             }
 
-            // Write out unique files directly (e.g. Industry_2025-12.json, Index_NIFTY_MICROCAP_250_2025-03.json)
             matrixPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", item.FileName))
             if err := os.WriteFile(matrixPath, peerBytes, 0644); err != nil {
                 fmt.Fprintf(os.Stderr, "[scrape] ❌ Failed writing peer matrix %s: %v\n", item.FileName, err)
             }
 
-            // Polite pacing delay to protect session health boundaries
             time.Sleep(150 * time.Millisecond)
         }
-        return nil
+        return nil, nil // 🎯 Return empty bytes for special sub-file query loops
     }
 
     // ============================================================================
@@ -204,7 +210,7 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
     apiURL := endpoint.BuildURL(symbol)
     req, err := http.NewRequest("GET", apiURL, nil)
     if err != nil {
-        return err
+        return nil, err
     }
     req.Header.Set("User-Agent", UserAgent)
     req.Header.Set("Referer", Referer)
@@ -212,17 +218,17 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
 
     resp, err := client.HTTPClient.Do(req)
     if err != nil {
-        return fmt.Errorf("failed fetching data from %s: %w", endpoint.Name(), err)
+        return nil, fmt.Errorf("failed fetching data from %s: %w", endpoint.Name(), err)
     }
     defer resp.Body.Close()
 
     if resp.StatusCode != http.StatusOK {
-        return fmt.Errorf("API %s rejected request with status: %d", endpoint.Name(), resp.StatusCode)
+        return nil, fmt.Errorf("API %s rejected request with status: %d", endpoint.Name(), resp.StatusCode)
     }
 
     rawBytes, err := io.ReadAll(resp.Body)
     if err != nil {
-        return fmt.Errorf("failed reading body bytes: %w", err)
+        return nil, fmt.Errorf("failed reading body bytes: %w", err)
     }
 
     metaJSONPath := filepath.Join(outputDir, "endpoint-metadata.json")
@@ -234,13 +240,13 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
     bodyReader := bytes.NewReader(rawBytes)
     records, err := endpoint.ParseResponse(bodyReader)
     if err != nil {
-        return fmt.Errorf("failed parsing data payload for %s: %w", endpoint.Name(), err)
+        return nil, fmt.Errorf("failed parsing data payload for %s: %w", endpoint.Name(), err)
     }
 
     fmt.Printf("[scrape] Strategy '%s' identified %d files for %s.\n", endpoint.Name(), len(records), symbol)
 
     if len(records) == 0 {
-        return nil
+        return rawBytes, nil // 🎯 JSON only endpoint has 0 downstream worker files! Return early.
     }
 
     tasksChan := make(chan DownloadTask, len(records))
@@ -279,5 +285,5 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
     close(tasksChan)
 
     wg.Wait()
-    return nil
+    return rawBytes, nil // 🎯 Return the verified rawBytes alongside normal completion tracking loops!
 }

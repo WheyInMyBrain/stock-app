@@ -20,16 +20,14 @@ pub fn set_active_workspace(ticker: Option<String>) {
 
 /// Helper to replicate your centralized module IDs list safely
 fn get_registered_module_ids() -> Vec<(String, u64, Vec<String>)> {
-    vec![
-        (
+    vec![(
             "stock_stats".to_string(), 
             30, 
-            vec!["--mode=nse".to_string(), "--api=symbol-core-data".to_string()]
-        ),
-        (
-            "company_profile".to_string(), 
-            30, 
-            vec!["--mode=nse".to_string(), "--api=symbol-core-data".to_string()]
+            vec![
+                "--mode=nse".to_string(), 
+                "--api=symbol-core-data".to_string(),
+                "--stream".to_string()
+            ]
         ),
     ]
 }
