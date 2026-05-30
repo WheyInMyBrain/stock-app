@@ -12,10 +12,8 @@ pub struct WorkspaceDataContext {
 }
 
 impl WorkspaceDataContext {
-    /// 🎯 UNIFIED LOADER ENTRYPOINT
+    /// UNIFIED LOADER ENTRYPOINT
     pub fn load(app_handle: &AppHandle, ticker: &str) -> Self {
-        // We use your abstract helper function to fetch whatever folder and file we want!
-        // This maps exactly to: {active_data_dir}/{ticker}/nse_symbol-core-data/endpoint-metadata.json
         let metadata_payload = Self::load_json_component(
             app_handle,
             ticker,
@@ -28,9 +26,6 @@ impl WorkspaceDataContext {
         }
     }
 
-    /// 🎯 THE ABSTRACT FUNCTION
-    /// Pass the folder name and file name, and it loads it cleanly from your active directory state.
-    /// If you add new files later, you just call this function again with the new names.
     pub fn load_json_component(
         app_handle: &AppHandle,
         sub_folder: &str,
