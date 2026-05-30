@@ -1,4 +1,6 @@
-import React from "react";
+// stock-app/ui/frontend/src/components/workspace/PrimitiveCompiler.tsx
+
+import React, { useState, useEffect, useRef } from "react";
 
 export interface UiPrimitiveNode {
   type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container" | "select" | "vector_canvas" | "vector_path" | "vector_rect";
@@ -27,8 +29,14 @@ export interface UiPrimitiveNode {
 
 interface PrimitiveCompilerProps {
   node: UiPrimitiveNode;
-  colors: any;
-  cardBg: string;
+  colors: {
+    border?: string;
+    text?: string;
+    textMuted?: string;
+    inputBg?: string;
+    [key: string]: any;
+  };
+  cardBg: string; // Dynamic background hex code or class string passed from your workspace layout state
   keyIndex?: number;
 }
 
@@ -45,21 +53,22 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
     />
   ));
 
+  // 🎯 ABSTRACT DYNAMIC VARIABLE INTERPRETATION
+  const activeBorder = colors?.border || "";
+  const activeText = colors?.text || "";
+  const activeTextMuted = colors?.textMuted || "opacity-50";
+
   switch (node.type) {
     case "container": {
-      // Determine if the backend explicitly declared a custom grid structure
       const isGrid = node.className?.includes("grid") || false;
-      
       return (
-        /* 🎯 FIXED: Deepened backgrounds, added elegant contour borders, internal padding,
-           and rounded corners to build a stunning, professional dark terminal visual aesthetic. */
         <div 
           key={keyIndex} 
-          className={`w-full min-w-0 bg-neutral-950/40 border border-neutral-900 rounded-xl p-4 shadow-sm ${node.className || ""}`}
+          className={`w-full min-w-0 ${node.className || ""}`}
           style={{
             display: "grid",
             gridTemplateColumns: isGrid 
-              ? undefined // Respect backend templates if explicitly forced
+              ? undefined 
               : "repeat(auto-fit, minmax(150px, 1fr))", 
             gap: "1.5rem",
             alignItems: "start",
@@ -73,62 +82,95 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
 
     case "grid":
       return (
-        <div key={keyIndex} className={`w-full grid gap-6 ${node.className || "grid-cols-1 md:grid-cols-3"}`}>
+        <div key={keyIndex} className={`w-full h-full grid grid-cols-1 md:grid-cols-3 gap-4 text-left ${node.className || ""}`}>
           {nestedChildren}
         </div>
       );
 
-    case "card":
+    case "card": {
+      // Safely supports inline raw color values/hex numbers or plain class handles
+      const isTailwindClass = !cardBg.startsWith("#") && !cardBg.startsWith("rgb");
       return (
-        /* 🎯 FIXED: Clean terminal slate surface with zero forced horizontal layout bounds */
-        <div key={keyIndex} className={`p-6 border border-neutral-800 bg-[#0A0A0B] rounded-xl w-full h-full flex flex-col justify-between font-sans select-text ${node.className || ""}`}>
+        <div 
+          key={keyIndex} 
+          className={`p-5 border rounded-lg ${activeBorder} ${isTailwindClass ? cardBg : ""} ${activeText} w-full h-full flex flex-col justify-between overflow-hidden font-sans tracking-normal text-sm ${node.className || ""}`}
+          style={{ 
+            backgroundColor: isTailwindClass ? undefined : cardBg,
+            ...node.style 
+          }}
+        >
           {(node.title || node.subtitle) && (
-            <div className="flex-shrink-0 mb-5 border-b border-neutral-900 pb-3">
-              {node.subtitle && <div className="text-[10px] font-bold tracking-widest uppercase mb-1 text-neutral-500 font-mono">{node.subtitle}</div>}
-              {node.title && <div className="text-base font-bold tracking-tight text-neutral-100">{node.title}</div>}
+            <div className="flex-shrink-0">
+              {node.subtitle && <div className={`text-[11px] font-medium tracking-wide uppercase mb-1 ${activeTextMuted}`}>{node.subtitle}</div>}
+              {node.title && <div className="text-lg font-semibold tracking-tight leading-snug">{node.title}</div>}
             </div>
           )}
-          
-          <div className="flex-1 w-full min-w-0 flex flex-col gap-6">
-            {nestedChildren}
+          {nestedChildren}
+          {node.footer && <div className={`text-xs opacity-40 mt-4 border-t pt-2.5 ${activeBorder}`}>{node.footer}</div>}
+        </div>
+      );
+    }
+
+    case "metric": {
+      const [flashClass, setFlashClass] = useState<string>("");
+      const previousValueRef = useRef<string | undefined>(node.value);
+
+      useEffect(() => {
+        if (previousValueRef.current !== node.value && previousValueRef.current !== undefined) {
+          const prevNum = parseFloat(previousValueRef.current.replace(/[^0-9.-]/g, ""));
+          const nextNum = parseFloat((node.value || "").replace(/[^0-9.-]/g, ""));
+
+          if (!isNaN(prevNum) && !isNaN(nextNum)) {
+            if (nextNum > prevNum) {
+              setFlashClass("bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 p-1 rounded transition-all scale-[1.01]");
+            } else if (nextNum < prevNum) {
+              setFlashClass("bg-red-500/10 text-red-600 dark:text-red-400 p-1 rounded transition-all scale-[1.01]");
+            }
+            const timer = setTimeout(() => setFlashClass(""), 1000);
+            return () => clearTimeout(timer);
+          }
+        }
+        previousValueRef.current = node.value;
+      }, [node.value]);
+
+      return (
+        <div key={keyIndex} className="my-auto flex flex-col gap-0.5 font-sans">
+          {/* 🎯 FIXED: Dynamic activeText parameters override the layout canvas */}
+          <div className={`text-2xl font-semibold font-mono tracking-tight transition-all duration-300 ${flashClass ? flashClass : activeText}`}>
+            {node.value}
           </div>
-          
-          {node.footer && <div className="text-[11px] font-mono text-neutral-500 mt-5 border-t pt-3 border-neutral-900 flex-shrink-0 tracking-wide">{node.footer}</div>}
+          {node.title && <div className={`text-[11px] font-medium uppercase tracking-wider ${activeTextMuted}`}>{node.title}</div>}
         </div>
       );
+    }
 
-    case "metric":
-      return (
-        /* 🎯 FIXED: Clean, high-contrast metric element blocks */
-        <div key={keyIndex} className="flex flex-col gap-1.5 font-sans min-w-0 py-1">
-          <div className="text-xl font-bold font-mono tracking-tight text-white">{node.value}</div>
-          {node.title && (
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400 leading-snug">
-              {node.title}
-            </div>
-          )}
-        </div>
-      );
+    case "text": {
+      const activeText = colors?.text || "";
+      const activeBorder = colors?.border || "";
 
-    case "text":
       return (
-        <div key={keyIndex} className={`text-xs leading-relaxed text-neutral-300 font-sans ${node.className || ""}`}>
+        <div 
+          key={keyIndex} 
+          className={`text-xs leading-relaxed font-sans transition-colors duration-200 ${activeText} ${activeBorder} ${node.className || ""}`}
+          style={node.style}
+        >
           {node.value}
         </div>
       );
+    }
 
     case "bar_graph":
       return (
-        <div key={keyIndex} className="w-full flex-1 min-h-[60px] flex items-end gap-2 mt-2">
+        <div key={keyIndex} className="w-full flex-1 min-h-[40px] flex items-end gap-1.5 mt-4 pt-4">
           {node.children?.map((bar, barIdx) => {
             const h = bar.percentage_height ?? 10;
-            const barBgColor = bar.color_token === "primary" ? "bg-emerald-500" : bar.color_token === "accent" ? "bg-blue-500" : "bg-neutral-700";
+            const opacity = bar.color_token === "primary" ? "opacity-90" : bar.color_token === "accent" ? "opacity-50" : "opacity-20";
             return (
               <div 
                 key={barIdx} 
-                className={`${barBgColor} w-full rounded-t-sm transition-all duration-300`} 
+                className={`bg-current ${opacity} w-full rounded-t-sm transition-all duration-300`} 
                 style={{ height: `${h}%` }} 
-                title={`Value: ${h}%`} 
+                title={`Value point metrics: ${h}%`} 
               />
             );
           })}
@@ -145,10 +187,14 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
               detail: { moduleId: node.action_target, timeframe: e.target.value }
             }));
           }}
-          className="text-xs px-2.5 py-1.5 rounded-md border border-neutral-800 bg-neutral-900 text-neutral-200 font-mono font-medium outline-none cursor-pointer hover:border-neutral-700 transition-all"
+          // 🎯 FIXED: Stripped hardcoded dark bg configurations. Follows your clean explicit theme boundaries.
+          className={`text-xs px-2 py-1 rounded border outline-none cursor-pointer font-mono font-medium transition-colors duration-200 pointer-events-auto ${activeBorder} ${activeText}`}
+          style={{ backgroundColor: cardBg }}
         >
           {node.options?.map((opt: string) => (
-            <option key={opt} value={opt} className="bg-neutral-950 text-neutral-200">{opt}</option>
+            <option key={opt} value={opt} className="bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-200">
+              {opt}
+            </option>
           ))}
         </select>
       );

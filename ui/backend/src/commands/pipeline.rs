@@ -1,3 +1,5 @@
+// stock-app/ui/backend/src/commands/pipeline.rs
+
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use crate::pipeline::WorkspaceModule;
@@ -24,12 +26,16 @@ fn get_module_registry() -> Vec<Box<dyn WorkspaceModule>> {
 }
 
 #[tauri::command]
-pub fn fetch_component_telemetry(ticker: String, module_id: String, timeframe: Option<String>) -> Result<UiModulePayload, String> {
-    let active_tf = timeframe.unwrap_or_else(|| "10Y".to_string());
+pub fn fetch_component_telemetry(
+    ticker: String, 
+    module_id: String, 
+    timeframe: Option<String>
+) -> Result<UiModulePayload, String> {
     let registry = get_module_registry();
 
     if let Some(module) = registry.iter().find(|m| m.catalog_definition().id == module_id) {
         let definition = module.catalog_definition();
+        let active_tf = timeframe.unwrap_or_default();
         let layout_tree = module.compile(&ticker, &active_tf)?;
 
         return Ok(UiModulePayload {

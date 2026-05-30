@@ -111,14 +111,19 @@ impl WorkspaceModule for CompanyProfileCard {
                 },
                 {
                     "type": "container",
-                    "className": "w-full mt-4",
-                    "style": { "background": "transparent", "border": "none", "padding": "0px", "boxShadow": "none", "display": "flex", "flexDirection": "column" },
+                    "className": "w-full mt-4 flex flex-col",
+                    "style": { "background": "transparent", "border": "none", "padding": "0px", "boxShadow": "none" },
                     "children": [
-                        { "type": "text", "className": "text-[10px] uppercase font-bold tracking-widest text-neutral-500 font-mono mb-2", "value": "Registered Exchange Benchmark Indexes" },
+                        { 
+                            "type": "text", 
+                            "className": "text-[10px] uppercase font-bold tracking-widest font-mono mb-2 opacity-50", 
+                            "value": "Registered Exchange Benchmark Indexes" 
+                        },
                         {
                             "type": "container",
-                            "className": "w-full flex flex-row flex-wrap gap-2 p-3 bg-neutral-950/60 rounded-xl border border-neutral-900/60",
-                            "style": { "display": "flex", "flexDirection": "row" },
+                            // 🎯 FIXED: Stripped the bare "border" keyword to prevent Tailwind from forcing "currentColor" behavior.
+                            // We append a custom flag like "has-border" so your compiler applies the true layout border line style!
+                            "className": "w-full flex flex-row flex-wrap gap-2 p-3 rounded-xl has-border",
                             "children": tracking_indexes
                                 .split('|')
                                 .map(|idx| idx.trim())
@@ -126,7 +131,8 @@ impl WorkspaceModule for CompanyProfileCard {
                                 .map(|idx| {
                                     json!({
                                         "type": "text",
-                                        "className": "text-xs font-mono px-2.5 py-1 bg-neutral-900/40 text-neutral-300 rounded-md border border-neutral-800/40 tracking-tight shadow-sm whitespace-nowrap",
+                                        // 🎯 FIXED: Stripped the bare "border" keyword here as well to preserve crisp, normal frame line styles.
+                                        "className": "text-xs font-mono px-2.5 py-1 has-border rounded-md tracking-tight shadow-sm whitespace-nowrap",
                                         "value": idx.to_string()
                                     })
                                 })

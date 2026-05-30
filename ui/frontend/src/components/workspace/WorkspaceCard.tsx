@@ -1,19 +1,22 @@
-import React from "react";
+// stock-app/ui/frontend/src/components/workspace/WorkspaceCard.tsx
+
+import React, { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import PrimitiveCompiler from "./PrimitiveCompiler";
 import type { UiPrimitiveNode } from "./PrimitiveCompiler";
 
 interface WorkspaceCardProps {
-  id: string;
+  id: string; 
   title: string;
   height: number;
   width?: number;
-  rootNode: UiPrimitiveNode;
+  rootNode: UiPrimitiveNode; 
   index: number;
   isEditing: boolean;
   isResizingZone: string | null;
   isBeingDragged: boolean;
   colors: any;
-  cardBg: string;
+  cardBg: string; 
   onDragStart: (index: number) => void;
   onDragOver: (e: React.DragEvent, index: number) => void;
   onDragEnd: () => void;
@@ -34,12 +37,35 @@ export default function WorkspaceCard({
   isBeingDragged,
   colors,
   cardBg,
-  /* Destructure these missing event hooks from your incoming props stream */
   onMouseMove,
   onMouseLeave,
   onMouseDown,
   onRemove,
 }: WorkspaceCardProps) {
+  const [currentNode, setCurrentNode] = useState<UiPrimitiveNode>(rootNode);
+
+  useEffect(() => {
+    setCurrentNode(rootNode);
+  }, [rootNode]);
+
+  useEffect(() => {
+    let unlistenFn: (() => void) | null = null;
+
+    const setupLiveUpdateBridge = async () => {
+      unlistenFn = await listen<{ module_id: string }>("pipeline-invalidated", (event) => {
+        if (event.payload.module_id === id) {
+          console.log(`📡 [LIVE UPDATE]: Card [${id}] caught disk change signal.`);
+          window.dispatchEvent(new CustomEvent("HOT_RELOAD_MODULE_PIPELINE", {
+            detail: { moduleId: id }
+          }));
+        }
+      });
+    };
+
+    setupLiveUpdateBridge();
+    return () => { if (unlistenFn) unlistenFn(); };
+  }, [id]);
+
   const currentWidth = width ? `${width}px` : "100%";
 
   const cursorClass = !isEditing ? "" : 
@@ -50,32 +76,33 @@ export default function WorkspaceCard({
   return (
     <div
       onMouseDown={(e) => isEditing && onMouseDown(e, id)}
-      /* 🎯 FIXED: Bind the move and leave listeners straight onto the core layout box container frame */
       onMouseMove={isEditing ? onMouseMove : undefined}
       onMouseLeave={isEditing ? onMouseLeave : undefined}
-      className={`relative rounded-xl p-5 flex flex-col overflow-hidden transition-all duration-200 ease-out select-none ${cursorClass} ${
+      className={`relative rounded-xl p-5 flex flex-col overflow-hidden transition-all duration-200 ease-out select-none border ${
         isEditing 
-          ? "border border-neutral-500/30 bg-neutral-500/[0.02]" 
-          : "border border-transparent"
+          ? "border-neutral-500/30 bg-neutral-500/[0.02]" 
+          : colors?.border || "border-neutral-200 dark:border-neutral-800"
       } ${isBeingDragged ? "opacity-25 scale-[0.98] bg-neutral-500/[0.06] border-dashed border-neutral-500/50 shadow-inner" : "opacity-100 scale-100"}`}
       style={{ 
         height: `${height}px`, 
         width: currentWidth, 
-        maxWidth: "100%" 
+        maxWidth: "100%",
+        backgroundColor: cardBg 
       }}
     >
-      <div className="font-sans text-[10px] font-medium tracking-widest uppercase opacity-40 pl-1 mb-2.5 flex-shrink-0">
+      <div className={`font-sans text-[10px] font-medium tracking-widest uppercase opacity-50 pl-1 mb-2.5 flex-shrink-0 ${colors?.textMuted || "text-neutral-500"}`}>
         {title}
       </div>
 
-      <div className="w-full h-full flex-1 min-h-0 pointer-events-none">
-        <PrimitiveCompiler node={rootNode} colors={colors} cardBg={cardBg} />
+      <div className="w-full h-full flex-1 min-h-0">
+        {/* 🎯 FIXED: Forwarding your exact color and cardBg parameters here fixes everything! */}
+        <PrimitiveCompiler node={currentNode} colors={colors} cardBg={cardBg} />
       </div>
 
       {isEditing && (
         <>
           <div className="absolute top-3 right-3 flex items-center gap-2 font-sans text-[10px] animate-fadeIn pointer-events-auto z-50">
-            <span className={`px-2 py-1 border ${colors.border} rounded-md bg-neutral-900/80 backdrop-blur-sm text-[10px] opacity-60 font-medium tracking-wide`}>
+            <span className={`px-2 py-1 border ${colors?.border || "border-neutral-800"} rounded-md bg-neutral-900/80 backdrop-blur-sm text-[10px] text-white opacity-60 font-medium tracking-wide`}>
               ⠿ PRESS & DRAG CARD CENTER
             </span>
             <button
@@ -89,7 +116,7 @@ export default function WorkspaceCard({
               ✕
             </button>
           </div>
-          <div className="absolute bottom-1.5 right-1.5 p-0.5 opacity-45 text-xs font-sans selection:bg-transparent pointer-events-none">
+          <div className="absolute bottom-1.5 right-1.5 p-0.5 opacity-45 text-xs font-sans selection:bg-transparent pointer-events-none text-neutral-400">
             ◢
           </div>
         </>
