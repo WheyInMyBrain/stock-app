@@ -28,6 +28,10 @@ fn main() {
         .setup(|app| {
             let app_handle = app.handle().clone();
             
+            // 🎯 FIXED: Initialized through the consolidated downloader module file natively!
+            commands::downloader::initialize_persistent_go_daemon(app_handle.clone());
+            
+            // Start your standard interval clock tracker
             commands::ticker::spawn_global_ticker_daemon(app_handle);
 
             Ok(())

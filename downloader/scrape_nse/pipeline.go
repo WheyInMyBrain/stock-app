@@ -12,6 +12,22 @@ import (
 	"strings"
 )
 
+func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, targetApi string, globalDataDir string) error {
+	endpoints := GetAllEndpoints()
+
+	for _, endpoint := range endpoints {
+		if targetApi != "" && endpoint.Name() != targetApi {
+			continue
+		}
+
+		// Executes immediately using the hot browser session context!
+		if err := executeStrategy(client, symbol, endpoint, workerCount, globalDataDir); err != nil {
+			fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Error running warm pipeline %s: %v\n", endpoint.Name(), err)
+		}
+	}
+	return nil
+}
+
 // ExecuteAll is the sole gateway for main.go.
 // It fetches all registered strategies from endpoints.go and runs them sequentially.
 func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir string) error {

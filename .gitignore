@@ -3,8 +3,10 @@
 # ============================================================================
 # Blocks the entire recursive data tree containing downloaded corporate assets
 data/
+gen/
 # Fallback rule in case a loose file drops into a root data marker path
 data
+gen
 
 # ============================================================================
 # GO BUILD ARTIFACTS & BINARIES

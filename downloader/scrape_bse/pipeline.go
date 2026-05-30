@@ -12,6 +12,26 @@ import (
 	"strings"
 )
 
+func ExecuteWithWarmClient(client *BSEClient, symbol string, workerCount int, targetApi string, globalDataDir string) error {
+	// Re-use your warm client session context to look up the ticker scrip mapping code
+	scripCode, err := GetScripCode(client, symbol)
+	if err != nil {
+		return fmt.Errorf("BSE warm identifier mapping failed: %w", err)
+    }
+
+	endpoints := GetAllEndpoints()
+	for _, endpoint := range endpoints {
+		if targetApi != "" && endpoint.Name() != targetApi {
+			continue
+		}
+
+		if err := executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir); err != nil {
+			fmt.Fprintf(os.Stderr, "[bse_scrape] ⚠️ Error running warm pipeline %s: %v\n", endpoint.Name(), err)
+		}
+	}
+	return nil
+}
+
 // UniversalRecord standardizes asset data rows decoded by individual BSE endpoints.
 type UniversalRecord struct {
 	Period      string // Naming token (e.g., "Quarter_Dec_2025")
