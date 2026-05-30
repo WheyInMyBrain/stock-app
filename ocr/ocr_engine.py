@@ -6,17 +6,28 @@ from pathlib import Path
 from loaders import InMemoryPDFLoader
 from processors import DoclingProcessor
 
-def run_ocr_pipeline(ticker: str):
+def run_ocr_pipeline(ticker: str, data_dir_override: str = None):
     try:
         script_dir = Path(__file__).resolve().parent
-        data_root = script_dir.parent / "data"
+        
+        # 🎯 FIXED: If data-dir parameter string exists, anchor directly to it!
+        # Otherwise, fall back naturally onto the default relative asset folder tract coordinate.
+        if data_dir_override:
+            data_root = Path(data_dir_override)
+        else:
+            data_root = script_dir.parent / "data"
         
         reports_dir = data_root / ticker / "nse_annual-reports"
         output_dir = data_root / ticker / "ocr" / "annual-reports"
         
+        print(f"📍 Utilizing Target Unified Repository Anchor: [{data_root}]")
+        
         if not reports_dir.exists():
             print(f"❌ Error: Targeted reports folder missing: {reports_dir}")
             return
+
+        # Create output ocr subfolders natively if they don't exist yet
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         # 🎯 Gather all valid zip and pdf document files inside the directory
         target_files = sorted([
@@ -74,5 +85,14 @@ def run_ocr_pipeline(ticker: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        sys.exit("❌ Usage Error: Provide ticker symbol.")
-    run_ocr_pipeline(sys.argv[1].upper().strip())
+        sys.exit("❌ Usage Error: Provide ticker symbol. Hint: python main.py IMFA [--data-dir=/path]")
+        
+    target_ticker = sys.argv[1].upper().strip()
+    extracted_data_dir = None
+    
+    # 🎯 FIXED: Scan command arguments list map string arrays for dynamic path variables
+    for argument in sys.argv[2:]:
+        if argument.startswith("--data-dir="):
+            extracted_data_dir = argument.split("=")[1].strip()
+            
+    run_ocr_pipeline(target_ticker, data_dir_override=extracted_data_dir)
