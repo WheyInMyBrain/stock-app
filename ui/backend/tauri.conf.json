@@ -36,6 +36,9 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
-    }
+    },
+    "externalBinaries": [
+      "binaries/downloader"
+    ]
   }
 }

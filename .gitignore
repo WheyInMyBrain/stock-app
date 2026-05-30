@@ -124,6 +124,13 @@ yarn-error.log*
 .env.local
 .env.*.local
 
+# Ignore all compiled Go/Python executable assets dropped into Tauri's bundle folders
+**/ui/backend/binaries/*
+!**/ui/backend/binaries/.gitkeep
+
+# Ignore raw data buckets and processed parquet repositories locally
+**/data/
+
 # ============================================================================
 # MACHINE LEARNING BINARY ENGINE WEIGHTS
 # ============================================================================
