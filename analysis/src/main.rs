@@ -21,8 +21,9 @@ fn main() -> PolarsResult<()> {
         println!("\n👉 Usage: cargo run --release <TICKER> [key=value] [key=value]...");
         println!("💡 Available Keys:");
         println!("   ├── wacc=<number>         (Default: 0.12)");
-        println!("   └── term_g=<number>       (Default: 0.04)");
-        println!("\n👉 Example: cargo run --release IMFA wacc=0.13 term_g=0.03");
+        println!("   ├── term_g=<number>       (Default: 0.04)");
+        println!("   └── data-dir=<path>       (Default: ../data)");
+        println!("\n👉 Example: cargo run --release IMFA wacc=0.13 data-dir=/absolute/path/to/data");
         return Ok(());
     }
 
@@ -32,29 +33,44 @@ fn main() -> PolarsResult<()> {
     // Core fallback defaults
     let mut wacc: f64 = 0.12;
     let mut terminal_g: f64 = 0.04;
+    let mut data_dir: String = "../data".to_string(); // 🎯 FIXED: Centralized tracking path fallback
 
     // Iterate through key-value overrides passed anywhere after the ticker parameter
     for arg in args.iter().skip(2) {
         if let Some((key, val_str)) = arg.split_once('=') {
             let key_cleaned = key.trim().to_lowercase();
-            if let Ok(parsed_val) = val_str.trim().parse::<f64>() {
-                match key_cleaned.as_str() {
-                    "wacc" => wacc = parsed_val,
-                    "term_g" | "terminal_g" => terminal_g = parsed_val,
-                    unknown => {
-                        println!("⚠️ WARNING: Ignored unrecognized parameter key: '{}'", unknown);
+            match key_cleaned.as_str() {
+                "wacc" => {
+                    if let Ok(parsed_val) = val_str.trim().parse::<f64>() {
+                        wacc = parsed_val;
                     }
                 }
-            } else {
-                println!("⚠️ WARNING: Value for '{}' could not be parsed as a float. Ignoring.", key);
+                "term_g" | "terminal_g" => {
+                    if let Ok(parsed_val) = val_str.trim().parse::<f64>() {
+                        terminal_g = parsed_val;
+                    }
+                }
+                "data_dir" | "data-dir" | "--data-dir" => {
+                    // 🎯 FIXED: Extract explicit data repository target string context safely
+                    data_dir = val_str.trim().to_string();
+                }
+                unknown => {
+                    println!("⚠️ WARNING: Ignored unrecognized parameter key: '{}'", unknown);
+                }
             }
         } else {
             println!("⚠️ WARNING: Argument '{}' does not match key=value format. Ignoring.", arg);
         }
     }
 
+    println!("=================================================================================");
+    println!("📈 RUNNING ANALYSIS WORKSPACE CORE MATRIX FOR TICKER: {}", ticker);
+    println!("📍 Target Unified Data Storage Path Coordinate: {}", data_dir);
+    println!("=================================================================================");
+
     // 🎯 Execute your clean consolidated data broker picker pipeline matrix
-    runner::run_global_analysis_pipeline(ticker, wacc, terminal_g);
+    // NOTE: You will update runner::run_global_analysis_pipeline's signature next to pass down data_dir!
+    runner::run_global_analysis_pipeline(ticker, wacc, terminal_g, &data_dir);
 
     Ok(())
 }

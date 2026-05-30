@@ -7,44 +7,20 @@ use crate::data_loader::UnifiedCompanyMatrix;
 /// Ingests pre-loaded financial statement matrices and reads the market pricing array to extract all valuation multiples
 pub fn execute_multiples_analytical_pipeline(
     matrix: &UnifiedCompanyMatrix, // 🎯 PICKER INTERCEPT: Reads directly from shared RAM cache context
-    ticker: &str,
-    exchange_name: &str, // Match naming strings for your dynamic file log mapping
+    _ticker: &str,                 // Kept as un-used underscore placeholder to protect legacy code calls
+    _exchange_name: &str,          // Kept as un-used underscore placeholder to protect legacy code calls
 ) -> Result<Vec<CorporateMultiplesReport>, &'static str> {
     
-    // Resolve paths dynamically based on exchange context for chart parsing alone
-    let chart_path = format!("../data/{}/{}_historical-chart-data/10Y.json", ticker, exchange_name);
-
-    if !std::path::Path::new(&chart_path).exists() {
-        return Err("Target 10Y.json trace missing. Aborting analytics track cleanly.");
-    }
-
     // ==============================================================================
-    // 📊 STEP 1: PARSE AND MAP THE HISTORICAL CHART PRICE POINTS (JSON EXTRACTOR)
+    // 📊 STEP 1: EMBEDDED HIGH-SPEED MEMORY PRICE CHANNEL ALIGNER
     // ==============================================================================
-    let file = File::open(&chart_path).map_err(|_| "Failed to open chart json stream.")?;
-    let chart_json: Value = serde_json::from_reader(file).map_err(|_| "Malformed chart json data array context.")?;
-    
-    let mut price_timeline: HashMap<String, f64> = HashMap::new();
-    
-    if let Some(graph_data) = chart_json.get("grapthData").and_then(|v| v.as_array()) {
-        for entry in graph_data {
-            if let (Some(ms_val), Some(price_val)) = (entry.get(0).and_then(|v| v.as_i64()), entry.get(1).and_then(|v| v.as_f64())) {
-                let seconds = ms_val / 1000;
-                let day_raw = seconds / 86400;
-                
-                let r_year = 1970 + (day_raw / 365); 
-                let r_month = ((day_raw % 365) / 30) + 1;
-                let r_day = (day_raw % 30) + 1;
-                let clean_date_key = format!("{:04}-{:02}-{:02}", r_year, r_month, r_day);
-                
-                price_timeline.insert(clean_date_key, price_val);
-            }
-        }
-    }
-
     let find_aligned_price = |target_date: &str| -> f64 {
-        if let Some(&price) = price_timeline.get(target_date) { return price; }
+        // Direct fast-path cache hit
+        if let Some(&price) = matrix.price_timeline.get(target_date) { 
+            return price; 
+        }
         
+        // Holiday / weekend offset fallback sweeper running against our memory matrix
         if target_date.len() == 10 {
             let base_day_str = &target_date[8..10];
             if let Ok(base_day) = base_day_str.parse::<i32>() {
@@ -52,15 +28,18 @@ pub fn execute_multiples_analytical_pipeline(
                     let adjusted_day = base_day + offset;
                     if adjusted_day > 0 && adjusted_day <= 31 {
                         let check_str = format!("{}{:02}", &target_date[0..8], adjusted_day);
-                        if let Some(&price) = price_timeline.get(&check_str) { return price; }
+                        if let Some(&price) = matrix.price_timeline.get(&check_str) { 
+                            return price; 
+                        }
                     }
                 }
             }
         }
         
-        if !price_timeline.is_empty() {
-            let sum: f64 = price_timeline.values().sum();
-            return sum / price_timeline.len() as f64;
+        // Global mean backup safety valve mapping
+        if !matrix.price_timeline.is_empty() {
+            let sum: f64 = matrix.price_timeline.values().sum();
+            return sum / matrix.price_timeline.len() as f64;
         }
         0.0
     };
@@ -83,7 +62,6 @@ pub fn execute_multiples_analytical_pipeline(
     // ==============================================================================
     // 📊 STEP 3: EXECUTE HIGH-SPEED RATIO MULTIPLIERS GENERATION
     // ==============================================================================
-
     for (idx, file_key) in matrix.sorted_file_keys.iter().enumerate() {
         if let Some(metrics) = matrix.document_matrix.get(file_key) {
             let parsed_snapshot_date = matrix.file_to_date_map.get(file_key).cloned().unwrap_or("2024-03-31".to_string());

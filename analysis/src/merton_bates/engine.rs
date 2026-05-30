@@ -17,78 +17,17 @@ struct ChartDataWrapper {
 
 /// Ingests your 10Y timeline chart and computes rolling real-world prices and volatilities
 fn extract_price_and_vol_vectors(
-    ticker: &str,
-    exchange: Exchange,
+    matrix: &crate::data_loader::UnifiedCompanyMatrix, // 🎯 PICKER INTERCEPT: Zero I/O, zero file parsing!
 ) -> (Vec<String>, HashMap<String, f64>, HashMap<String, f64>) {
-    let mut dates = Vec::new();
-    let mut prices = HashMap::new();
-    let mut volatilities = HashMap::new();
+    
+    // Natively clone the pre-computed chronological maps straight from memory cache
+    let dates = matrix.chronological_dates.clone();
+    let prices = matrix.price_timeline.clone();
+    let volatilities = matrix.volatility_timeline.clone();
 
-    let path_str = match exchange {
-        Exchange::Bse => format!("../data/{}/bse_historical-chart-data/10Y.json", ticker),
-        Exchange::Nse => format!("../data/{}/nse_historical-chart-data/10Y.json", ticker),
-    };
-
-    let file_path = Path::new(&path_str);
-    if !file_path.exists() {
-        println!("⚠️  [MERTON_BATES]: Target 10Y.json trace missing at {:?}. Aborting track safely.", file_path);
-        return (dates, prices, volatilities);
-    }
-
-    let file = match File::open(file_path) {
-        Ok(f) => f,
-        Err(_) => return (dates, prices, volatilities),
-    };
-    let reader = BufReader::new(file);
-
-    let parsed_chart: ChartDataWrapper = match serde_json::from_reader(reader) {
-        Ok(data) => data,
-        Err(_) => return (dates, prices, volatilities),
-    };
-
-    let mut sequential_records: Vec<(String, f64)> = Vec::new();
-
-    for tuple in parsed_chart.graph_data {
-        if tuple.len() < 2 { continue; }
-        
-        let ms_timestamp = tuple[0].as_i64().unwrap_or(0);
-        let raw_price = tuple[1].as_f64().unwrap_or(0.0);
-
-        if ms_timestamp == 0 || raw_price <= 0.0 { continue; }
-
-        let datetime = Utc.timestamp_millis_opt(ms_timestamp).unwrap();
-        let formatted_date = datetime.format("%Y-%m-%d").to_string();
-        
-        sequential_records.push((formatted_date, raw_price));
-    }
-
-    if sequential_records.len() < 22 {
-        return (dates, prices, volatilities);
-    }
-
-    for i in 21..sequential_records.len() {
-        let (ref target_date, target_price) = sequential_records[i];
-        
-        let mut log_returns = Vec::with_capacity(21);
-        for j in (i - 20)..=i {
-            let p_curr = sequential_records[j].1;
-            let p_prev = sequential_records[j - 1].1;
-            if p_prev > 0.0 && p_curr > 0.0 {
-                log_returns.push((p_curr / p_prev).ln());
-            }
-        }
-
-        if log_returns.is_empty() { continue; }
-
-        let mean = log_returns.iter().sum::<f64>() / log_returns.len() as f64;
-        let variance = log_returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (log_returns.len() - 1) as f64;
-        
-        let annualized_volatility = variance.sqrt() * (252.0_f64).sqrt();
-        let safe_vol = if annualized_volatility.is_nan() || annualized_volatility <= 0.0 { 0.20 } else { annualized_volatility };
-
-        dates.push(target_date.clone());
-        prices.insert(target_date.clone(), target_price);
-        volatilities.insert(target_date.clone(), safe_vol);
+    // Boundary check for analytical data density matching your legacy constraints
+    if dates.is_empty() {
+        println!("⚠️  [MERTON_BATES]: Unified company data matrix context contains an empty 10Y pricing trace.");
     }
 
     (dates, prices, volatilities)

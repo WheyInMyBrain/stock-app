@@ -25,63 +25,20 @@ fn standard_normal_pdf(x: f64) -> f64 {
 }
 
 /// Ingests historical charts and extracts ordered records to allow for chronological bisection searching
+/// Extracts historical charts and structural volatility vectors directly from the pre-loaded warehouse matrix cache
 fn fetch_market_vol_structures(
-    ticker: &str,
-    exchange_lowercase: &str,
+    matrix: &crate::data_loader::UnifiedCompanyMatrix, // 🎯 PICKER INTERCEPT: Zero I/O overhead
 ) -> Vec<(String, f64, f64)> {
-    let mut comprehensive_timeline = Vec::new();
+    let mut comprehensive_timeline = Vec::with_capacity(matrix.chronological_dates.len());
 
-    let path_str = format!("../data/{}/{}_historical-chart-data/10Y.json", ticker, exchange_lowercase);
-    let file_path = Path::new(&path_str);
-    if !file_path.exists() {
-        return comprehensive_timeline;
-    }
+    // Reconstruct the ordered trajectory tuples natively using the zero-copy centralized hash records
+    for target_date in &matrix.chronological_dates {
+        let target_price = *matrix.price_timeline.get(target_date).unwrap_or(&0.0);
+        let target_vol = *matrix.volatility_timeline.get(target_date).unwrap_or(&0.35); // Native default fallback
 
-    let file = match File::open(file_path) {
-        Ok(f) => f,
-        Err(_) => return comprehensive_timeline,
-    };
-    let reader = BufReader::new(file);
-    let parsed_chart: ChartDataWrapper = match serde_json::from_reader(reader) {
-        Ok(data) => data,
-        Err(_) => return comprehensive_timeline,
-    };
-
-    let mut sequential_records = Vec::new();
-    for tuple in parsed_chart.graph_data {
-        if tuple.len() < 2 { continue; }
-        let ms_timestamp = tuple[0].as_i64().unwrap_or(0);
-        let raw_price = tuple[1].as_f64().unwrap_or(0.0);
-        if ms_timestamp == 0 || raw_price <= 0.0 { continue; }
-
-        let datetime = Utc.timestamp_millis_opt(ms_timestamp).unwrap();
-        let formatted_date = datetime.format("%Y-%m-%d").to_string();
-        sequential_records.push((formatted_date, raw_price));
-    }
-
-    if sequential_records.len() < 22 {
-        return comprehensive_timeline;
-    }
-
-    for i in 21..sequential_records.len() {
-        let (ref target_date, target_price) = sequential_records[i];
-        let mut log_returns = Vec::new();
-        for j in (i - 20)..=i {
-            let p_curr = sequential_records[j].1;
-            let p_prev = sequential_records[j - 1].1;
-            if p_prev > 0.0 && p_curr > 0.0 {
-                log_returns.push((p_curr / p_prev).ln());
-            }
+        if target_price > 0.0 {
+            comprehensive_timeline.push((target_date.clone(), target_price, target_vol));
         }
-        if log_returns.is_empty() { continue; }
-
-        let mean = log_returns.iter().sum::<f64>() / log_returns.len() as f64;
-        let variance = log_returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (log_returns.len() - 1) as f64;
-        let annualized_volatility = variance.sqrt() * (252.0_f64).sqrt();
-        
-        let safe_vol = if annualized_volatility.is_nan() || annualized_volatility <= 0.0 { 0.35 } else { annualized_volatility };
-
-        comprehensive_timeline.push((target_date.clone(), target_price, safe_vol));
     }
 
     comprehensive_timeline
