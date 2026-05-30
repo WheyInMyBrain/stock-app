@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -19,7 +20,7 @@ const (
 )
 
 func RunPersistentDaemonMode(workerCount int, globalDataDir string) {
-	// Force standard output to be completely unbuffered to prevent pipe stalls inside Tauri
+	// Force standard output to be completely unbuffered to prevent pipe stalls inside Tauri logs
 	os.Stdout = os.NewFile(uintptr(1), "/dev/stdout") 
 
 	fmt.Printf("%s🔥 [GO ENGINE]: Launching persistent background network layer...%s\n", ColorCyan, ColorReset)
@@ -34,73 +35,93 @@ func RunPersistentDaemonMode(workerCount int, globalDataDir string) {
 		fmt.Fprintf(os.Stderr, "❌ Critical: Master BSE Handshake failed on app load: %v\n", bseErr)
 	}
 
-	fmt.Printf("%s🏁 [GO ENGINE SUCCESS]: Network state is fully hot. Awaiting signals...%s\n", ColorCyan, ColorReset)
+	// 🎯 STEP 1: INITIALIZE THE LOCAL IPC SOCKET SERVER
+	ipcServer, err := NewIPCServer(globalDataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ CRITICAL IPC SEED FAULT: %v\n", err)
+		os.Stdout.Sync()
+		os.Exit(1)
+	}
+	defer ipcServer.Close()
+
+	fmt.Printf("%s🏁 [GO ENGINE SUCCESS]: IPC Socket Server listening at: %s%s\n", ColorCyan, ipcServer.socketPath, ColorReset)
 	os.Stdout.Sync()
 
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
+	// 🎯 STEP 2: MULTI-CONNECTION SOCKET ACCEPT LOOP
+	for {
+		conn, err := ipcServer.listener.Accept()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "🚨 [IPC CONNECTION ERROR]: Failed accepting socket handshake: %v\n", err)
 			continue
 		}
 
-		if strings.HasPrefix(line, "RUN ") {
-			parts := strings.Fields(line)
-			if len(parts) < 4 {
-				continue
-			}
+		// Handle each incoming connection context concurrently so your data remains non-blocking
+		go func(c net.Conn) {
+			defer c.Close()
 
-			ticker := parts[1]
-			mode := strings.ToLower(parts[2])
-			targetApi := parts[3]
-
-			// 🎯 CHECK FOR THE OPTIONAL STREAM ARGUMENT
-			isStreamMode := false
-			if len(parts) >= 5 && parts[4] == "--stream" {
-				isStreamMode = true
-			}
-
-			startTime := time.Now() 
-			fmt.Printf("\n%s=== 🚀 Starting Multi-Exchange Extraction Engine for: %s ===%s\n", ColorBlue, ticker, ColorReset)
-			os.Stdout.Sync()
-
-			var rawJSONPayload string
-			var err error
-
-			// 🎯 EXECUTE THE REAL NETWORK PIPELINES CAPTURING RAW STRINGS
-			if (mode == "nse" || mode == "both") && nseClient != nil {
-				rawJSONPayload, err = scrape_nse.ExecuteWithWarmClient(nseClient, ticker, workerCount, targetApi, globalDataDir)
-			}
-			
-			// If running mode is BSE or both, and the NSE pass didn't hit a fatal error, pool the BSE pipeline
-			if err == nil && (mode == "bse" || mode == "both") && bseClient != nil {
-				bsePayload, bseErr := scrape_bse.ExecuteWithWarmClient(bseClient, ticker, workerCount, targetApi, globalDataDir)
-				if bseErr != nil {
-					err = bseErr
-				} else if bsePayload != "" {
-					rawJSONPayload = bsePayload
+			// Read the single-line execution instruction string sent by Rust over the connection
+			scanner := bufio.NewScanner(c)
+			if scanner.Scan() {
+				line := scanner.Text()
+				if !strings.HasPrefix(line, "RUN ") {
+					return
 				}
-			}
 
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "🚨 [FETCH FAULT]: Pipeline error during lookup: %v\n", err)
+				parts := strings.Fields(line)
+				if len(parts) < 4 {
+					return
+				}
+
+				ticker := parts[1]
+				mode := strings.ToLower(parts[2])
+				targetApi := parts[3]
+
+				isStreamMode := false
+				if len(parts) >= 5 && parts[4] == "--stream" {
+					isStreamMode = true
+				}
+
+				startTime := time.Now() 
+				fmt.Printf("\n%s=== 🚀 IPC Connection Accepted: Fetching metrics for: %s ===%s\n", ColorBlue, ticker, ColorReset)
 				os.Stdout.Sync()
-				continue
+
+				var rawJSONPayload string
+				var pipelineErr error
+
+				// Fetch true live string data arrays from your scraping engine sub-modules
+				if (mode == "nse" || mode == "both") && nseClient != nil {
+					rawJSONPayload, pipelineErr = scrape_nse.ExecuteWithWarmClient(nseClient, ticker, workerCount, targetApi, globalDataDir)
+				}
+				
+				if pipelineErr == nil && (mode == "bse" || mode == "both") && bseClient != nil {
+					bsePayload, bseErr := scrape_bse.ExecuteWithWarmClient(bseClient, ticker, workerCount, targetApi, globalDataDir)
+					if bseErr != nil {
+						pipelineErr = bseErr
+					} else if bsePayload != "" {
+						rawJSONPayload = bsePayload
+					}
+				}
+
+				if pipelineErr != nil {
+					fmt.Fprintf(os.Stderr, "🚨 [IPC FETCH FAULT]: Pipeline error during lookup: %v\n", pipelineErr)
+					return
+				}
+
+				// 🎯 STEP 3: BLAST TRUE RAW DATA OVER SECURE LOCAL IPC BACKEND LINK
+				if isStreamMode && rawJSONPayload != "" {
+					fmt.Printf("%s⚡ [IPC BINARY PIPE ACTIVE]: Transmitting framed byte matrix stream directly over socket...%s\n", ColorCyan, ColorReset)
+					os.Stdout.Sync()
+
+					// Ship framed binary data packages out of stdout entirely and safely over our local socket link
+					if writeErr := WriteFramedPayload(c, rawJSONPayload); writeErr != nil {
+						fmt.Fprintf(os.Stderr, "🚨 [IPC WRITE CRITICAL FAULT]: Failed writing bytes down frame channel: %v\n", writeErr)
+					}
+				}
+
+				fmt.Printf("%s=== 🎉 [%s] Pipelines Completed in %v over IPC Socket ===%s\n\n", ColorBlue, ticker, time.Since(startTime), ColorReset)
+				fmt.Printf("SIGNAL_COMPLETED:%s:%s\n", ticker, targetApi)
+				os.Stdout.Sync() 
 			}
-
-			// 🎯 IF STREAM MODE IS ACTIVE, FLASH THE TRUE INTERCEPTED JSON DATA THROUGH STDOUT
-			if isStreamMode && rawJSONPayload != "" {
-				fmt.Printf("%s⚡ [RAM PASS THROUGH ACTIVE]: Routing payload via memory stream for fast UI render...%s\n", ColorCyan, ColorReset)
-				os.Stdout.Sync()
-
-				// Stream raw server data down the warm stdout pipe into Rust's memory accumulator
-				fmt.Printf("PAYLOAD_START:%s:%s\n%s\nPAYLOAD_END\n", ticker, targetApi, rawJSONPayload)
-				os.Stdout.Sync()
-			}
-
-			fmt.Printf("%s=== 🎉 [%s] Pipelines Completed in %v ===%s\n\n", ColorBlue, ticker, time.Since(startTime), ColorReset)
-			fmt.Printf("SIGNAL_COMPLETED:%s:%s\n", ticker, targetApi)
-			os.Stdout.Sync() 
-		}
+		}(conn)
 	}
 }
