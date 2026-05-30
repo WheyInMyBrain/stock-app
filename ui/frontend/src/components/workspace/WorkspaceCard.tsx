@@ -8,7 +8,7 @@ import { usePipelineListener } from "./usePipelineListener";
 interface WorkspaceCardProps {
   id: string; 
   title: string;
-  ticker: string; // 🎯 ADD THIS: Pull the active ticker prop into your card context
+  ticker: string; 
   height: number;
   width?: number;
   rootNode: UiPrimitiveNode; 
@@ -54,6 +54,7 @@ export default function WorkspaceCard({
 
   const currentWidth = width ? `${width}px` : "100%";
 
+  // Resolves styling strings for card layout manipulation modes
   const cursorClass = !isEditing ? "" : 
     isResizingZone === "nwse" ? "cursor-nwse-resize" :
     isResizingZone === "ns" ? "cursor-ns-resize" :
@@ -64,7 +65,8 @@ export default function WorkspaceCard({
       onMouseDown={(e) => isEditing && onMouseDown(e, id)}
       onMouseMove={isEditing ? onMouseMove : undefined}
       onMouseLeave={isEditing ? onMouseLeave : undefined}
-      className={`relative rounded-xl p-5 flex flex-col overflow-hidden transition-all duration-200 ease-out select-none border ${
+      // 🎯 FIXED: Injected ${cursorClass} right here so mouse shapes alter dynamically on grid adjustments!
+      className={`relative rounded-xl p-5 flex flex-col overflow-hidden transition-all duration-200 ease-out select-none border ${cursorClass} ${
         isEditing 
           ? "border-neutral-500/30 bg-neutral-500/[0.02]" 
           : colors?.border || "border-neutral-200 dark:border-neutral-800"
