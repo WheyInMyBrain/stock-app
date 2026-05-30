@@ -1,18 +1,10 @@
-use std::fs::File;
-use std::io::Read;
-use std::path::PathBuf;
+// stock-app/ui/backend/src/pipeline/stock_stats.rs
+
 use serde_json::{json, Value};
 use crate::commands::pipeline::CatalogItem;
-use crate::pipeline::WorkspaceModule;
+use crate::pipeline::{WorkspaceModule, WorkspaceDataContext};
 
 pub struct StockStatsCard;
-
-fn get_shared_data_directory() -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop(); path.pop(); // Back out to stock-app/
-    path.push("data");
-    path
-}
 
 impl WorkspaceModule for StockStatsCard {
     fn catalog_definition(&self) -> CatalogItem {
@@ -23,12 +15,8 @@ impl WorkspaceModule for StockStatsCard {
         }
     }
 
-    fn compile(&self, ticker: &str, _timeframe: &str) -> Result<Value, String> {
+    fn compile(&self, ticker: &str, _timeframe: &str, data: &WorkspaceDataContext) -> Result<Value, String> {
         let ticker_upper = ticker.to_uppercase();
-        let mut path = get_shared_data_directory();
-        path.push("IMFA");
-        path.push("nse_symbol-core-data");
-        path.push("endpoint-metadata.json");
 
         // Price Session Boundaries
         let mut open_p = "N/A".to_string();
@@ -65,71 +53,66 @@ impl WorkspaceModule for StockStatsCard {
 
         let mut last_update_time = "N/A".to_string();
 
-        if path.exists() {
-            if let Ok(mut file) = File::open(&path) {
-                let mut content = String::new();
-                if file.read_to_string(&mut content).is_ok() {
-                    if let Ok(nse_json) = serde_json::from_str::<Value>(&content) {
-                        if let Some(eq_resp) = nse_json["equityResponse"].as_array().and_then(|a| a.first()) {
-                            
-                            if let Some(meta) = eq_resp["metaData"].as_object() {
-                                if let Some(v) = meta.get("open").and_then(|x| x.as_f64()) { open_p = format!("₹{:.2}", v); }
-                                if let Some(v) = meta.get("dayHigh").and_then(|x| x.as_f64()) { high_p = format!("₹{:.2}", v); }
-                                if let Some(v) = meta.get("dayLow").and_then(|x| x.as_f64()) { low_p = format!("₹{:.2}", v); }
-                                if let Some(v) = meta.get("closePrice").and_then(|x| x.as_f64()) { close_p = format!("₹{:.2}", v); }
-                                if let Some(v) = meta.get("previousClose").and_then(|x| x.as_f64()) { prev_close = format!("₹{:.2}", v); }
-                                if let Some(v) = meta.get("averagePrice").and_then(|x| x.as_f64()) { avg_p = format!("₹{:.2}", v); }
-                                if let Some(v) = meta.get("change").and_then(|x| x.as_f64()) { net_chg = format!("₹{:.2}", v); }
-                                if let Some(v) = meta.get("pChange").and_then(|x| x.as_f64()) { pct_chg = format!("{:.2}%", v); }
-                            }
+        // 🎯 ZERO DISK LOOKUPS: Point directly to the central JSON value held inside your memory object block context!
+        let nse_json = &data.endpoint_metadata;
 
-                            if let Some(trade) = eq_resp["tradeInfo"].as_object() {
-                                if let Some(v) = trade.get("lastPrice").and_then(|x| x.as_f64()) { last_p = format!("₹{:.2}", v); }
-                                if let Some(v) = trade.get("totalTradedVolume").and_then(|x| x.as_f64()) {
-                                    trade_vol = if v >= 100_000.0 { format!("{:.2}L", v / 100_000.0) } else { format!("{:.0}", v) };
-                                }
-                                if let Some(v) = trade.get("totalTradedValue").and_then(|x| x.as_f64()) {
-                                    trade_val = format!("₹{:.2}Cr", v / 10_000_000.0);
-                                }
-                                if let Some(v) = trade.get("deliveryquantity").and_then(|x| x.as_f64()) {
-                                    delivery_qty = if v >= 100_000.0 { format!("{:.2}L", v / 100_000.0) } else { format!("{:.0}", v) };
-                                }
-                                if let Some(v) = trade.get("deliveryToTradedQuantity").and_then(|x| x.as_f64()) { delivery_pct = format!("{:.2}%", v); }
-                                if let Some(v) = trade.get("totalMarketCap").and_then(|x| x.as_f64()) { market_cap = format!("₹{:.2}B", v / 1_000_000_000.0); }
-                                if let Some(v) = trade.get("ffmc").and_then(|x| x.as_f64()) { free_float = format!("₹{:.2}B", v / 1_000_000_000.0); }
-                                if let Some(v) = trade.get("impactCost").and_then(|x| x.as_f64()) { impact_cost = format!("{:.2}", v); }
-                            }
+        if let Some(eq_resp) = nse_json["equityResponse"].as_array().and_then(|a| a.first()) {
+            
+            if let Some(meta) = eq_resp["metaData"].as_object() {
+                if let Some(v) = meta.get("open").and_then(|x| x.as_f64()) { open_p = format!("₹{:.2}", v); }
+                if let Some(v) = meta.get("dayHigh").and_then(|x| x.as_f64()) { high_p = format!("₹{:.2}", v); }
+                if let Some(v) = meta.get("dayLow").and_then(|x| x.as_f64()) { low_p = format!("₹{:.2}", v); }
+                if let Some(v) = meta.get("closePrice").and_then(|x| x.as_f64()) { close_p = format!("₹{:.2}", v); }
+                if let Some(v) = meta.get("previousClose").and_then(|x| x.as_f64()) { prev_close = format!("₹{:.2}", v); }
+                if let Some(v) = meta.get("averagePrice").and_then(|x| x.as_f64()) { avg_p = format!("₹{:.2}", v); }
+                if let Some(v) = meta.get("change").and_then(|x| x.as_f64()) { net_chg = format!("₹{:.2}", v); }
+                if let Some(v) = meta.get("pChange").and_then(|x| x.as_f64()) { pct_chg = format!("{:.2}%", v); }
+            }
 
-                            if let Some(p_info) = eq_resp["priceInfo"].as_object() {
-                                if let Some(v) = p_info.get("yearHigh").and_then(|x| x.as_f64()) { yr_high = format!("₹{:.2}", v); }
-                                if let Some(v) = p_info.get("yearLow").and_then(|x| x.as_f64()) { yr_low = format!("₹{:.2}", v); }
-                                if let Some(v) = p_info.get("cmDailyVolatility").and_then(|x| x.as_str()) { day_volatility = format!("{}%", v); }
-                                if let Some(v) = p_info.get("cmAnnualVolatility").and_then(|x| x.as_str()) { ann_volatility = format!("{}%", v); }
-                            }
-
-                            if let Some(sec) = eq_resp["secInfo"].as_object() {
-                                if let Some(v) = sec.get("pdSectorPe").and_then(|x| x.as_str()) { sector_pe = v.trim().to_string(); }
-                                if let Some(v) = sec.get("pdSymbolPe").and_then(|x| x.as_str()) { symbol_pe = v.trim().to_string(); }
-                                if let Some(v) = sec.get("applicableMargin").and_then(|x| x.as_f64()) { app_margin = format!("{}%", v); }
-                                if let Some(v) = sec.get("varMargin").and_then(|x| x.as_f64()) { var_margin = format!("{}%", v); }
-                                if let Some(v) = sec.get("extremelossMargin").and_then(|x| x.as_f64()) { extreme_loss = format!("{}%", v); }
-                            }
-
-                            if let Some(t) = eq_resp["lastUpdateTime"].as_str() {
-                                last_update_time = t.to_string();
-                            }
-                        }
-                    }
+            if let Some(trade) = eq_resp["tradeInfo"].as_object() {
+                if let Some(v) = trade.get("lastPrice").and_then(|x| x.as_f64()) { last_p = format!("₹{:.2}", v); }
+                if let Some(v) = trade.get("totalTradedVolume").and_then(|x| x.as_f64()) {
+                    trade_vol = if v >= 100_000.0 { format!("{:.2}L", v / 100_000.0) } else { format!("{:.0}", v) };
                 }
+                if let Some(v) = trade.get("totalTradedValue").and_then(|x| x.as_f64()) {
+                    trade_val = format!("₹{:.2}Cr", v / 10_000_000.0);
+                }
+                if let Some(v) = trade.get("deliveryquantity").and_then(|x| x.as_f64()) {
+                    delivery_qty = if v >= 100_000.0 { format!("{:.2}L", v / 100_000.0) } else { format!("{:.0}", v) };
+                }
+                if let Some(v) = trade.get("deliveryToTradedQuantity").and_then(|x| x.as_f64()) { delivery_pct = format!("{:.2}%", v); }
+                if let Some(v) = trade.get("totalMarketCap").and_then(|x| x.as_f64()) { market_cap = format!("₹{:.2}B", v / 1_000_000_000.0); }
+                if let Some(v) = trade.get("ffmc").and_then(|x| x.as_f64()) { free_float = format!("₹{:.2}B", v / 1_000_000_000.0); }
+                if let Some(v) = trade.get("impactCost").and_then(|x| x.as_f64()) { impact_cost = format!("{:.2}", v); }
+            }
+
+            if let Some(p_info) = eq_resp["priceInfo"].as_object() {
+                if let Some(v) = p_info.get("yearHigh").and_then(|x| x.as_f64()) { yr_high = format!("₹{:.2}", v); }
+                if let Some(v) = p_info.get("yearLow").and_then(|x| x.as_f64()) { yr_low = format!("₹{:.2}", v); }
+                if let Some(v) = p_info.get("cmDailyVolatility").and_then(|x| x.as_str()) { day_volatility = format!("{}%", v); }
+                if let Some(v) = p_info.get("cmAnnualVolatility").and_then(|x| x.as_str()) { ann_volatility = format!("{}%", v); }
+            }
+
+            if let Some(sec) = eq_resp["secInfo"].as_object() {
+                if let Some(v) = sec.get("pdSectorPe").and_then(|x| x.as_str()) { sector_pe = v.trim().to_string(); }
+                if let Some(v) = sec.get("pdSymbolPe").and_then(|x| x.as_str()) { symbol_pe = v.trim().to_string(); }
+                if let Some(v) = sec.get("applicableMargin").and_then(|x| x.as_f64()) { app_margin = format!("{}%", v); }
+                if let Some(v) = sec.get("varMargin").and_then(|x| x.as_f64()) { var_margin = format!("{}%", v); }
+                if let Some(v) = sec.get("extremelossMargin").and_then(|x| x.as_f64()) { extreme_loss = format!("{}%", v); }
+            }
+
+            if let Some(t) = eq_resp["lastUpdateTime"].as_str() {
+                last_update_time = t.to_string();
             }
         }
 
+        // Return the full dashboard rendering card primitives tree layout payload array
         Ok(json!({
             "type": "card",
             "subtitle": format!("// EXCHANGE STREAM SESSION PROFILE: {}", ticker_upper),
             "footer": format!("NSE Feed Sync: {}", last_update_time),
             "children": [
-                // CONTAINER 1: Live Price Execution Boundary (The key immediate action numbers)
+                // CONTAINER 1: Live Price Execution Boundary 
                 {
                     "type": "container",
                     "className": "w-full mb-4",
@@ -140,7 +123,7 @@ impl WorkspaceModule for StockStatsCard {
                         { "type": "metric", "title": "VWAP (Average Price)", "value": avg_p }
                     ]
                 },
-                // CONTAINER 2: Session Trading Limits & Core Volume (How it's moving today)
+                // CONTAINER 2: Session Trading Limits & Core Volume 
                 {
                     "type": "container",
                     "className": "w-full mb-4",
@@ -153,7 +136,7 @@ impl WorkspaceModule for StockStatsCard {
                         { "type": "metric", "title": "Gross Traded Value", "value": trade_val }
                     ]
                 },
-                // CONTAINER 3: Liquidity Pools & Delivery Allocations (Ownership statistics)
+                // CONTAINER 3: Liquidity Pools & Delivery Allocations
                 {
                     "type": "container",
                     "className": "w-full mb-4",
@@ -162,10 +145,10 @@ impl WorkspaceModule for StockStatsCard {
                         { "type": "metric", "title": "Delivery Position Ratio", "value": delivery_pct },
                         { "type": "metric", "title": "Aggregate Market Cap", "value": market_cap },
                         { "type": "metric", "title": "Free Float Market Cap", "value": free_float },
-                        { "type": "metric", "title": "Current Session Close", "value": close_p } // 🎯 FIXED: Used close_p here natively
+                        { "type": "metric", "title": "Current Session Close", "value": close_p } 
                     ]
                 },
-                // CONTAINER 4: Multiplier Valuations & Exchange Risk Guardrails (Margins & Valuations together)
+                // CONTAINER 4: Multiplier Valuations & Exchange Risk Guardrails
                 {
                     "type": "container",
                     "className": "w-full",

@@ -1,18 +1,10 @@
-use std::fs::File;
-use std::io::Read;
-use std::path::PathBuf;
+// stock-app/ui/backend/src/pipeline/company_profile.rs
+
 use serde_json::{json, Value};
 use crate::commands::pipeline::CatalogItem;
-use crate::pipeline::WorkspaceModule;
+use crate::pipeline::{WorkspaceModule, WorkspaceDataContext};
 
 pub struct CompanyProfileCard;
-
-fn get_shared_data_directory() -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop(); path.pop(); // Back out of ui/backend/ to stock-app/
-    path.push("data");
-    path
-}
 
 impl WorkspaceModule for CompanyProfileCard {
     fn catalog_definition(&self) -> CatalogItem {
@@ -23,12 +15,8 @@ impl WorkspaceModule for CompanyProfileCard {
         }
     }
 
-    fn compile(&self, ticker: &str, _timeframe: &str) -> Result<Value, String> {
-        let mut path = get_shared_data_directory();
-        path.push("IMFA");
-        path.push("nse_symbol-core-data");
-        path.push("endpoint-metadata.json");
-
+    fn compile(&self, ticker: &str, _timeframe: &str, data: &WorkspaceDataContext) -> Result<Value, String> {
+        
         // Fallback placeholders
         let mut company_name = format!("{} Limited", ticker.to_uppercase());
         let mut listing_date = "N/A".to_string();
@@ -43,45 +31,41 @@ impl WorkspaceModule for CompanyProfileCard {
         let mut share_class = "Equity".to_string();
         let mut tracking_indexes = "N/A".to_string();
 
-        if path.exists() {
-            if let Ok(mut file) = File::open(&path) {
-                let mut content = String::new();
-                if file.read_to_string(&mut content).is_ok() {
-                    if let Ok(nse_json) = serde_json::from_str::<Value>(&content) {
-                        if let Some(eq_resp) = nse_json["equityResponse"].as_array().and_then(|a| a.first()) {
-                            
-                            // Extract metadata sub-tree
-                            if let Some(meta) = eq_resp["metaData"].as_object() {
-                                if let Some(name) = meta.get("companyName").and_then(|v| v.as_str()) { company_name = name.to_string(); }
-                                if let Some(isin) = meta.get("isinCode").and_then(|v| v.as_str()) { isin_code = isin.to_string(); }
-                            }
+        // 🎯 ZERO DIRECTORY MATH OR DISK I/O HERE: 
+        // We read straight from the pre-parsed payload variable memory.
+        let nse_json = &data.endpoint_metadata;
 
-                            // Extract extensive security classification tracking loops
-                            if let Some(sec) = eq_resp["secInfo"].as_object() {
-                                if let Some(ld) = sec.get("listingDate").and_then(|v| v.as_str()) { listing_date = ld.to_string(); }
-                                if let Some(mac) = sec.get("macro").and_then(|v| v.as_str()) { macro_grp = mac.to_string(); }
-                                if let Some(sec_val) = sec.get("sector").and_then(|v| v.as_str()) { sector = sec_val.to_string(); }
-                                if let Some(ind) = sec.get("industryInfo").and_then(|v| v.as_str()) { industry = ind.to_string(); }
-                                if let Some(bi) = sec.get("basicIndustry").and_then(|v| v.as_str()) { basic_industry = bi.to_string(); }
-                                if let Some(seg) = sec.get("tradingSegment").and_then(|v| v.as_str()) { segment = seg.to_string(); }
-                                if let Some(susp) = sec.get("isSuspended").and_then(|v| v.as_str()) { status = susp.to_string(); }
-                                if let Some(brd) = sec.get("boardStatus").and_then(|v| v.as_str()) { board = brd.to_string(); }
-                                if let Some(cls) = sec.get("classShare").and_then(|v| v.as_str()) { share_class = cls.to_string(); }
+        if let Some(eq_resp) = nse_json["equityResponse"].as_array().and_then(|a| a.first()) {
+            
+            // Extract metadata sub-tree
+            if let Some(meta) = eq_resp["metaData"].as_object() {
+                if let Some(name) = meta.get("companyName").and_then(|v| v.as_str()) { company_name = name.to_string(); }
+                if let Some(isin) = meta.get("isinCode").and_then(|v| v.as_str()) { isin_code = isin.to_string(); }
+            }
 
-                                // Map out all indices this asset tracks within
-                                if let Some(idx_list) = sec.get("indexList").and_then(|v| v.as_array()) {
-                                    let indices: Vec<String> = idx_list.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).collect();
-                                    if !indices.is_empty() {
-                                        tracking_indexes = indices.join(" | ");
-                                    }
-                                }
-                            }
-                        }
+            // Extract extensive security classification tracking loops
+            if let Some(sec) = eq_resp["secInfo"].as_object() {
+                if let Some(ld) = sec.get("listingDate").and_then(|v| v.as_str()) { listing_date = ld.to_string(); }
+                if let Some(mac) = sec.get("macro").and_then(|v| v.as_str()) { macro_grp = mac.to_string(); }
+                if let Some(sec_val) = sec.get("sector").and_then(|v| v.as_str()) { sector = sec_val.to_string(); }
+                if let Some(ind) = sec.get("industryInfo").and_then(|v| v.as_str()) { industry = ind.to_string(); }
+                if let Some(bi) = sec.get("basicIndustry").and_then(|v| v.as_str()) { basic_industry = bi.to_string(); }
+                if let Some(seg) = sec.get("tradingSegment").and_then(|v| v.as_str()) { segment = seg.to_string(); }
+                if let Some(susp) = sec.get("isSuspended").and_then(|v| v.as_str()) { status = susp.to_string(); }
+                if let Some(brd) = sec.get("boardStatus").and_then(|v| v.as_str()) { board = brd.to_string(); }
+                if let Some(cls) = sec.get("classShare").and_then(|v| v.as_str()) { share_class = cls.to_string(); }
+
+                // Map out all indices this asset tracks within
+                if let Some(idx_list) = sec.get("indexList").and_then(|v| v.as_array()) {
+                    let indices: Vec<String> = idx_list.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).collect();
+                    if !indices.is_empty() {
+                        tracking_indexes = indices.join(" | ");
                     }
                 }
             }
         }
 
+        // Output visual card template (This section remains entirely pristine)
         Ok(json!({
             "type": "card",
             "title": company_name,
@@ -121,8 +105,6 @@ impl WorkspaceModule for CompanyProfileCard {
                         },
                         {
                             "type": "container",
-                            // 🎯 FIXED: Stripped the bare "border" keyword to prevent Tailwind from forcing "currentColor" behavior.
-                            // We append a custom flag like "has-border" so your compiler applies the true layout border line style!
                             "className": "w-full flex flex-row flex-wrap gap-2 p-3 rounded-xl has-border",
                             "children": tracking_indexes
                                 .split('|')
@@ -131,7 +113,6 @@ impl WorkspaceModule for CompanyProfileCard {
                                 .map(|idx| {
                                     json!({
                                         "type": "text",
-                                        // 🎯 FIXED: Stripped the bare "border" keyword here as well to preserve crisp, normal frame line styles.
                                         "className": "text-xs font-mono px-2.5 py-1 has-border rounded-md tracking-tight shadow-sm whitespace-nowrap",
                                         "value": idx.to_string()
                                     })

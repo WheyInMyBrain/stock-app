@@ -7,6 +7,9 @@ pub mod pipeline;
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            // Data
+            commands::data_dir::set_custom_data_directory,
+            
             // History Commands
             commands::history::get_history_tickers,
             
@@ -14,7 +17,7 @@ fn main() {
             commands::layout::save_workspace_layout,
             commands::layout::load_workspace_layout,
             
-            // 🪐 Server-Driven Data Pipeline Engine
+            // Server-Driven Data Pipeline Engine
             commands::pipeline::fetch_component_telemetry,
             commands::pipeline::fetch_component_catalog
         ])

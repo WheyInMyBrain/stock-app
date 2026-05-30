@@ -1,5 +1,7 @@
 // stock-app/ui/backend/src/commands/pipeline.rs
 
+use tauri::AppHandle;
+use crate::pipeline::WorkspaceDataContext;
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use crate::pipeline::WorkspaceModule;
@@ -27,6 +29,7 @@ fn get_module_registry() -> Vec<Box<dyn WorkspaceModule>> {
 
 #[tauri::command]
 pub fn fetch_component_telemetry(
+    app_handle: AppHandle, 
     ticker: String, 
     module_id: String, 
     timeframe: Option<String>
@@ -36,7 +39,8 @@ pub fn fetch_component_telemetry(
     if let Some(module) = registry.iter().find(|m| m.catalog_definition().id == module_id) {
         let definition = module.catalog_definition();
         let active_tf = timeframe.unwrap_or_default();
-        let layout_tree = module.compile(&ticker, &active_tf)?;
+        let data_context = WorkspaceDataContext::load(&app_handle, &ticker);
+        let layout_tree = module.compile(&ticker, &active_tf, &data_context)?;
 
         return Ok(UiModulePayload {
             id: module_id,
