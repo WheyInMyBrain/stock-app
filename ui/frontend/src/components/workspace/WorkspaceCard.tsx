@@ -1,6 +1,5 @@
-// stock-app/ui/frontend/src/components/workspace/WorkspaceCard.tsx
-
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react"; // 🎯 ADD useCallback
+import { invoke } from "@tauri-apps/api/core"; // 🎯 IMPORT INVOKE NATIVELY
 import PrimitiveCompiler from "./PrimitiveCompiler";
 import type { UiPrimitiveNode } from "./PrimitiveCompiler";
 import { usePipelineListener } from "./usePipelineListener";
@@ -50,11 +49,28 @@ export default function WorkspaceCard({
     setCurrentNode(rootNode);
   }, [rootNode]);
 
-  usePipelineListener(id, ticker);
+  // 🎯 THE LIVE HOOK: Hits the backend telemetry engine and updates card primitives state instantly
+  const handleLiveTelemetryRefresh = useCallback(async () => {
+    try {
+      console.log(`♻️ [CARD REFRESH]: Re-fetching layout arrays for module [${id}] under context [${ticker}]`);
+      const freshTelemetry: any = await invoke("fetch_component_telemetry", {
+        ticker: ticker,
+        moduleId: id,
+        timeframe: ""
+      });
+
+      if (freshTelemetry && freshTelemetry.root_node) {
+        setCurrentNode(freshTelemetry.root_node);
+      }
+    } catch (err) {
+      console.error(`❌ [CARD REFRESH ERROR]: Refetch task execution crashed for [${id}]:`, err);
+    }
+  }, [id, ticker]);
+
+  // 🎯 BIND REFRESH ACTION DIRECTLY TO THE PIPELINE LISTENER HANDLER
+  usePipelineListener(id, ticker, handleLiveTelemetryRefresh);
 
   const currentWidth = width ? `${width}px` : "100%";
-
-  // Resolves styling strings for card layout manipulation modes
   const cursorClass = !isEditing ? "" : 
     isResizingZone === "nwse" ? "cursor-nwse-resize" :
     isResizingZone === "ns" ? "cursor-ns-resize" :
@@ -65,7 +81,6 @@ export default function WorkspaceCard({
       onMouseDown={(e) => isEditing && onMouseDown(e, id)}
       onMouseMove={isEditing ? onMouseMove : undefined}
       onMouseLeave={isEditing ? onMouseLeave : undefined}
-      // 🎯 FIXED: Injected ${cursorClass} right here so mouse shapes alter dynamically on grid adjustments!
       className={`relative rounded-xl p-5 flex flex-col overflow-hidden transition-all duration-200 ease-out select-none border ${cursorClass} ${
         isEditing 
           ? "border-neutral-500/30 bg-neutral-500/[0.02]" 

@@ -77,6 +77,7 @@ export default function Workspace({ selectedTicker, isEditing, resetSignal, colo
                     <WorkspaceCard
                       id={module.id}
                       title={module.title}
+                      ticker={selectedTicker}
                       height={heightPx}
                       width={undefined} 
                       rootNode={module.root_node}
@@ -131,6 +132,7 @@ export default function Workspace({ selectedTicker, isEditing, resetSignal, colo
           <WorkspaceCard
             id={draggedModule.id}
             title={draggedModule.title}
+            ticker={selectedTicker || ""}
             height={draggedModule.h * 20 - 12}
             width={undefined}
             rootNode={draggedModule.root_node}

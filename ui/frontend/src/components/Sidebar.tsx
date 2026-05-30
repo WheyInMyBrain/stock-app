@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core"; // 🎯 IMPORT TAURI INVOKE LINK NATIVELY
 
 interface SidebarProps {
   isOpen: boolean;
@@ -19,24 +20,27 @@ export default function Sidebar({ isOpen, setIsOpen, tickers, selected, onSelect
     ? "bg-[#1E1E1E] border-[#2E2E2E] text-white placeholder-[#737373]" 
     : "bg-[#E4E4E7] border-[#D4D4D8] text-black placeholder-[#71717A]"; 
 
-  const handleTickerClick = (ticker: string) => {
+  // 🎯 ONE CHOKEPOINT ENTRY CONTEXT: Fires the abstract engine only for the open asset
+  const handleTickerClick = async (ticker: string) => {
     if (selected === ticker) {
       onSelect(null);
+      // 🛑 DESELECTED: Tell backend to stop all background loops immediately
+      await invoke("set_active_workspace", { ticker: null });
     } else {
       onSelect(ticker);
+      // 🚀 ACTIVE VIEW CHOSEN: Tell backend to spin up the 30s NSE loops for this ticker only
+      await invoke("set_active_workspace", { ticker: ticker });
     }
   };
 
   return (
-    /* 🏛️ UNIFIED SINGLE SIDEBAR PANEL
-       Maintains your perfect structural 56px to 256px footprint */
+    /* 🏛️ UNIFIED SINGLE SIDEBAR PANEL */
     <div 
       className={`h-full border-r ${colors.bgSidebar} ${colors.border} flex relative transition-all duration-300 ease-in-out flex-shrink-0 select-none z-40`}
       style={{ width: isOpen ? "256px" : "56px" }}
     >
       
-      {/* 🏛️ FULL-WIDTH SLIDING CONTENT ENGINE
-          Now maps flawlessly edge-to-edge across the entire open panel width */}
+      {/* 🏛️ FULL-WIDTH SLIDING CONTENT ENGINE */}
       <div 
         className="h-full flex flex-col font-mono transition-all duration-300 ease-in-out overflow-hidden absolute left-0 top-0 z-30 w-full"
         style={{ 
@@ -46,7 +50,7 @@ export default function Sidebar({ isOpen, setIsOpen, tickers, selected, onSelect
         }}
       >
         <div className="w-full flex flex-col h-full">
-          {/* Header Area: Search bar stretches naturally underneath the traveling button */}
+          {/* Header Area */}
           <div className="pt-5 h-28 flex flex-col justify-between pb-4">
             <div className="flex items-center h-8">
               <div className="text-[10px] tracking-[0.2em] uppercase font-bold opacity-80 pl-1">
@@ -67,7 +71,7 @@ export default function Sidebar({ isOpen, setIsOpen, tickers, selected, onSelect
           {/* Clean Interior Separation Line */}
           <div className={`h-[1px] w-full border-b ${colors.border}`} />
 
-          {/* Scrollable File Directory Entries: Stretches beautifully to mirror your search layout */}
+          {/* Scrollable File Directory Entries */}
           <div className="flex-1 overflow-y-auto pt-2 pb-2 flex flex-col gap-0.5">
             {filtered.length === 0 ? (
               <div className={`text-[11px] text-center py-6 ${colors.textMuted}`}>Empty Index</div>
@@ -88,8 +92,7 @@ export default function Sidebar({ isOpen, setIsOpen, tickers, selected, onSelect
         </div>
       </div>
 
-      {/* 🎛️ TRAVELING TOGGLE BUTTON
-          Maintains your custom, perfectly tested alignment coordinates */}
+      {/* 🎛️ TRAVELING TOGGLE BUTTON */}
       <button
         onClick={() => setIsOpen(!isOpen)}
         onMouseEnter={() => setIsHovered(true)}
@@ -100,7 +103,6 @@ export default function Sidebar({ isOpen, setIsOpen, tickers, selected, onSelect
         }}
         aria-label="Toggle Sidebar"
       >
-        {/* Top Line */}
         <span 
           className="h-[1.5px] bg-current transition-all duration-300"
           style={{
@@ -110,7 +112,6 @@ export default function Sidebar({ isOpen, setIsOpen, tickers, selected, onSelect
               : "none"
           }}
         />
-        {/* Middle Line */}
         <span 
           className="h-[1.5px] bg-current transition-all duration-300"
           style={{
@@ -120,11 +121,10 @@ export default function Sidebar({ isOpen, setIsOpen, tickers, selected, onSelect
               : "none"
           }}
         />
-        {/* Bottom Line */}
         <span 
           className="h-[1.5px] bg-current transition-all duration-300"
           style={{
-            width: isHovered ? "12px" : "16px",
+            width: "16px",
             transform: isHovered 
               ? (isOpen ? "rotate(45deg) translate(-3px, -2px)" : "rotate(-45deg) translate(3px, -2px)") 
               : "none"

@@ -25,39 +25,49 @@ impl WorkspaceModule for CompanyProfileCard {
         let mut industry = "N/A".to_string();
         let mut basic_industry = "N/A".to_string();
         let mut isin_code = "N/A".to_string();
-        let mut segment = "Normal Market".to_string();
-        let mut status = "Active".to_string();
-        let mut board = "Main".to_string();
-        let mut share_class = "Equity".to_string();
+        let mut segment = "N/A".to_string();
+        let mut status = "N/A".to_string();
+        let mut board = "N/A".to_string();
+        let mut share_class = "N/A".to_string();
         let mut tracking_indexes = "N/A".to_string();
 
-        // 🎯 ZERO DIRECTORY MATH OR DISK I/O HERE: 
-        // We read straight from the pre-parsed payload variable memory.
+        // Target pre-parsed JSON payload variable memory context
         let nse_json = &data.endpoint_metadata;
 
         if let Some(eq_resp) = nse_json["equityResponse"].as_array().and_then(|a| a.first()) {
             
-            // Extract metadata sub-tree
+            // Extract metadata sub-tree (Company Identities)
             if let Some(meta) = eq_resp["metaData"].as_object() {
-                if let Some(name) = meta.get("companyName").and_then(|v| v.as_str()) { company_name = name.to_string(); }
-                if let Some(isin) = meta.get("isinCode").and_then(|v| v.as_str()) { isin_code = isin.to_string(); }
+                if let Some(name) = meta.get("companyName").and_then(|v| v.as_str()) { 
+                    company_name = name.trim().to_string(); 
+                }
+                if let Some(isin) = meta.get("isinCode").and_then(|v| v.as_str()) { 
+                    isin_code = isin.trim().to_string(); 
+                }
             }
 
             // Extract extensive security classification tracking loops
             if let Some(sec) = eq_resp["secInfo"].as_object() {
-                if let Some(ld) = sec.get("listingDate").and_then(|v| v.as_str()) { listing_date = ld.to_string(); }
-                if let Some(mac) = sec.get("macro").and_then(|v| v.as_str()) { macro_grp = mac.to_string(); }
-                if let Some(sec_val) = sec.get("sector").and_then(|v| v.as_str()) { sector = sec_val.to_string(); }
-                if let Some(ind) = sec.get("industryInfo").and_then(|v| v.as_str()) { industry = ind.to_string(); }
-                if let Some(bi) = sec.get("basicIndustry").and_then(|v| v.as_str()) { basic_industry = bi.to_string(); }
-                if let Some(seg) = sec.get("tradingSegment").and_then(|v| v.as_str()) { segment = seg.to_string(); }
-                if let Some(susp) = sec.get("isSuspended").and_then(|v| v.as_str()) { status = susp.to_string(); }
-                if let Some(brd) = sec.get("boardStatus").and_then(|v| v.as_str()) { board = brd.to_string(); }
-                if let Some(cls) = sec.get("classShare").and_then(|v| v.as_str()) { share_class = cls.to_string(); }
+                if let Some(ld) = sec.get("listingDate").and_then(|v| v.as_str()) { listing_date = ld.trim().to_string(); }
+                if let Some(mac) = sec.get("macro").and_then(|v| v.as_str()) { macro_grp = mac.trim().to_string(); }
+                if let Some(sec_val) = sec.get("sector").and_then(|v| v.as_str()) { sector = sec_val.trim().to_string(); }
+                if let Some(ind) = sec.get("industryInfo").and_then(|v| v.as_str()) { industry = ind.trim().to_string(); }
+                if let Some(bi) = sec.get("basicIndustry").and_then(|v| v.as_str()) { basic_industry = bi.trim().to_string(); }
+                if let Some(seg) = sec.get("tradingSegment").and_then(|v| v.as_str()) { segment = seg.trim().to_string(); }
+                if let Some(brd) = sec.get("boardStatus").and_then(|v| v.as_str()) { board = brd.trim().to_string(); }
+                if let Some(cls) = sec.get("classShare").and_then(|v| v.as_str()) { share_class = cls.trim().to_string(); }
+                
+                // 🎯 DYNAMIC STATUS LOOKUP: Maps straight to the real data attribute state string
+                if let Some(susp) = sec.get("isSuspended").and_then(|v| v.as_str()) { 
+                    status = susp.trim().to_string(); 
+                }
 
-                // Map out all indices this asset tracks within
+                // Map out all indices this asset tracks within dynamically
                 if let Some(idx_list) = sec.get("indexList").and_then(|v| v.as_array()) {
-                    let indices: Vec<String> = idx_list.iter().filter_map(|v| v.as_str().map(|s| s.trim().to_string())).collect();
+                    let indices: Vec<String> = idx_list
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
+                        .collect();
                     if !indices.is_empty() {
                         tracking_indexes = indices.join(" | ");
                     }
@@ -65,7 +75,7 @@ impl WorkspaceModule for CompanyProfileCard {
             }
         }
 
-        // Output visual card template (This section remains entirely pristine)
+        // Output visual card tree matrix
         Ok(json!({
             "type": "card",
             "title": company_name,
