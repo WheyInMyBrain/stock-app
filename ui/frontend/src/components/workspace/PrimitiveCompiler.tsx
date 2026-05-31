@@ -1,9 +1,10 @@
 // stock-app/ui/frontend/src/components/workspace/PrimitiveCompiler.tsx
 
 import React, { useState, useEffect, useRef } from "react";
+import { InteractiveChartViewer } from "./stock_chart";
 
 export interface UiPrimitiveNode {
-  type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container" | "select" | "vector_canvas" | "vector_path" | "vector_rect" | "popup_workspace";
+  type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container" | "select" | "vector_canvas" | "vector_path" | "vector_rect" | "popup_workspace" | "chart_viewer";
   className?: string;
   style?: React.CSSProperties;
   children?: UiPrimitiveNode[];
@@ -223,6 +224,16 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
         >
           {nestedChildren}
         </div>
+      );
+    }
+
+    case "chart_viewer": {
+      return (
+        <InteractiveChartViewer 
+          key={keyIndex} 
+          node={node as any}
+          chartBg={cardBg} 
+        />
       );
     }
 

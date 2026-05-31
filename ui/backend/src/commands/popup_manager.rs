@@ -2,6 +2,7 @@
 
 use tauri::{AppHandle, WebviewWindowBuilder, WebviewUrl, Manager}; 
 use crate::pipeline::popup::get_popup_registry;
+use crate::commands::data_loader::WorkspaceDataContext;
 
 #[derive(serde::Deserialize)]
 pub struct PopupRequest {
@@ -18,7 +19,6 @@ pub fn spawn_native_popup(app_handle: AppHandle, request: PopupRequest) -> Resul
         return Ok(());
     }
 
-    // 🎯 BLIND RUNTIME QUERY: Search the global dynamic map registry for the component definition
     let registry = get_popup_registry();
     let popup_blueprint = registry.get(request.module_id.as_str())
         .ok_or_else(|| format!("Security Boundary Breach: Unmapped module identifier -> [{}]", request.module_id))?;
@@ -26,6 +26,7 @@ pub fn spawn_native_popup(app_handle: AppHandle, request: PopupRequest) -> Resul
     let title = popup_blueprint.window_title(&request.ticker);
     let (width, height) = popup_blueprint.initial_size();
 
+    // 🚀 Normal route target URL without directory parameter clutter
     let route_target = format!("index.html#/popup?module={}&ticker={}", request.module_id, request.ticker);
 
     WebviewWindowBuilder::new(&app_handle, &window_id, WebviewUrl::App(route_target.into()))
@@ -40,11 +41,13 @@ pub fn spawn_native_popup(app_handle: AppHandle, request: PopupRequest) -> Resul
 }
 
 #[tauri::command]
-pub fn compile_popup_telemetry(module_id: String, ticker: String) -> Result<serde_json::Value, String> {
-    // 🎯 BLIND DATA FETCHING: Pull layouts dynamically using the registry map bounds
+pub fn compile_popup_telemetry(app_handle: AppHandle, module_id: String, ticker: String) -> Result<serde_json::Value, String> {
     let registry = get_popup_registry();
     let popup_blueprint = registry.get(module_id.as_str())
         .ok_or_else(|| format!("Module matrix registry key unmapped: {}", module_id))?;
         
-    popup_blueprint.compile(&ticker)
+    // 🎯 Use the exact constructor option specified by the compiler note!
+    let context_pool = WorkspaceDataContext::load(&app_handle, &ticker);
+
+    popup_blueprint.compile(&ticker, &context_pool)
 }

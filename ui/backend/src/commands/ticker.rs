@@ -7,10 +7,10 @@ use crate::commands::downloader::run_sidecar_downloader;
 use crate::commands::data_loader::WorkspaceDataContext;
 use crate::commands::data_dir::get_active_data_directory;
 
-// Global Source of Truth for the current open workspace view
 static ACTIVE_TICKER: RwLock<Option<String>> = RwLock::new(None);
 
-/// 🎯 THE ONLY BACKEND COMMAND YOU NEED TO CALL
+pub static POPUP_FROM_TIMESTAMP: RwLock<i64> = RwLock::new(0);
+
 #[command]
 pub fn set_active_workspace(ticker: Option<String>) {
     let mut active = ACTIVE_TICKER.write().unwrap();
@@ -18,9 +18,9 @@ pub fn set_active_workspace(ticker: Option<String>) {
     println!("💼 [WORKSPACE CHANGED]: Active target focus tracking updated to: {:?}", active);
 }
 
-/// Helper to replicate your centralized module IDs list safely
 fn get_registered_module_ids() -> Vec<(String, u64, Vec<String>)> {
-    vec![(
+    vec![
+        (
             "stock_stats".to_string(), 
             30, 
             vec![
@@ -29,10 +29,20 @@ fn get_registered_module_ids() -> Vec<(String, u64, Vec<String>)> {
                 "--stream".to_string()
             ]
         ),
+        // 🚀 DEDICATED POPUP REGISTRY SLOT
+        (
+            "stock_chart".to_string(), 
+            10, 
+            vec![
+                "--mode=nse".to_string(), 
+                "--api=real-time-chart-delta".to_string(),
+                "--stream".to_string(),
+                format!("--from={}", *POPUP_FROM_TIMESTAMP.read().unwrap())
+            ]
+        ),
     ]
 }
 
-/// 🎯 AUTOMATED TRACKING CLOCK ENGINE
 pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -55,14 +65,10 @@ pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
 
                 if let Some(ticker) = active_ticker {
                     let modules = get_registered_module_ids();
-                    
-                    // 🎯 STEP 1: Deduplicate identical execution requests hitting on the same second
                     let mut unique_execution_groups: Vec<(Vec<String>, Vec<String>)> = Vec::new();
 
                     for (module_id, interval, extra_flags) in modules {
                         if total_elapsed_seconds % interval == 0 {
-                            // 🎯 FIXED: Clean execution flags containing ONLY ticker and parameters.
-                            // No data-dir is hardcoded here to prevent duplicate flag injection!
                             let mut flags = vec![ticker.clone()];
                             flags.extend(extra_flags);
 
@@ -74,7 +80,6 @@ pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
                         }
                     }
 
-                    // 🎯 STEP 2: Fire precisely 1 downloader pass per unique flag group
                     for (execution_flags, dependent_modules) in unique_execution_groups {
                         let current_app = app_handle.clone();
                         let target_ticker = ticker.clone();
@@ -82,7 +87,6 @@ pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
                         tokio::spawn(async move {
                             let active_dir = get_active_data_directory(current_app.clone());
                             
-                            // Passes single directory path + clean deduplicated execution flag arrays
                             let result = run_sidecar_downloader(
                                 current_app.clone(),
                                 Some(active_dir),
@@ -92,14 +96,18 @@ pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
                             if result.is_ok() {
                                 WorkspaceDataContext::invalidate_ticker(&target_ticker);
 
-                                if let Some(window) = current_app.get_webview_window("main") {
-                                    #[derive(Clone, serde::Serialize)]
-                                    struct GenericPayload { module_id: String, ticker: String }
+                                #[derive(Clone, serde::Serialize)]
+                                struct GenericPayload { module_id: String, ticker: String }
 
-                                    for current_module in dependent_modules {
-                                        let _ = window.emit(
+                                // 🚀 BROADCAST DISPATCH: Send the event to all active windows
+                                for (_, webview_window) in current_app.webview_windows() {
+                                    for current_module in &dependent_modules {
+                                        let _ = webview_window.emit(
                                             "pipeline-invalidated",
-                                            GenericPayload { module_id: current_module, ticker: target_ticker.clone() }
+                                            GenericPayload { 
+                                                module_id: current_module.clone(), 
+                                                ticker: target_ticker.clone() 
+                                            }
                                         );
                                     }
                                 }

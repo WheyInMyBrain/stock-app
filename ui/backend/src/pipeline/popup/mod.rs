@@ -9,7 +9,7 @@ use std::sync::{Arc, OnceLock};
 pub trait WorkspacePopup: Send + Sync {
     fn window_title(&self, ticker: &str) -> String;
     fn initial_size(&self) -> (f64, f64);
-    fn compile(&self, ticker: &str) -> Result<serde_json::Value, String>;
+    fn compile(&self, ticker: &str, data: &crate::commands::data_loader::WorkspaceDataContext) -> Result<serde_json::Value, String>;
 }
 
 /// 🎯 THE THREAD-SAFE GLOBAL REGISTRY BOX

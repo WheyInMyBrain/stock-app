@@ -21,7 +21,22 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": [
+        {
+          "identifier": "default-popup-listener-capability",
+          "description": "Allows all dynamic popups to listen to backend data invalidation signals",
+          "windows": [
+            "main",
+            "win_*"
+          ],
+          "permissions": [
+            "core:event:allow-listen",
+            "core:event:allow-emit",
+            "core:webview:allow-create-webview-window"
+          ]
+        }
+      ]
     }
   },
   "bundle": {
