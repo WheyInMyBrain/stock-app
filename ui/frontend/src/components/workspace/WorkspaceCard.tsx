@@ -45,6 +45,8 @@ export default function WorkspaceCard({
   onMouseDown,
   onRemove,
 }: WorkspaceCardProps) {
+  // 🚀 LOCAL TIMEFRAME STATE: Tracks selection strictly for this isolated card instance
+  const [activeTimeframe, setActiveTimeframe] = useState<string>("");
   const [currentNode, setCurrentNode] = useState<UiPrimitiveNode>(rootNode);
 
   // Sync state if the master layout grid changes down from parent context
@@ -55,20 +57,49 @@ export default function WorkspaceCard({
   // 🎯 THE OPTIMIZED REFECTH: Updates data values in-memory instantly
   const handleLiveTelemetryRefresh = useCallback(async () => {
     try {
-      // 🚀 Bypasses calculateIdealHeightUnits entirely. Just pulls values.
       const freshTelemetry: any = await invoke("fetch_component_telemetry", {
         ticker: ticker,
         moduleId: id,
-        timeframe: ""
+        timeframe: activeTimeframe // 🚀 Updated to pass this card's custom timeframe preference state
       });
 
       if (freshTelemetry && freshTelemetry.root_node) {
-        // Direct state injection without messing with the parent DOM layout tree
         setCurrentNode(freshTelemetry.root_node);
       }
     } catch (err) {
       console.error(`❌ [CARD REFRESH ERROR]: Refetch task failed for [${id}]:`, err);
     }
+  }, [id, ticker, activeTimeframe]);
+
+  // 🚀 ISOLATED INTERNAL INTERCEPTOR HOOK: Listens for time changes meant only for this component instance
+  useEffect(() => {
+    const listenToIntervalOverrides = async (event: Event) => {
+      const customEvent = event as CustomEvent<{ moduleId: string; timeframe: string }>;
+      const { moduleId, timeframe } = customEvent.detail;
+
+      // 🎯 SURGICAL CARD FILTER: Only pull new data if it matches this exact card's ID
+      if (moduleId === id) {
+        try {
+          const freshData: any = await invoke("fetch_component_telemetry", {
+            ticker: ticker,
+            moduleId: id,
+            timeframe: timeframe
+          });
+
+          if (freshData && freshData.root_node) {
+            setActiveTimeframe(timeframe); // Lock in the preference string state locally
+            setCurrentNode(freshData.root_node); // Swap data lines safely
+          }
+        } catch (err) {
+          console.error(`❌ [LOCAL INTERVAL ERROR]: Dropdown reload failed for card [${id}]:`, err);
+        }
+      }
+    };
+
+    window.addEventListener("WORKSPACE_TIMEFRAME_OVERRIDE", listenToIntervalOverrides);
+    return () => {
+      window.removeEventListener("WORKSPACE_TIMEFRAME_OVERRIDE", listenToIntervalOverrides);
+    };
   }, [id, ticker]);
 
   // Bind refresh action directly to the background thread bridge

@@ -1,5 +1,6 @@
 pub mod company_profile;
 pub mod stock_stats;
+pub mod stock_chart;
 
 use serde_json::Value;
 use crate::commands::pipeline::CatalogItem;

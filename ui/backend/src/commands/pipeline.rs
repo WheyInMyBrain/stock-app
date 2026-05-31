@@ -24,6 +24,7 @@ fn get_module_registry() -> Vec<Box<dyn WorkspaceModule>> {
     vec![
         Box::new(crate::pipeline::company_profile::CompanyProfileCard),
         Box::new(crate::pipeline::stock_stats::StockStatsCard),
+        Box::new(crate::pipeline::stock_chart::StockChartCard),
     ]
 }
 
