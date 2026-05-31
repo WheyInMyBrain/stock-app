@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 
 export interface UiPrimitiveNode {
-  type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container" | "select" | "vector_canvas" | "vector_path" | "vector_rect";
+  type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container" | "select" | "vector_canvas" | "vector_path" | "vector_rect" | "popup_workspace";
   className?: string;
   style?: React.CSSProperties;
   children?: UiPrimitiveNode[];
@@ -213,6 +213,18 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
 
     case "vector_rect":
       return <rect key={keyIndex} x={node.x} y={node.y} width={node.width} height={node.height} fill={node.fill} className={node.className} />;
+
+    case "popup_workspace": {
+      return (
+        <div 
+          key={keyIndex} 
+          className="w-full h-full flex flex-col gap-4 animate-fadeIn"
+          style={node.style}
+        >
+          {nestedChildren}
+        </div>
+      );
+    }
 
     default:
       return null;

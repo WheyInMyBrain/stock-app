@@ -23,7 +23,11 @@ fn main() {
             // Server-Driven Data Pipeline Engine
             commands::ticker::set_active_workspace,
             commands::pipeline::fetch_component_telemetry,
-            commands::pipeline::fetch_component_catalog
+            commands::pipeline::fetch_component_catalog,
+
+            // popup
+            commands::popup_manager::spawn_native_popup,
+            commands::popup_manager::compile_popup_telemetry
         ])
         .setup(|app| {
             let app_handle = app.handle().clone();

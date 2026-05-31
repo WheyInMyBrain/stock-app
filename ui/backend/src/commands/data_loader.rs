@@ -23,7 +23,6 @@ pub struct WorkspaceDataContext {
 
 impl WorkspaceDataContext {
     /// 🎯 ZERO I/O INITIALIZATION
-    /// Absolutely NO files are read here. It just maps the core ticker folder string layout.
     pub fn load(app_handle: &AppHandle, ticker: &str) -> Self {
         let ticker_upper = ticker.to_uppercase();
         let active_root = get_active_data_directory(app_handle.clone());
@@ -36,8 +35,6 @@ impl WorkspaceDataContext {
     }
 
     /// 🎯 AUTOMATED MULTI-TARGET COMPILATION
-    /// Ingests an array slice of resource strings directly from the Data Center,
-    /// pulls them cleanly, and normalizes the selector keys to prevent object field collisions.
     pub fn get_multiple_datasets(&self, targets: &[&str]) -> Value {
         let mut compiled_datasets = serde_json::Map::new();
 
@@ -45,7 +42,6 @@ impl WorkspaceDataContext {
             let dataset_value = self.get_dataset(target);
             
             // 🚀 Transform "nse_symbol-core-data/endpoint-metadata" -> "nse_symbol-core-data__endpoint-metadata"
-            // This natively secures clean, collision-free properties when pulling overlapping file configurations.
             let normalized_key = target.replace('/', "__");
             
             compiled_datasets.insert(normalized_key, dataset_value);
@@ -55,7 +51,6 @@ impl WorkspaceDataContext {
     }
 
     /// 🎯 UNIVERSAL SURGICAL LOAD
-    /// Automatically detects file configurations and reads JSON, Markdown, Parquet, or text files cleanly.
     pub fn get_dataset(&self, target_path_selector: &str) -> Value {
         let ticker_upper = &self.ticker;
 
@@ -121,7 +116,6 @@ impl WorkspaceDataContext {
     }
 
     /// 🎯 POLYMORPHIC DECODER ENGINE
-    /// Inspects file extensions dynamically and reads bytes safely without corruption lines
     fn read_and_decode_file(file_path: &Path) -> Value {
         let extension = file_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
 
@@ -140,8 +134,6 @@ impl WorkspaceDataContext {
                 json!(text_content)
             }
             "parquet" | "bin" => {
-                // Pass binary assets as raw disk path mappings and a safely encoded Base64 string container wrapper.
-                // This lets your processing sub-modules read it without crashing Rust strings!
                 if let Ok(bytes) = fs::read(file_path) {
                     let b64_encoded = STANDARD.encode(bytes);
                     json!({

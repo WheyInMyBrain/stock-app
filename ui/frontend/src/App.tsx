@@ -4,13 +4,21 @@ import { useTheme } from "./hooks/useTheme";
 import Sidebar from "./components/Sidebar";
 import Header from "./components/Header";
 import Workspace from "./components/Workspace";
+import PopupCompiler from "./components/workspace/PopupCompiler";
 
 export default function App() {
+  const [currentHash, setCurrentHash] = useState(window.location.hash);
   const { isDarkMode, toggleTheme, colors } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [tickers, setTickers] = useState<string[]>([]);
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+
+  useEffect(() => {
+    const handleHashChange = () => setCurrentHash(window.location.hash);
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
   
   // 🎯 ABSTRACT TIMESTAMP TRIGGER STATE
   // Forces child frames to wipe clean and parse disk storage parameters instantly
@@ -21,6 +29,10 @@ export default function App() {
       .then(setTickers)
       .catch((err) => console.error("History engine failure:", err));
   }, []);
+
+  if (currentHash.startsWith("#/popup")) {
+    return <PopupCompiler />;
+  }
 
   useEffect(() => {
     if (!selectedTicker) setIsEditing(false);

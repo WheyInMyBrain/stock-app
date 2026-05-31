@@ -45,22 +45,19 @@ export default function WorkspaceCard({
   onMouseDown,
   onRemove,
 }: WorkspaceCardProps) {
-  // 🚀 LOCAL TIMEFRAME STATE: Tracks selection strictly for this isolated card instance
   const [activeTimeframe, setActiveTimeframe] = useState<string>("");
   const [currentNode, setCurrentNode] = useState<UiPrimitiveNode>(rootNode);
 
-  // Sync state if the master layout grid changes down from parent context
   useEffect(() => {
     setCurrentNode(rootNode);
   }, [rootNode]);
 
-  // 🎯 THE OPTIMIZED REFECTH: Updates data values in-memory instantly
   const handleLiveTelemetryRefresh = useCallback(async () => {
     try {
       const freshTelemetry: any = await invoke("fetch_component_telemetry", {
         ticker: ticker,
         moduleId: id,
-        timeframe: activeTimeframe // 🚀 Updated to pass this card's custom timeframe preference state
+        timeframe: activeTimeframe 
       });
 
       if (freshTelemetry && freshTelemetry.root_node) {
@@ -71,13 +68,11 @@ export default function WorkspaceCard({
     }
   }, [id, ticker, activeTimeframe]);
 
-  // 🚀 ISOLATED INTERNAL INTERCEPTOR HOOK: Listens for time changes meant only for this component instance
   useEffect(() => {
     const listenToIntervalOverrides = async (event: Event) => {
       const customEvent = event as CustomEvent<{ moduleId: string; timeframe: string }>;
       const { moduleId, timeframe } = customEvent.detail;
 
-      // 🎯 SURGICAL CARD FILTER: Only pull new data if it matches this exact card's ID
       if (moduleId === id) {
         try {
           const freshData: any = await invoke("fetch_component_telemetry", {
@@ -87,8 +82,8 @@ export default function WorkspaceCard({
           });
 
           if (freshData && freshData.root_node) {
-            setActiveTimeframe(timeframe); // Lock in the preference string state locally
-            setCurrentNode(freshData.root_node); // Swap data lines safely
+            setActiveTimeframe(timeframe); 
+            setCurrentNode(freshData.root_node); 
           }
         } catch (err) {
           console.error(`❌ [LOCAL INTERVAL ERROR]: Dropdown reload failed for card [${id}]:`, err);
@@ -102,11 +97,28 @@ export default function WorkspaceCard({
     };
   }, [id, ticker]);
 
-  // Bind refresh action directly to the background thread bridge
   usePipelineListener(id, ticker, handleLiveTelemetryRefresh);
 
+  // When a user double-clicks a card, it instructs the popup manager to spawn the sub-window!
+  const handleCardDoubleClick = async () => {
+    // 🎯 Crucial Guard: Do not pop up windows if the user is currently customization-arraging cards
+    if (isEditing) return;
+
+    console.log(`🚀 [POPUP EMITTER]: Requesting backend window lifecycle for module: ${id}, ticker: ${ticker}`);
+    try {
+      await invoke("spawn_native_popup", {
+        request: {
+          module_id: id,     // Maps directly to "stock_chart" inside your match statement
+          ticker: ticker,    // Maps to the active symbol (e.g. "AAPL")
+        },
+      });
+    } catch (err) {
+      console.error("❌ [POPUP FAULT]: Bridge invocation fell through:", err);
+    }
+  };
+
   const currentWidth = width ? `${width}px` : "100%";
-  const cursorClass = !isEditing ? "" : 
+  const cursorClass = !isEditing ? "" :
     isResizingZone === "nwse" ? "cursor-nwse-resize" :
     isResizingZone === "ns" ? "cursor-ns-resize" :
     isResizingZone === "ew" ? "cursor-ew-resize" : "cursor-grab active:cursor-grabbing";
@@ -116,6 +128,7 @@ export default function WorkspaceCard({
       onMouseDown={(e) => isEditing && onMouseDown(e, id)}
       onMouseMove={isEditing ? onMouseMove : undefined}
       onMouseLeave={isEditing ? onMouseLeave : undefined}
+      onDoubleClick={handleCardDoubleClick} // 🚀 NEW: LINK THE EVENT LISTENER HERE
       className={`relative rounded-xl p-5 flex flex-col overflow-hidden transition-all duration-200 ease-out select-none border ${cursorClass} ${
         isEditing 
           ? "border-neutral-500/30 bg-neutral-500/[0.02]" 
