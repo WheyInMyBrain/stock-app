@@ -53,8 +53,8 @@ impl WorkspaceModule for StockStatsCard {
 
         let mut last_update_time = "N/A".to_string();
 
-        // 🎯 ZERO DISK LOOKUPS: Point directly to the central JSON value held inside your memory object block context!
-        let nse_json = &data.endpoint_metadata;
+        // 🚀 THE FIX: Point surgically to the target dataset using your dynamic engine selector path
+        let nse_json = data.get_dataset("nse_symbol-core-data/endpoint-metadata.json");
 
         if let Some(eq_resp) = nse_json["equityResponse"].as_array().and_then(|a| a.first()) {
             

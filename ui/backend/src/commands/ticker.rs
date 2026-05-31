@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, Manager, command};
 use tokio::time::{sleep, Duration};
 use std::sync::RwLock;
 use crate::commands::downloader::run_sidecar_downloader;
-use crate::pipeline::WorkspaceDataContext;
+use crate::commands::data_loader::WorkspaceDataContext;
 use crate::commands::data_dir::get_active_data_directory;
 
 // Global Source of Truth for the current open workspace view

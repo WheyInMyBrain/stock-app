@@ -1,7 +1,7 @@
 // stock-app/ui/backend/src/commands/pipeline.rs
 
 use tauri::AppHandle; 
-use crate::pipeline::WorkspaceDataContext;
+use crate::commands::data_loader::WorkspaceDataContext;
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use crate::pipeline::WorkspaceModule;

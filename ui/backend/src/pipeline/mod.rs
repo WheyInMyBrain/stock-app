@@ -1,10 +1,9 @@
-pub mod data_loader;
 pub mod company_profile;
 pub mod stock_stats;
 
 use serde_json::Value;
 use crate::commands::pipeline::CatalogItem;
-pub use data_loader::WorkspaceDataContext;
+use crate::commands::data_loader::WorkspaceDataContext;
 
 /// 🪐 The clean framework rule that every standalone backend card must implement
 pub trait WorkspaceModule {

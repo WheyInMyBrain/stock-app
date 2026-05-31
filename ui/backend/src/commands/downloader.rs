@@ -5,7 +5,7 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt}; // 🎯 Added for lightning-fast socket binary framing reads
-use crate::pipeline::WorkspaceDataContext;
+use crate::commands::data_loader::WorkspaceDataContext;
 use crate::commands::data_dir::get_active_data_directory;
 
 // 🎯 GLOBAL PRIVATE HOLDER FOR THE PERSISTENT BACKGROUND GO SERVICE WRITER PIPE

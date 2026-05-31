@@ -32,7 +32,7 @@ impl WorkspaceModule for CompanyProfileCard {
         let mut tracking_indexes = "N/A".to_string();
 
         // Target pre-parsed JSON payload variable memory context
-        let nse_json = &data.endpoint_metadata;
+        let nse_json = data.get_dataset("nse_symbol-core-data/endpoint-metadata.json");
 
         if let Some(eq_resp) = nse_json["equityResponse"].as_array().and_then(|a| a.first()) {
             
