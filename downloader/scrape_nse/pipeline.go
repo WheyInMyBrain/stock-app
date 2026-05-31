@@ -13,9 +13,11 @@ import (
 )
 
 // ExecuteWithWarmClient now returns the raw JSON payload as a string alongside any network errors
-func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, targetApi string, globalDataDir string) (string, error) {
+func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, targetApi string, globalDataDir string, fromTime string) (string, error) {
     endpoints := GetAllEndpoints()
     var capturedJSON string
+
+    scripCode, _ := GetScripCode(client, symbol, globalDataDir)
 
     for _, endpoint := range endpoints {
         if targetApi != "" && endpoint.Name() != targetApi {
@@ -23,7 +25,7 @@ func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, ta
         }
 
         // 🎯 CAPTURE BOTH THE RAW BYTES AND ERROR FROM THE STRATEGY PASS
-        rawBytes, err := executeStrategy(client, symbol, endpoint, workerCount, globalDataDir)
+        rawBytes, err := executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, fromTime)
         if err != nil {
             fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Error running warm pipeline %s: %v\n", endpoint.Name(), err)
             return "", err
@@ -40,36 +42,41 @@ func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, ta
 
 // ExecuteAll is the sole gateway for main.go.
 // It fetches all registered strategies from endpoints.go and runs them sequentially.
-func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir string) error {
-    // Initialize your session & cookie handshake once here
+func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir string, fromTime string) error {
     client, err := NewNSEClient()
     if err != nil {
-        return fmt.Errorf("session handshake failed: %w", err)
+        return fmt.Errorf("NSE session initialization failed: %w", err)
     }
 
-    // Dynamic endpoint array loaded from endpoints.go
+    fmt.Printf("[nse_scrape] 🔍 Resolving dynamic ticker token mapping for: %s...\n", symbol)
+    scripCode, err := GetScripCode(client, symbol, globalDataDir)
+    if err != nil {
+        return fmt.Errorf("NSE identifier mapping failed: %w", err)
+    }
+    fmt.Printf("[nse_scrape] 🎯 Successfully mapped %s ----> NSE Token ID: %s\n", symbol, scripCode)
+
     endpoints := GetAllEndpoints()
+    if len(endpoints) == 0 {
+        fmt.Println("[nse_scrape] ℹ️ No active NSE endpoint strategies registered yet.")
+        return nil
+    }
 
     for _, endpoint := range endpoints {
-		if targetApi != "" && endpoint.Name() != targetApi {
-			continue
-		}
+        if targetApi != "" && endpoint.Name() != targetApi {
+            continue
+        }
 
-		fmt.Printf("\n[scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
+        fmt.Printf("\n[nse_scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
 
-		// 🎯 FIXED: Change this line to expect 2 return variables instead of 1
-		_, err := executeStrategy(client, symbol, endpoint, workerCount, globalDataDir)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Error running warm pipeline %s: %v\n", endpoint.Name(), err)
-		}
-	}
+        _, _ = executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, fromTime)
+    }
 
     return nil
 }
 
 // executeStrategy is unexported (private) to keep the package API surface tiny.
 // Added globalDataDir to signature to handle explicit path injection cleanly
-func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint, workerCount int, globalDataDir string) ([]byte, error) {
+func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoint FilingsEndpoint, workerCount int, globalDataDir string, fromTime string) ([]byte, error) {
     var outputDir string
 
     // If Rust provides an explicit global data directory path, anchor it instantly!
@@ -208,6 +215,19 @@ func executeStrategy(client *NSEClient, symbol string, endpoint FilingsEndpoint,
     // STANDARD 1-TO-1 FILE DOWNLOAD PIPELINE FOR ALL OTHER ENDPOINTS
     // ============================================================================
     apiURL := endpoint.BuildURL(symbol)
+    if endpoint.Name() == "real-time-chart-delta" {
+        lastTimeStr := "0"
+        if strings.TrimSpace(fromTime) != "" {
+            lastTimeStr = fromTime
+            if len(lastTimeStr) == 13 {
+                lastTimeStr = lastTimeStr[:10]
+            }
+        }
+        apiURL = strings.ReplaceAll(apiURL, "FROM_TS_PLACEHOLDER", lastTimeStr)
+    }
+    if strings.Contains(apiURL, "SCRIP_TOKEN_PLACEHOLDER") {
+        apiURL = strings.ReplaceAll(apiURL, "SCRIP_TOKEN_PLACEHOLDER", scripCode)
+    }
     req, err := http.NewRequest("GET", apiURL, nil)
     if err != nil {
         return nil, err

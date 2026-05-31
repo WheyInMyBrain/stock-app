@@ -17,7 +17,7 @@ import (
 func ExecuteWithWarmClient(client *BSEClient, symbol string, workerCount int, targetApi string, globalDataDir string) (string, error) {
     // 1. Resolve the alphabetic ticker symbol ("IMFA") into its BSE numeric code ("533047")
     fmt.Printf("[bse_scrape] 🔍 Performing smart search lookup for ticker token: %s...\n", symbol)
-    scripCode, err := GetScripCode(client, symbol)
+    scripCode, err := GetScripCode(client, symbol, globalDataDir)
     if err != nil {
         return "", fmt.Errorf("BSE identifier mapping failed: %w", err)
     }
@@ -72,7 +72,7 @@ func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir 
 	}
 
 	fmt.Printf("[bse_scrape] 🔍 Performing smart search lookup for ticker token: %s...\n", symbol)
-	scripCode, err := GetScripCode(client, symbol)
+	scripCode, err := GetScripCode(client, symbol, globalDataDir)
 	if err != nil {
 		return fmt.Errorf("BSE identifier mapping failed: %w", err)
 	}

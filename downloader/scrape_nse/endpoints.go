@@ -28,6 +28,8 @@ func GetAllEndpoints() []FilingsEndpoint {
 		PeerComparisonAPI{},
 		BulkAndBlockDealsAPI{},
 		CorporateShareholdingMasterAPI{},
+		LiveRealTimeChartSeedAPI{},
+		LiveRealTimeChartDeltaAPI{},
 	}
 }
 
@@ -777,4 +779,49 @@ func (c CorporateShareholdingMasterAPI) ParseResponse(body io.Reader) ([]Univers
 	}
 
 	return results, nil
+}
+
+// ============================================================================
+// STRATEGY 16: Live Real-Time Chart Initial Baseline History Seeding
+// ============================================================================
+type LiveRealTimeChartSeedAPI struct{}
+
+func (l LiveRealTimeChartSeedAPI) Name() string { return "real-time-chart" }
+
+func (l LiveRealTimeChartSeedAPI) BuildURL(symbol string) string {
+    now := time.Now().Unix()
+    targetSymbol := symbol + "-EQ"
+    currentYearStart := time.Date(time.Now().Year(), time.January, 1, 0, 0, 0, 0, time.UTC).Unix()
+
+    // 🚀 Use a recognizable placeholder string
+    return fmt.Sprintf(
+        "https://charting.nseindia.com/v1/charts/symbolHistoricalData?token=SCRIP_TOKEN_PLACEHOLDER&fromDate=%d&toDate=%d&symbol=%s&symbolType=Equity&chartType=I&timeInterval=1",
+        currentYearStart, now, targetSymbol,
+    )
+}
+
+func (l LiveRealTimeChartSeedAPI) ParseResponse(body io.Reader) ([]UniversalRecord, error) { return nil, nil }
+
+// ============================================================================
+// STRATEGY 17: Live Real-Time Chart Delta Incremental Stream
+// ============================================================================
+type LiveRealTimeChartDeltaAPI struct{}
+
+func (d LiveRealTimeChartDeltaAPI) Name() string { 
+    return "real-time-chart-delta" 
+}
+
+func (d LiveRealTimeChartDeltaAPI) BuildURL(symbol string) string {
+    targetSymbol := symbol + "-EQ"
+    now := time.Now().Unix()
+
+    // Only leave the external variables as simple placeholders
+    return fmt.Sprintf(
+        "https://charting.nseindia.com/v1/charts/symbolHistoricalData?fromDate=FROM_TS_PLACEHOLDER&toDate=%d&symbol=%s&token=SCRIP_TOKEN_PLACEHOLDER&symbolType=Equity&chartType=I&timeInterval=1",
+        now, targetSymbol,
+    )
+}
+
+func (d LiveRealTimeChartDeltaAPI) ParseResponse(body io.Reader) ([]UniversalRecord, error) { 
+    return nil, nil 
 }
