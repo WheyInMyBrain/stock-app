@@ -18,8 +18,8 @@ pub fn set_active_workspace(ticker: Option<String>) {
     println!("💼 [WORKSPACE CHANGED]: Active target focus tracking updated to: {:?}", active);
 }
 
-fn get_registered_module_ids() -> Vec<(String, u64, Vec<String>)> {
-    vec![
+fn get_registered_module_ids(app_handle: &AppHandle) -> Vec<(String, u64, Vec<String>)> {
+    let mut modules = vec![
         (
             "stock_stats".to_string(), 
             30, 
@@ -29,18 +29,31 @@ fn get_registered_module_ids() -> Vec<(String, u64, Vec<String>)> {
                 "--stream".to_string()
             ]
         ),
-        // 🚀 DEDICATED POPUP REGISTRY SLOT
-        (
+    ];
+
+    let mut has_active_chart_popup = false;
+    for (window_label, _) in app_handle.webview_windows() {
+        if window_label.starts_with("win_stock_chart_") {
+            has_active_chart_popup = true;
+            break;
+        }
+    }
+
+    if has_active_chart_popup {
+        let current_from = *POPUP_FROM_TIMESTAMP.read().unwrap();
+        modules.push((
             "stock_chart".to_string(), 
             10, 
             vec![
                 "--mode=nse".to_string(), 
                 "--api=real-time-chart-delta".to_string(),
                 "--stream".to_string(),
-                format!("--from={}", *POPUP_FROM_TIMESTAMP.read().unwrap())
+                format!("--from={}", current_from)
             ]
-        ),
-    ]
+        ));
+    }
+
+    modules
 }
 
 pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
@@ -64,7 +77,7 @@ pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
                 };
 
                 if let Some(ticker) = active_ticker {
-                    let modules = get_registered_module_ids();
+                    let modules = get_registered_module_ids(&app_handle);
                     let mut unique_execution_groups: Vec<(Vec<String>, Vec<String>)> = Vec::new();
 
                     for (module_id, interval, extra_flags) in modules {
@@ -99,7 +112,6 @@ pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
                                 #[derive(Clone, serde::Serialize)]
                                 struct GenericPayload { module_id: String, ticker: String }
 
-                                // 🚀 BROADCAST DISPATCH: Send the event to all active windows
                                 for (_, webview_window) in current_app.webview_windows() {
                                     for current_module in &dependent_modules {
                                         let _ = webview_window.emit(
