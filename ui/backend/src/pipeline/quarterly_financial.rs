@@ -56,6 +56,17 @@ fn format_financial_number(raw_val: &str) -> String {
     trimmed.to_string()
 }
 
+// 🚀 INDICATOR BADGE UTILITY: Formats clean directional subtext layout properties
+fn format_growth_badge(value: f64) -> String {
+    if value.is_nan() || value.is_infinite() || value == 0.0 {
+        "0.0%".to_string()
+    } else if value > 0.0 {
+        format!("▲+{:.1}%", value)
+    } else {
+        format!("▼{:.1}%", value)
+    }
+}
+
 struct HierarchyRowConfig {
     tag_name: &'static str,
     is_parent: bool,
@@ -124,6 +135,247 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
 
         unique_filing_dates.sort_by(|a, b| map_filing_to_sortable_score(b).cmp(&map_filing_to_sortable_score(a)));
 
+        // Helper function to extract numerical values safely
+        let get_float_val = |date: &str, tag: &str| -> f64 {
+            let lookup_key = format!("{}__{}", date, tag);
+            matrix_data_map.get(&lookup_key)
+                .and_then(|s| s.trim().parse::<f64>().ok())
+                .unwrap_or(0.0)
+        };
+
+        let mut velocity_indicators = Vec::new();
+        let mut anomalies_and_warnings = Vec::new();
+
+        if unique_filing_dates.len() >= 2 {
+            let latest_date = &unique_filing_dates[0];
+            let prev_date = &unique_filing_dates[1];
+
+            let revenue_latest = get_float_val(latest_date, "RevenueFromOperations");
+            let revenue_prev = get_float_val(prev_date, "RevenueFromOperations");
+            let expenses_latest = get_float_val(latest_date, "Expenses");
+            let expenses_prev = get_float_val(prev_date, "Expenses");
+            let profit_latest = get_float_val(latest_date, "ProfitLossForPeriod");
+            let profit_prev = get_float_val(prev_date, "ProfitLossForPeriod");
+
+            let rev_growth = if revenue_prev != 0.0 { (revenue_latest - revenue_prev) / revenue_prev * 100.0 } else { 0.0 };
+            let exp_growth = if expenses_prev != 0.0 { (expenses_latest - expenses_prev) / expenses_prev * 100.0 } else { 0.0 };
+            let profit_growth = if profit_prev != 0.0 { (profit_latest - profit_prev) / profit_prev * 100.0 } else { 0.0 };
+
+            velocity_indicators.push(json!({
+                "type": "metric",
+                "title": "Revenue QoQ Velocity",
+                "value": format!("{:.2}%", rev_growth),
+                "variant": if rev_growth >= 0.0 { "success" } else { "danger" }
+            }));
+            velocity_indicators.push(json!({
+                "type": "metric",
+                "title": "Net Profit QoQ Velocity",
+                "value": format!("{:.2}%", profit_growth),
+                "variant": if profit_growth >= 0.0 { "success" } else { "danger" }
+            }));
+
+            if unique_filing_dates.len() >= 3 {
+                let third_date = &unique_filing_dates[2];
+                let profit_third = get_float_val(third_date, "ProfitLossForPeriod");
+                if profit_latest < profit_prev && profit_prev < profit_third {
+                    anomalies_and_warnings.push(json!({
+                        "type": "text",
+                        "className": "text-xs font-mono text-red-400 bg-red-950/20 px-2 py-1 rounded border border-red-900/30",
+                        "value": "⚠️ ALERT: Consecutive multi-quarter Net Profit contraction streak observed."
+                    }));
+                } else if profit_latest > profit_prev && profit_prev > profit_third {
+                    velocity_indicators.push(json!({
+                        "type": "metric",
+                        "title": "Earning Trajectory",
+                        "value": "Expansion Streak 🚀"
+                    }));
+                }
+            }
+
+            if exp_growth > rev_growth && rev_growth < 5.0 {
+                anomalies_and_warnings.push(json!({
+                    "type": "text",
+                    "className": "text-xs font-mono text-amber-400 bg-amber-950/20 px-2 py-1 rounded border border-amber-900/30",
+                    "value": format!("⚠️ NEGATIVE JAWS ALERT: Expense growth ({:.1}%) is outpacing Revenue velocity ({:.1}%).", exp_growth, rev_growth)
+                }));
+            }
+
+            let pbt_latest = get_float_val(latest_date, "ProfitBeforeTax");
+            let tax_latest = get_float_val(latest_date, "TaxExpense");
+            if pbt_latest > 0.0 && tax_latest <= 0.0 {
+                anomalies_and_warnings.push(json!({
+                    "type": "text",
+                    "className": "text-xs font-mono text-red-400 bg-red-950/20 px-2 py-1 rounded border border-red-900/30",
+                    "value": "⚠️ TAX DISCONNECT: Positive Pre-Tax Profit registered alongside zero or negative tax provisions."
+                }));
+            }
+
+            let basic_eps = get_float_val(latest_date, "BasicEarningsLossPerShareFromContinuingOperations");
+            let diluted_eps = get_float_val(latest_date, "DilutedEarningsLossPerShareFromContinuingOperations");
+            if basic_eps > 0.0 && (basic_eps - diluted_eps) / basic_eps > 0.05 {
+                anomalies_and_warnings.push(json!({
+                    "type": "text",
+                    "className": "text-xs font-mono text-blue-400 bg-blue-950/20 px-2 py-1 rounded border border-blue-900/30",
+                    "value": format!("⚠️ CAPITAL DILUTION RISK: Diluted EPS ({:.2}) lags Basic EPS ({:.2}) by over 5%.", diluted_eps, basic_eps)
+                }));
+            }
+        }
+
+        if anomalies_and_warnings.is_empty() {
+            anomalies_and_warnings.push(json!({
+                "type": "text",
+                "className": "text-xs font-mono text-green-400 bg-green-950/20 px-2 py-1 rounded border border-green-900/30",
+                "value": "✓ HEALTH LEDGER: Operational data profile within nominal analytical parameters."
+            }));
+        }
+
+        let mut compiled_rows = Vec::new();
+
+        // 🚀 INJECT FINANCIAL RATIOS GROUP AS THE FIRST COLLAPSIBLE PARENT ITEM AT THE TOP OF THE TABLE
+        compiled_rows.push(json!({
+            "type": "table_row",
+            "is_parent": true,
+            "is_child": false,
+            "parent_id": Some("ratios_group".to_string()),
+            "align_right_values": true,
+            "cells": [ { "type": "text", "value": "Financial Ratios & Percentages" } ]
+        }));
+
+        let ratio_row_definitions = vec![
+            ("Operating Profit Margin", "OPM"),
+            ("Net Profit Margin", "NPM"),
+            ("Employee Cost Intensity", "ECI"),
+            ("Debt Coverage Stress Factor", "DCSF"),
+            ("Effective Tax Rate", "ETR"),
+        ];
+
+        // 1. Precompute floats into an indexable coordinate table for reliable multi-quarter time lookups
+        let mut ratio_float_matrix: HashMap<(String, String), f64> = HashMap::new();
+        for (_, identifier) in &ratio_row_definitions {
+            for date in &unique_filing_dates {
+                let rev = get_float_val(date, "RevenueFromOperations");
+                let exp = get_float_val(date, "Expenses");
+                let net_profit = get_float_val(date, "ProfitLossForPeriod");
+
+                let calculated_val = match *identifier {
+                    "OPM" => if rev > 0.0 { ((rev - exp) / rev) * 100.0 } else { 0.0 },
+                    "NPM" => if rev > 0.0 { (net_profit / rev) * 100.0 } else { 0.0 },
+                    "ECI" => {
+                        let emp = get_float_val(date, "EmployeeBenefitExpense");
+                        if rev > 0.0 { (emp / rev) * 100.0 } else { 0.0 }
+                    },
+                    "DCSF" => {
+                        let finance = get_float_val(date, "FinanceCosts");
+                        let pbt_items = get_float_val(date, "ProfitBeforeExceptionalItemsAndTax");
+                        if pbt_items > 0.0 { finance / pbt_items } else { 0.0 }
+                    },
+                    "ETR" => {
+                        let tax = get_float_val(date, "TaxExpense");
+                        let pbt = get_float_val(date, "ProfitBeforeTax");
+                        if pbt > 0.0 { (tax / pbt) * 100.0 } else { 0.0 }
+                    },
+                    _ => 0.0
+                };
+                ratio_float_matrix.insert((identifier.to_string(), date.clone()), calculated_val);
+            }
+        }
+
+        // 2. Build the structural ratio rows with raw hex color mapping (No nested children velocity popups)
+        for (label, identifier) in &ratio_row_definitions {
+            let mut ratio_cells = Vec::new();
+            ratio_cells.push(json!({ "type": "text", "value": label.to_string() }));
+
+            for date in &unique_filing_dates {
+                let current_val = *ratio_float_matrix.get(&(identifier.to_string(), date.clone())).unwrap_or(&0.0);
+
+                // Enforce zero-anchored sigmoid gradient hex parameters natively
+                let hex_color = match *identifier {
+                    "OPM" | "NPM" => {
+                        if current_val <= 0.0 { "#EF4444" }      // Deep Warning Crimson Red
+                        else if current_val < 10.0 { "#FB923C" } // Soft Amber Orange
+                        else if current_val < 20.0 { "#FBBF24" } // Neutral Baseline Yellow
+                        else { "#34D399" }                       // Healthy Growth Green
+                    },
+                    "ECI" | "DCSF" => {
+                        if current_val > 35.0 { "#EF4444" }      // High-risk Overhead Strain
+                        else if current_val > 15.0 { "#FB923C" }
+                        else { "#34D399" }
+                    },
+                    _ => "#E5E5E5"
+                };
+
+                let base_formatted_text = if *identifier == "DCSF" { format!("{:.2}x", current_val) } else { format!("{:.2}%", current_val) };
+
+                ratio_cells.push(json!({
+                    "type": "text",
+                    "style": { "color": hex_color, "fontWeight": "600" },
+                    "value": base_formatted_text
+                }));
+            }
+
+            compiled_rows.push(json!({
+                "type": "table_row",
+                "is_parent": false,
+                "is_child": true,
+                "parent_id": Some("ratios_group".to_string()),
+                "align_right_values": true,
+                "cells": ratio_cells
+            }));
+        }
+
+        // 🚀 3. EXPLICIT CORE GROWTH ROWS (Natively integrated as standalone collapsible metrics)
+        let core_growth_definitions = vec![
+            ("Revenue QoQ Growth Speed", "RevenueFromOperations", true),
+            ("Revenue YoY Growth Speed", "RevenueFromOperations", false),
+            ("Net Profit QoQ Growth Speed", "ProfitLossForPeriod", true),
+            ("Net Profit YoY Growth Speed", "ProfitLossForPeriod", false),
+        ];
+
+        for (row_label, target_tag, is_qoq) in core_growth_definitions {
+            let mut trend_cells = Vec::new();
+            trend_cells.push(json!({ "type": "text", "value": row_label.to_string() }));
+
+            for (d_idx, date) in unique_filing_dates.iter().enumerate() {
+                let current_raw = get_float_val(date, target_tag);
+                let lookback_offset = if is_qoq { 1 } else { 4 };
+
+                let calculated_growth = if d_idx + lookback_offset < unique_filing_dates.len() {
+                    let historical_date = &unique_filing_dates[d_idx + lookback_offset];
+                    let historical_raw = get_float_val(historical_date, target_tag);
+                    if historical_raw != 0.0 {
+                        ((current_raw - historical_raw) / historical_raw.abs()) * 100.0
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
+
+                let metric_color = if calculated_growth > 0.0 {
+                    "#34D399" // Dynamic Green for growth improvement
+                } else if calculated_growth < 0.0 {
+                    "#EF4444" // Dynamic Crimson Red for decline drops
+                } else {
+                    "#737373" // Neutral Muted Grey
+                };
+
+                trend_cells.push(json!({
+                    "type": "text",
+                    "style": { "color": metric_color, "fontFamily": "monospace", "fontSize": "11px", "fontWeight": "500" },
+                    "value": format_growth_badge(calculated_growth)
+                }));
+            }
+
+            compiled_rows.push(json!({
+                "type": "table_row",
+                "is_parent": false,
+                "is_child": true,
+                "parent_id": Some("ratios_group".to_string()),
+                "align_right_values": true,
+                "cells": trend_cells
+            }));
+        }
+
         // Unaltered accounting sequence matching our master complete checklist
         let structured_accounting_tree = vec![
             HierarchyRowConfig { tag_name: "Income", is_parent: true, parent_id: "income_group" },
@@ -172,7 +424,7 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
             HierarchyRowConfig { tag_name: "DilutedEarningsLossPerShareFromContinuingAndDiscontinuedOperations", is_parent: false, parent_id: "eps_group" },
         ];
 
-        let mut compiled_rows = Vec::new();
+        let total_children_count = structured_accounting_tree.len() + ratio_row_definitions.len() + 1;
 
         for config in structured_accounting_tree {
             let mut row_cells = Vec::new();
@@ -214,8 +466,31 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
             "type": "card",
             "title": "Consolidated Financial Performance Tree",
             "subtitle": "// INTERACTIVE DROPDOWN ACCOUNTING MATRIX // CONSOLIDATED TIME LOG",
-            "footer": format!("Total active tracked accounting metrics: 36 tags spanning {} quarters", unique_filing_dates.len()),
+            "footer": format!("Total active tracked accounting metrics: {} tags spanning {} quarters", total_children_count, unique_filing_dates.len()),
             "children": [
+                /* 🚀 CHILD ONE: HEALTH AND TRAJECTORY SIGNALS LEDGER */
+                {
+                    "type": "container",
+                    "className": "w-full flex flex-col gap-3 p-4 rounded-xl mb-4 bg-neutral-500/5 border border-neutral-500/10",
+                    "children": [
+                        {
+                            "type": "text",
+                            "className": "text-[10px] uppercase font-bold tracking-widest font-mono opacity-60 mb-1",
+                            "value": "Automated Financial Health & Trajectory Signals"
+                        },
+                        {
+                            "type": "container",
+                            "className": "w-full grid grid-cols-1 sm:grid-cols-3 gap-3",
+                            "children": velocity_indicators
+                        },
+                        {
+                            "type": "container",
+                            "className": "w-full flex flex-col gap-2 mt-2",
+                            "children": anomalies_and_warnings
+                        }
+                    ]
+                },
+                /* 🚀 CHILD TWO: INTERACTIVE DATA TABLE VIEWPORT FRAME */
                 {
                     "type": "container",
                     "className": "w-full overflow-x-auto overflow-y-visible",
