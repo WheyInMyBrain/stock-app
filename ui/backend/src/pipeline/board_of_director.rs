@@ -351,16 +351,15 @@ impl WorkspaceModule for BoardOfDirectorCard {
             "children": [
                 {
                     "type": "container",
-                    "className": "flex flex-col gap-6 w-full overflow-visible",
+                    "className": "flex flex-col gap-6 w-full max-w-full overflow-x-auto overflow-y-visible",
                     "children": [
                         {
                             "type": "container",
                             "className": "flex flex-col gap-1.5 w-full overflow-visible",
                             "children": [
-                                { "type": "text", "className": "text-xs font-bold font-mono tracking-wider text-emerald-500 uppercase", "value": "// Board of Directors Rollup Matrix" },
                                 {
                                     "type": "table",
-                                    "className": "w-full text-left font-mono border-collapse overflow-visible",
+                                    "className": "w-full text-left font-mono border-collapse",
                                     "headers": ["Current Designation", "Director Executive Name (Hover for Timeline)"],
                                     "children": board_table_rows
                                 }
@@ -370,10 +369,9 @@ impl WorkspaceModule for BoardOfDirectorCard {
                             "type": "container",
                             "className": "flex flex-col gap-1.5 w-full overflow-visible pt-2 border-t border-dashed border-neutral-500/10",
                             "children": [
-                                { "type": "text", "className": "text-xs font-bold font-mono tracking-wider text-indigo-400 uppercase", "value": "// Operational Committee Assignments Rollup" },
                                 {
                                     "type": "table",
-                                    "className": "w-full text-left font-mono border-collapse overflow-visible",
+                                    "className": "w-full text-left font-mono border-collapse",
                                     "headers": ["Current Committee", "Assigned Member Name (Hover for Timeline)"],
                                     "children": committee_table_rows
                                 }
