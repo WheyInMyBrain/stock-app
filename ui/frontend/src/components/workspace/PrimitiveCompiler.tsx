@@ -28,6 +28,7 @@ export interface UiPrimitiveNode {
   height?: number;
   headers?: string[];
   cells?: UiPrimitiveNode[];
+  tooltip?: string;
 }
 
 interface PrimitiveCompilerProps {
@@ -212,10 +213,18 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
       );
 
     case "vector_path":
-      return <path key={keyIndex} d={node.d} fill={node.fill || "none"} stroke={node.stroke} strokeWidth={node.stroke_width || 1} strokeLinecap="round" strokeLinejoin="round" className={node.className} />;
+      return (
+        <path key={keyIndex} d={node.d} fill={node.fill || "none"} stroke={node.stroke} strokeWidth={node.stroke_width || 1} strokeLinecap="round" strokeLinejoin="round" className={node.className}>
+          {node.tooltip && <title>{node.tooltip}</title>}
+        </path>
+      );
 
     case "vector_rect":
-      return <rect key={keyIndex} x={node.x} y={node.y} width={node.width} height={node.height} fill={node.fill} className={node.className} />;
+      return (
+        <rect key={keyIndex} x={node.x} y={node.y} width={node.width} height={node.height} fill={node.fill} className={node.className}>
+          {node.tooltip && <title>{node.tooltip}</title>}
+        </rect>
+      );
 
     case "popup_workspace": {
       return (
