@@ -1,7 +1,6 @@
-// stock-app/ui/frontend/src/components/workspace/PrimitiveCompiler.tsx
-
 import React, { useState, useEffect, useRef } from "react";
 import { InteractiveChartViewer } from "./stock_chart";
+import { TableComponent, TableRowComponent } from "./tables";
 
 export interface UiPrimitiveNode {
   type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container" | "select" | "vector_canvas" | "vector_path" | "vector_rect" | "popup_workspace" | "chart_viewer" | "table" | "table_row";
@@ -40,7 +39,7 @@ interface PrimitiveCompilerProps {
     inputBg?: string;
     [key: string]: any;
   };
-  cardBg: string; // Dynamic background hex code or class string passed from your workspace layout state
+  cardBg: string;
   keyIndex?: number;
 }
 
@@ -57,7 +56,6 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
     />
   ));
 
-  // 🎯 ABSTRACT DYNAMIC VARIABLE INTERPRETATION
   const activeBorder = colors?.border || "";
   const activeText = colors?.text || "";
   const activeTextMuted = colors?.textMuted || "opacity-50";
@@ -71,9 +69,7 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
           className={`w-full min-w-0 ${node.className || ""}`}
           style={{
             display: "grid",
-            gridTemplateColumns: isGrid 
-              ? undefined 
-              : "repeat(auto-fit, minmax(150px, 1fr))", 
+            gridTemplateColumns: isGrid ? undefined : "repeat(auto-fit, minmax(150px, 1fr))", 
             gap: "1.5rem",
             alignItems: "start",
             ...node.style
@@ -92,7 +88,6 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
       );
 
     case "card": {
-      // Safely supports inline raw color values/hex numbers or plain class handles
       const isTailwindClass = !cardBg.startsWith("#") && !cardBg.startsWith("rgb");
       return (
         <div 
@@ -139,7 +134,6 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
 
       return (
         <div key={keyIndex} className="my-auto flex flex-col gap-0.5 font-sans">
-          {/* 🎯 FIXED: Dynamic activeText parameters override the layout canvas */}
           <div className={`text-2xl font-semibold font-mono tracking-tight transition-all duration-300 ${flashClass ? flashClass : activeText}`}>
             {node.value}
           </div>
@@ -148,10 +142,7 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
       );
     }
 
-    case "text": {
-      const activeText = colors?.text || "";
-      const activeBorder = colors?.border || "";
-
+    case "text":
       return (
         <div 
           key={keyIndex} 
@@ -161,7 +152,6 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
           {node.value}
         </div>
       );
-    }
 
     case "bar_graph":
       return (
@@ -191,7 +181,6 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
               detail: { moduleId: node.action_target, timeframe: e.target.value }
             }));
           }}
-          // 🎯 FIXED: Stripped hardcoded dark bg configurations. Follows your clean explicit theme boundaries.
           className={`text-xs px-2 py-1 rounded border outline-none cursor-pointer font-mono font-medium transition-colors duration-200 pointer-events-auto ${activeBorder} ${activeText}`}
           style={{ backgroundColor: cardBg }}
         >
@@ -226,65 +215,22 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
         </rect>
       );
 
-    case "popup_workspace": {
+    case "popup_workspace":
       return (
-        <div 
-          key={keyIndex} 
-          className="w-full h-full flex flex-col gap-4 animate-fadeIn"
-          style={node.style}
-        >
+        <div key={keyIndex} className="w-full h-full flex flex-col gap-4 animate-fadeIn" style={node.style}>
           {nestedChildren}
         </div>
       );
-    }
 
-    case "chart_viewer": {
-      return (
-        <InteractiveChartViewer 
-          key={keyIndex} 
-          node={node as any}
-          chartBg={cardBg} 
-        />
-      );
-    }
+    case "chart_viewer":
+      return <InteractiveChartViewer key={keyIndex} node={node as any} chartBg={cardBg} />;
 
-    case "table": {
-      return (
-        <table key={keyIndex} className={`w-full border-collapse ${node.className || ""}`} style={node.style}>
-          {node.headers && (
-            <thead>
-              <tr className={`border-b ${activeBorder}`}>
-                {node.headers.map((header, idx) => (
-                  <th key={idx} className={`py-2 px-3 text-xs font-semibold uppercase tracking-wider font-mono ${activeTextMuted}`}>
-                    {header}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-          )}
-          <tbody>
-            {nestedChildren}
-          </tbody>
-        </table>
-      );
-    }
+    // 🚀 DELEGATE TO THE SPECIALIZED TABLE SUB-COMPONENTS
+    case "table":
+      return <TableComponent node={node} colors={colors} cardBg={cardBg} keyIndex={keyIndex} />;
 
-    case "table_row": {
-      return (
-        <tr key={keyIndex} className={`border-b last:border-b-0 ${activeBorder} ${node.className || ""}`} style={node.style}>
-          {node.cells?.map((cellNode, index) => (
-            <td key={index} className="py-2.5 px-3">
-              <PrimitiveCompiler 
-                node={cellNode} 
-                colors={colors} 
-                cardBg={cardBg} 
-                keyIndex={index} 
-              />
-            </td>
-          ))}
-        </tr>
-      );
-    }
+    case "table_row":
+      return <TableRowComponent node={node} colors={colors} cardBg={cardBg} keyIndex={keyIndex} />;
 
     default:
       return null;

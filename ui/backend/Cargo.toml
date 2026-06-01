@@ -26,3 +26,5 @@ tauri-plugin-shell = "2.0"
 tauri-plugin-log = "2.0"
 tokio = { version = "1.52.3", features = ["time", "rt-multi-thread", "sync", "macros", "net"] }
 base64 = "0.22.1"
+parquet = "54.3.1"
+bytes = "1.11.1"
