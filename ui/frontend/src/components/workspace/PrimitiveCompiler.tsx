@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { InteractiveChartViewer } from "./stock_chart";
 
 export interface UiPrimitiveNode {
-  type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container" | "select" | "vector_canvas" | "vector_path" | "vector_rect" | "popup_workspace" | "chart_viewer";
+  type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container" | "select" | "vector_canvas" | "vector_path" | "vector_rect" | "popup_workspace" | "chart_viewer" | "table" | "table_row";
   className?: string;
   style?: React.CSSProperties;
   children?: UiPrimitiveNode[];
@@ -26,6 +26,8 @@ export interface UiPrimitiveNode {
   y?: number;
   width?: number;
   height?: number;
+  headers?: string[];
+  cells?: UiPrimitiveNode[];
 }
 
 interface PrimitiveCompilerProps {
@@ -234,6 +236,44 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
           node={node as any}
           chartBg={cardBg} 
         />
+      );
+    }
+
+    case "table": {
+      return (
+        <table key={keyIndex} className={`w-full border-collapse ${node.className || ""}`} style={node.style}>
+          {node.headers && (
+            <thead>
+              <tr className={`border-b ${activeBorder}`}>
+                {node.headers.map((header, idx) => (
+                  <th key={idx} className={`py-2 px-3 text-xs font-semibold uppercase tracking-wider font-mono ${activeTextMuted}`}>
+                    {header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {nestedChildren}
+          </tbody>
+        </table>
+      );
+    }
+
+    case "table_row": {
+      return (
+        <tr key={keyIndex} className={`border-b last:border-b-0 ${activeBorder} ${node.className || ""}`} style={node.style}>
+          {node.cells?.map((cellNode, index) => (
+            <td key={index} className="py-2.5 px-3">
+              <PrimitiveCompiler 
+                node={cellNode} 
+                colors={colors} 
+                cardBg={cardBg} 
+                keyIndex={index} 
+              />
+            </td>
+          ))}
+        </tr>
       );
     }
 
