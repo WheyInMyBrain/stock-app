@@ -5,6 +5,7 @@ pub mod board_directory;
 pub mod investors_complain;
 pub mod board_of_director;
 pub mod quarterly_financial;
+pub mod investors;
 pub mod popup;
 
 use serde_json::Value;
