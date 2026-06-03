@@ -20,23 +20,6 @@ fn transform_camel_case(input: &str) -> String {
     result
 }
 
-fn map_filing_to_sortable_score(filename: &str) -> u32 {
-    let clean_name = filename.replace(".xml", "");
-    let segments: Vec<&str> = clean_name.split('-').collect();
-    if segments.len() != 3 { return 0; }
-
-    let day = segments[0].parse::<u32>().unwrap_or(0);
-    let year = segments[2].parse::<u32>().unwrap_or(0);
-    
-    let month = match segments[1].to_uppercase().as_str() {
-        "JAN" => 1, "FEB" => 2, "MAR" => 3, "APR" => 4, "MAY" => 5, "JUN" => 6,
-        "JUL" => 7, "AUG" => 8, "SEP" => 9, "OCT" => 10, "NOV" => 11, "DEC" => 12,
-        _ => 0
-    };
-
-    (year * 10000) + (month * 100) + day
-}
-
 fn format_financial_number(raw_val: &str) -> String {
     let trimmed = raw_val.trim();
     if trimmed.is_empty() || trimmed == "NaN" || trimmed == "NA" {
@@ -82,9 +65,9 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
         }
     }
 
-    fn compile(&self, _ticker: &str, _timeframe: &str, data: &WorkspaceDataContext) -> Result<Value, String> {
+    fn compile(&self, _ticker: &str, timeframe: &str, data: &WorkspaceDataContext) -> Result<Value, String> {
         let parquet_raw_payload = data.get_dataset("parquets/nse_corporates-financial-results.parquet");
-        let mut raw_records: Vec<(String, String, String)> = Vec::new();
+        let mut raw_records: Vec<(String, String, String,String)> = Vec::new();
 
         if let Some(b64_str) = parquet_raw_payload["bytes_base64"].as_str() {
             if let Ok(vec_bytes) = STANDARD.decode(b64_str) {
@@ -98,8 +81,9 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
                                 while let Some(Ok(row)) = row_iter.next() {
                                     let source_file = row.get_string(0).map(|s| s.to_string()).unwrap_or_default();
                                     let tag_name = row.get_string(1).map(|s| s.to_string()).unwrap_or_default();
+                                    let context_id = row.get_string(2).map(|s| s.to_string()).unwrap_or_default();
                                     let raw_value = row.get_string(4).map(|s| s.to_string()).unwrap_or_default();
-                                    raw_records.push((source_file, tag_name, raw_value));
+                                    raw_records.push((source_file, tag_name, context_id, raw_value));
                                 }
                             }
                         }
@@ -113,27 +97,66 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
             return Err("Zero data records parsed from financial registry Parquet".to_string());
         }
 
+        let mut available_types_set = std::collections::BTreeSet::new();
+        let mut file_to_date: HashMap<String, String> = HashMap::new();
+        let mut file_to_type: HashMap<String, String> = HashMap::new();
+        let mut file_context_to_date: HashMap<(String, String), String> = HashMap::new();
+
+        for (source_file, tag_name, context_id, raw_value) in &raw_records {
+            let val = raw_value.trim().to_string();
+            if val.is_empty() || val == "NA" { continue; }
+
+            if tag_name == "DateOfEndOfReportingPeriod" {
+                file_to_date.insert(source_file.clone(), val.clone());
+                file_context_to_date.insert((source_file.clone(), context_id.clone()), val);
+            } else if tag_name == "NatureOfReportStandaloneConsolidated" {
+                let report_type_upper = val.to_uppercase();
+                file_to_type.insert(source_file.clone(), report_type_upper.clone());
+                available_types_set.insert(report_type_upper);
+            }
+        }
+
+        // Convert discovered unique types to a clean vector for the dropdown options list
+        let mut available_types: Vec<String> = available_types_set.into_iter().collect();
+        if available_types.is_empty() {
+            available_types = vec!["CONSOLIDATED".to_string(), "STANDALONE".to_string()];
+        }
+
+        // Capture active choice from dropdown selection parameter (timeframe), defaulting safely if empty
+        let mut active_report_type = timeframe.trim().to_uppercase();
+        if active_report_type.is_empty() {
+            if available_types.contains(&"CONSOLIDATED".to_string()) {
+                active_report_type = "CONSOLIDATED".to_string();
+            } else {
+                active_report_type = available_types[0].clone();
+            }
+        }
+
+        // 🚀 STEP 2: MATRIX POPULATION VIA TRUE COORDINATES
         let mut unique_filing_dates: Vec<String> = Vec::new();
         let mut matrix_data_map: HashMap<String, String> = HashMap::new();
 
-        for (source_file, tag_name, raw_value) in &raw_records {
-            let clean_file = source_file.replace(".xml", "");
-            let parts: Vec<&str> = clean_file.split('_').collect();
-            if parts.len() != 2 { continue; }
+        for (source_file, tag_name, context_id, raw_value) in &raw_records {
+            let true_date = file_context_to_date.get(&(source_file.clone(), context_id.clone()))
+                .cloned()
+                .unwrap_or_else(|| file_to_date.get(source_file).cloned().unwrap_or_default());
+                
+            let report_type = file_to_type.get(source_file).cloned().unwrap_or_default();
 
-            let filing_date = parts[0].to_string();
-            let report_type = parts[1].to_uppercase();
+            if true_date.is_empty() { continue; }
 
-            if report_type == "CONSOLIDATED" {
-                if !unique_filing_dates.contains(&filing_date) {
-                    unique_filing_dates.push(filing_date.clone());
+            // Route data matching the active user-selected dropdown item and specific context layout
+            if report_type.contains(&active_report_type) && context_id == "OneD" {
+                if !unique_filing_dates.contains(&true_date) {
+                    unique_filing_dates.push(true_date.clone());
                 }
-                let data_lookup_key = format!("{}__{}", filing_date, tag_name);
+                let data_lookup_key = format!("{}__{}", true_date, tag_name);
                 matrix_data_map.entry(data_lookup_key).or_insert_with(|| raw_value.clone());
             }
         }
 
-        unique_filing_dates.sort_by(|a, b| map_filing_to_sortable_score(b).cmp(&map_filing_to_sortable_score(a)));
+        // 🎯 ISO DATE DESCENDING CHRONOLOGY: Clean "YYYY-MM-DD" strings sort perfectly out-of-the-box!
+        unique_filing_dates.sort_by(|a, b| b.cmp(a));
 
         // Helper function to extract numerical values safely
         let get_float_val = |date: &str, tag: &str| -> f64 {
@@ -464,10 +487,29 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
 
         Ok(json!({
             "type": "card",
-            "title": "Consolidated Financial Performance Tree",
-            "subtitle": "// INTERACTIVE DROPDOWN ACCOUNTING MATRIX // CONSOLIDATED TIME LOG",
+            "title": format!("{} Financial Performance Tree", transform_camel_case(&active_report_type.to_lowercase())),
+            "subtitle": format!("// INTERACTIVE DROPDOWN ACCOUNTING MATRIX // {} TIME LOG", active_report_type),
             "footer": format!("Total active tracked accounting metrics: {} tags spanning {} quarters", total_children_count, unique_filing_dates.len()),
             "children": [
+                /* 🚀 TOP ROW CONTROLLER: Locks items on opposite sides matching your StockChart layout */
+                {
+                    "type": "container",
+                    "className": "flex flex-row justify-between items-center w-full mt-1 mb-4 pointer-events-auto",
+                    "style": { "display": "flex", "flexDirection": "row", "justifyContent": "between" },
+                    "children": [
+                        {
+                            "type": "text",
+                            "className": "text-xs font-semibold font-mono uppercase opacity-60 text-neutral-400", 
+                            "value": format!("Current Matrix Perspective: // {}", active_report_type)
+                        },
+                        {
+                            "type": "select",
+                            "action_target": "quarterly_financials", 
+                            "default_value": active_report_type,
+                            "options": available_types
+                        }
+                    ]
+                },
                 /* 🚀 CHILD ONE: HEALTH AND TRAJECTORY SIGNALS LEDGER */
                 {
                     "type": "container",
