@@ -1,5 +1,3 @@
-// stock-app/ui/backend/src/commands/data_loader.rs
-
 use std::path::{Path, PathBuf};
 use std::fs;
 use std::sync::RwLock;
@@ -66,32 +64,30 @@ impl WorkspaceDataContext {
             }
         }
 
-        // 2. Cache Miss: Locate resource
+        // 2. Cache Miss: Reconstruct disk path dynamically supporting infinite subfolders
         let mut target_disk_path = self.ticker_folder_path.clone();
+        for component in target_path_selector.split('/') {
+            if !component.is_empty() {
+                target_disk_path.push(component);
+            }
+        }
+
         let mut loaded_value = json!({});
 
-        if target_path_selector.contains('/') {
-            // 🎯 CASE A: TARGET SINGLE SPECIFIC FILE (e.g., "nse_historical-chart-data/1D" or "filings/report.md")
-            let parts: Vec<&str> = target_path_selector.split('/').collect();
-            let folder_name = parts[0];
-            let file_target = parts[1];
-
-            target_disk_path.push(folder_name);
-
-            // If the selector already contains an extension (like "report.md"), use it. Otherwise, assume .json fallback.
-            if Path::new(file_target).extension().is_some() {
-                target_disk_path.push(file_target);
-            } else {
-                target_disk_path.push(format!("{}.json", file_target));
+        // 🎯 FIX 1: Auto-Fallback to .json extension if it doesn't exist as-is and has no extension specified
+        if !target_disk_path.exists() && target_disk_path.extension().is_none() {
+            let mut json_fallback_path = target_disk_path.clone();
+            json_fallback_path.set_extension("json");
+            if json_fallback_path.is_file() {
+                target_disk_path = json_fallback_path;
             }
+        }
 
-            if target_disk_path.exists() && target_disk_path.is_file() {
+        // 🎯 FIX 2: Evaluate physical disk node types safely supporting deep trees
+        if target_disk_path.exists() {
+            if target_disk_path.is_file() {
                 loaded_value = Self::read_and_decode_file(&target_disk_path);
-            }
-        } else {
-            // 🎯 CASE B: TARGET WHOLE FOLDER
-            target_disk_path.push(target_path_selector);
-            if target_disk_path.exists() && target_disk_path.is_dir() {
+            } else if target_disk_path.is_dir() {
                 if let Some(folder_json) = Self::ingest_directory_tree(&target_disk_path) {
                     loaded_value = folder_json;
                 }
@@ -129,9 +125,11 @@ impl WorkspaceDataContext {
                 json!({})
             }
             "md" | "txt" | "csv" => {
-                // Return text formats as a direct readable string primitive
-                let text_content = fs::read_to_string(file_path).unwrap_or_default();
-                json!(text_content)
+                if let Ok(text_content) = fs::read_to_string(file_path) {
+                    json!(text_content)
+                } else {
+                    json!("")
+                }
             }
             "parquet" | "bin" => {
                 if let Ok(bytes) = fs::read(file_path) {
@@ -145,7 +143,7 @@ impl WorkspaceDataContext {
                     json!({})
                 }
             }
-            _ => json!({}) // Fallback for unhandled types
+            _ => json!({})
         }
     }
 
@@ -168,12 +166,8 @@ impl WorkspaceDataContext {
 
         if total_files == 0 { return None; }
         
-        // If it's a single file inside the directory, collapse it flat. Otherwise, return the map framework wrapper.
-        if total_files == 1 {
-            nested_map.into_values().next()
-        } else {
-            Some(json!(nested_map))
-        }
+        // 🎯 FIX 3: Removed volatile flat collapsing to keep response data structures predictable
+        Some(json!(nested_map))
     }
 
     pub fn invalidate_ticker(ticker: &str) {
