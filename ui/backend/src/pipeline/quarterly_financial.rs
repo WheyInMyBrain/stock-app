@@ -459,6 +459,52 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
             }));
         }
 
+        // 🛠️ PASS 1: UNIVERSAL HARVESTER FOR ALL SEBI SEGMENT LABELS
+        // Captures both *Revenue01D* and *Results01D* description text tags universally
+        let mut context_to_seg_name: HashMap<(String, String), String> = HashMap::new();
+        for (source_file, tag_name, context_id, raw_value) in &raw_records {
+            if tag_name == "DescriptionOfReportableSegment" {
+                let cleaned = raw_value.trim().to_string();
+                if !cleaned.is_empty() && cleaned != "NA" {
+                    context_to_seg_name.insert((source_file.clone(), context_id.clone()), cleaned);
+                }
+            }
+        }
+
+        // 🛠️ PASS 2: COALESCE VALUES INTO A TIMELINE MATRIX WITH COGNIZANT CONTEXT MATCHING
+        let mut unique_revenue_segments = std::collections::BTreeSet::new();
+        let mut unique_profit_segments = std::collections::BTreeSet::new();
+        let mut segment_revenue_matrix: HashMap<(String, String), String> = HashMap::new();
+        let mut segment_profit_matrix: HashMap<(String, String), String> = HashMap::new();
+
+        // Enforce prefix checks ("One" for Quarterly, "Four" for Annual) to prevent cross-quarter duplication
+        let segment_prefix = if active_period_type == "ANNUALLY" { "Four" } else { "One" };
+
+        for (source_file, tag_name, context_id, raw_value) in &raw_records {
+            let true_date = file_context_to_date.get(&(source_file.clone(), context_id.clone()))
+                .cloned()
+                .unwrap_or_else(|| file_to_date.get(source_file).cloned().unwrap_or_default());
+                
+            let report_type = file_to_type.get(source_file).cloned().unwrap_or_default();
+
+            if true_date.is_empty() || !report_type.contains(&active_report_type) { continue; }
+            if target_context_id == "FourD" && !true_date.contains("-03-") { continue; }
+
+            // Filters for contexts starting with "One" or "Four"
+            if context_id.starts_with(segment_prefix) {
+                // Looks up name via the matching context key (handles Revenue01D and Results01D dynamically)
+                if let Some(seg_name) = context_to_seg_name.get(&(source_file.clone(), context_id.clone())) {
+                    if tag_name == "SegmentRevenue" {
+                        unique_revenue_segments.insert(seg_name.clone());
+                        segment_revenue_matrix.insert((true_date.clone(), seg_name.clone()), raw_value.clone());
+                    } else if tag_name == "SegmentProfitLossBeforeTaxAndFinanceCosts" {
+                        unique_profit_segments.insert(seg_name.clone());
+                        segment_profit_matrix.insert((true_date.clone(), seg_name.clone()), raw_value.clone());
+                    }
+                }
+            }
+        }
+
         // Unaltered accounting sequence matching our master complete checklist
         let structured_accounting_tree = vec![
             HierarchyRowConfig { tag_name: "Income", is_parent: true, parent_id: "income_group" },
@@ -507,17 +553,25 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
             HierarchyRowConfig { tag_name: "DilutedEarningsLossPerShareFromContinuingAndDiscontinuedOperations", is_parent: false, parent_id: "eps_group" },
         ];
 
-        let total_children_count = structured_accounting_tree.len() + ratio_row_definitions.len() + 1;
+        // 🎯 STEP 1: METRIC COUNTER CALIBRATION
+        let total_children_count = structured_accounting_tree.len() 
+            + ratio_row_definitions.len() 
+            + unique_revenue_segments.len() 
+            + unique_profit_segments.len() 
+            + 1;
 
+        // 🎯 STEP 2: SIMPLIFIED ACCOUNTING RENDERING LOOP
         for config in structured_accounting_tree {
             let mut row_cells = Vec::new();
             let clean_row_header = transform_camel_case(config.tag_name);
 
+            // 1. Build the primary line description cell
             row_cells.push(json!({
                 "type": "text",
                 "value": clean_row_header
             }));
 
+            // 2. Fetch and format corresponding numbers across columns
             for date in &unique_filing_dates {
                 let lookup_key = format!("{}__{}", date, config.tag_name);
                 let raw_amount = matrix_data_map.get(&lookup_key).map(|s| s.as_str()).unwrap_or("");
@@ -529,17 +583,94 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
                 }));
             }
 
+            // 🎯 DYNAMIC ACCORDION TRIGGER: Turn ProfitBeforeTax into a parent row if segment data is present
+            let is_parent_row = if config.tag_name == "ProfitBeforeTax" && !unique_profit_segments.is_empty() {
+                true
+            } else {
+                config.is_parent
+            };
+
             let has_parent_group = !config.parent_id.is_empty();
             let is_child_row = has_parent_group && !config.is_parent;
 
+            // Push the main core accounting row into the compiler checklist
             compiled_rows.push(json!({
                 "type": "table_row",
-                "is_parent": config.is_parent,
+                "is_parent": is_parent_row,
                 "is_child": is_child_row,
                 "parent_id": if has_parent_group { Some(config.parent_id.to_string()) } else { None },
                 "align_right_values": true,
                 "cells": row_cells
             }));
+
+            // 🎛️ INJECTION LAYER 1: Append Volume Segments to "income_group" (Flattens multi-nesting)
+            if config.tag_name == "RevenueFromOperations" {
+                for seg_name in &unique_revenue_segments {
+                    let mut seg_cells = Vec::new();
+                    seg_cells.push(json!({
+                        "type": "text",
+                        "style": { "paddingLeft": "20px", "fontStyle": "italic", "opacity": "0.7" },
+                        "value": format!("  ↳ Vol: {}", seg_name)
+                    }));
+
+                    for date in &unique_filing_dates {
+                        let raw_amount = segment_revenue_matrix.get(&(date.clone(), seg_name.clone()))
+                            .map(|s| s.as_str())
+                            .unwrap_or("");
+                        let formatted_amount = format_financial_number(raw_amount);
+                        seg_cells.push(json!({
+                            "type": "text",
+                            "style": { "fontStyle": "italic", "opacity": "0.7" },
+                            "value": formatted_amount
+                        }));
+                    }
+
+                    compiled_rows.push(json!({
+                        "type": "table_row",
+                        "is_parent": false,
+                        "is_child": true,
+                        "parent_id": Some("income_group".to_string()),
+                        "align_right_values": true,
+                        "cells": seg_cells
+                    }));
+                }
+            }
+
+            // 🎛️ INJECTION LAYER 2: CREATE COLLAPSIBLE EBIT DROPDOWN ATTACHED TO PROFIT BEFORE TAX
+            if config.tag_name == "ProfitBeforeTax" {
+                for seg_name in &unique_profit_segments {
+                    let mut seg_cells = Vec::new();
+                    
+                    // Indent the label text to make it clear that it belongs to the parent row above
+                    seg_cells.push(json!({
+                        "type": "text",
+                        "style": { "paddingLeft": "16px", "fontStyle": "italic", "opacity": "0.7" },
+                        "value": format!("↳ EBIT: {}", seg_name)
+                    }));
+
+                    for date in &unique_filing_dates {
+                        let raw_amount = segment_profit_matrix.get(&(date.clone(), seg_name.clone()))
+                            .map(|s| s.as_str())
+                            .unwrap_or("");
+                        let formatted_amount = format_financial_number(raw_amount);
+                        seg_cells.push(json!({
+                            "type": "text",
+                            "style": { "fontStyle": "italic", "opacity": "0.7" },
+                            "value": formatted_amount
+                        }));
+                    }
+
+                    compiled_rows.push(json!({
+                        "type": "table_row",
+                        "is_parent": false,
+                        "is_child": true,
+                        // 🎯 ATTACHMENT LOCK: Bind this child directly to ProfitBeforeTax
+                        "parent_id": Some("ProfitBeforeTax".to_string()),
+                        "align_right_values": true,
+                        "cells": seg_cells
+                    }));
+                }
+            }
         }
 
         let mut table_headers = vec!["Financial Line Item".to_string()];
