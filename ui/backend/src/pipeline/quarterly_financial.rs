@@ -116,20 +116,54 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
             }
         }
 
-        // Convert discovered unique types to a clean vector for the dropdown options list
+        // 🚀 STEP 1: DYNAMIC PERSPECTIVE & INTERVAL UNIFIED DECODER (SINGLE COMPONENT)
         let mut available_types: Vec<String> = available_types_set.into_iter().collect();
         if available_types.is_empty() {
             available_types = vec!["CONSOLIDATED".to_string(), "STANDALONE".to_string()];
         }
 
-        // Capture active choice from dropdown selection parameter (timeframe), defaulting safely if empty
-        let mut active_report_type = timeframe.trim().to_uppercase();
-        if active_report_type.is_empty() {
-            if available_types.contains(&"CONSOLIDATED".to_string()) {
+        // Establish the baseline default states
+        let mut active_report_type = "CONSOLIDATED".to_string();
+        let mut active_period_type = "QUARTERLY".to_string();
+
+        let raw_timeframe = timeframe.trim().to_uppercase();
+        if !raw_timeframe.is_empty() {
+            // Detect reporting viewpoint boundaries from the single unified option string
+            if raw_timeframe.contains("STANDALONE") {
+                active_report_type = "STANDALONE".to_string();
+            } else if raw_timeframe.contains("CONSOLIDATED") {
                 active_report_type = "CONSOLIDATED".to_string();
-            } else {
-                active_report_type = available_types[0].clone();
             }
+
+            // Detect interval operational frequency parameters
+            if raw_timeframe.contains("ANNUAL") || raw_timeframe.contains("YEAR") {
+                active_period_type = "ANNUALLY".to_string();
+            } else if raw_timeframe.contains("QUARTER") {
+                active_period_type = "QUARTERLY".to_string();
+            }
+        }
+
+        // Ensure defaults match available dataset options safely
+        if !available_types.contains(&active_report_type) {
+            active_report_type = available_types[0].clone();
+        }
+
+        // Map interval choices directly to their respective SEBI XBRL context references
+        let target_context_id = if active_period_type == "ANNUALLY" { "FourD" } else { "OneD" };
+
+        // Define the clean label for the active single dropdown state
+        let current_active_select_label = format!(
+            "{} - {}", 
+            transform_camel_case(&active_report_type.to_lowercase()), 
+            if active_period_type == "ANNUALLY" { "Annually" } else { "Quarterly" }
+        );
+
+        // Generate the 4 clean combined dropdown options dynamically based on harvested data types
+        let mut unified_dropdown_options = Vec::new();
+        for t in &available_types {
+            let t_label = transform_camel_case(&t.to_lowercase());
+            unified_dropdown_options.push(format!("{} - Quarterly", t_label));
+            unified_dropdown_options.push(format!("{} - Annually", t_label));
         }
 
         // 🚀 STEP 2: MATRIX POPULATION VIA TRUE COORDINATES
@@ -145,8 +179,14 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
 
             if true_date.is_empty() { continue; }
 
-            // Route data matching the active user-selected dropdown item and specific context layout
-            if report_type.contains(&active_report_type) && context_id == "OneD" {
+            // Route data matching the active selection properties precisely
+            if report_type.contains(&active_report_type) && context_id == target_context_id {
+                
+                // 🎯 MARCH YEAR-END FILTER: If tracking Annually (FourD), limit strictly to March endpoints 
+                if target_context_id == "FourD" && !true_date.contains("-03-") {
+                    continue;
+                }
+
                 if !unique_filing_dates.contains(&true_date) {
                     unique_filing_dates.push(true_date.clone());
                 }
@@ -155,7 +195,7 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
             }
         }
 
-        // 🎯 ISO DATE DESCENDING CHRONOLOGY: Clean "YYYY-MM-DD" strings sort perfectly out-of-the-box!
+        // 🎯 ISO DATE DESCENDING CHRONOLOGY
         unique_filing_dates.sort_by(|a, b| b.cmp(a));
 
         // Helper function to extract numerical values safely
@@ -272,7 +312,7 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
             ("Effective Tax Rate", "ETR"),
         ];
 
-        // 1. Precompute floats into an indexable coordinate table for reliable multi-quarter time lookups
+        // 🚀 1. Precompute floats into an indexable coordinate table for reliable multi-quarter time lookups
         let mut ratio_float_matrix: HashMap<(String, String), f64> = HashMap::new();
         for (_, identifier) in &ratio_row_definitions {
             for date in &unique_filing_dates {
@@ -297,13 +337,17 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
                         let pbt = get_float_val(date, "ProfitBeforeTax");
                         if pbt > 0.0 { (tax / pbt) * 100.0 } else { 0.0 }
                     },
+                    // 🎯 DIRECT DATA EXTRACTORS: Pull native tags directly from your Parquet/XML structure
+                    "DER" => get_float_val(date, "DebtEquityRatio"),
+                    "DSCR" => get_float_val(date, "DebtServiceCoverageRatio"),
+                    "ISCR" => get_float_val(date, "InterestServiceCoverageRatio"),
                     _ => 0.0
                 };
                 ratio_float_matrix.insert((identifier.to_string(), date.clone()), calculated_val);
             }
         }
 
-        // 2. Build the structural ratio rows with raw hex color mapping (No nested children velocity popups)
+        // 🚀 2. Build the structural ratio rows with raw hex color mapping
         for (label, identifier) in &ratio_row_definitions {
             let mut ratio_cells = Vec::new();
             ratio_cells.push(json!({ "type": "text", "value": label.to_string() }));
@@ -311,23 +355,39 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
             for date in &unique_filing_dates {
                 let current_val = *ratio_float_matrix.get(&(identifier.to_string(), date.clone())).unwrap_or(&0.0);
 
-                // Enforce zero-anchored sigmoid gradient hex parameters natively
+                // 🎯 CUSTOM HEALTH COLOR GRADIENTS MATCHING FINANCIAL REALITY
                 let hex_color = match *identifier {
                     "OPM" | "NPM" => {
-                        if current_val <= 0.0 { "#EF4444" }      // Deep Warning Crimson Red
-                        else if current_val < 10.0 { "#FB923C" } // Soft Amber Orange
-                        else if current_val < 20.0 { "#FBBF24" } // Neutral Baseline Yellow
-                        else { "#34D399" }                       // Healthy Growth Green
+                        if current_val <= 0.0 { "#EF4444" }      // Crimson Red (Loss/Negative margin)
+                        else if current_val < 10.0 { "#FB923C" } // Orange (Low margin)
+                        else if current_val < 20.0 { "#FBBF24" } // Yellow (Nominal baseline)
+                        else { "#34D399" }                       // Green (High efficiency)
                     },
                     "ECI" | "DCSF" => {
-                        if current_val > 35.0 { "#EF4444" }      // High-risk Overhead Strain
-                        else if current_val > 15.0 { "#FB923C" }
-                        else { "#34D399" }
+                        if current_val > 35.0 { "#EF4444" }      // Red (High-overhead stress)
+                        else if current_val > 15.0 { "#FB923C" } // Orange
+                        else { "#34D399" }                       // Green (Optimized)
+                    },
+                    "DER" => {
+                        if current_val > 2.0 { "#EF4444" }       // Red (Over-leveraged balance sheet)
+                        else if current_val > 1.0 { "#FB923C" }  // Orange (Moderate leverage)
+                        else { "#34D399" }                       // Green (Conservative/Safe)
+                    },
+                    "DSCR" | "ISCR" => {
+                        if current_val == 0.0 { "#737373" }      // Muted Grey (No obligations)
+                        else if current_val < 1.0 { "#EF4444" }  // Red (Default Risk - Earnings don't cover debt servicing)
+                        else if current_val < 2.0 { "#FB923C" }  // Orange (Tight coverage)
+                        else { "#34D399" }                       // Green (Robust coverage buffer)
                     },
                     _ => "#E5E5E5"
                 };
 
-                let base_formatted_text = if *identifier == "DCSF" { format!("{:.2}x", current_val) } else { format!("{:.2}%", current_val) };
+                // 🎯 FORMAT RESOLUTION: Use 'x' multiplier for ratios/coverage, and '%' for margins/intensities
+                let base_formatted_text = if matches!(*identifier, "DCSF" | "DER" | "DSCR" | "ISCR") {
+                    format!("{:.2}x", current_val)
+                } else {
+                    format!("{:.2}%", current_val)
+                };
 
                 ratio_cells.push(json!({
                     "type": "text",
@@ -500,13 +560,13 @@ impl WorkspaceModule for QuarterlyFinancialsCard {
                         {
                             "type": "text",
                             "className": "text-xs font-semibold font-mono uppercase opacity-60 text-neutral-400", 
-                            "value": format!("Current Matrix Perspective: // {}", active_report_type)
+                            "value": "Matrix Perspective Control Panel:"
                         },
                         {
                             "type": "select",
                             "action_target": "quarterly_financials", 
-                            "default_value": active_report_type,
-                            "options": available_types
+                            "default_value": current_active_select_label,
+                            "options": unified_dropdown_options
                         }
                     ]
                 },
