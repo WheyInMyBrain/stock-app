@@ -6,6 +6,8 @@ pub mod investors_complain;
 pub mod board_of_director;
 pub mod quarterly_financial;
 pub mod investors;
+pub mod balance_sheet;
+pub mod cashflow;
 pub mod popup;
 
 use serde_json::Value;
