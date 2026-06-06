@@ -246,7 +246,7 @@ impl WorkspaceModule for BoardOfDirectorCard {
                 let display_words: Vec<String> = name.split_whitespace().map(|w| {
                     let mut chars = w.chars();
                     match chars.next() {
-                        Some(f) => f.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+                        Some(f) => format!("{}{}", f.to_uppercase().collect::<String>(), chars.as_str().to_lowercase()),
                         None => String::new(),
                     }
                 }).collect();
@@ -299,7 +299,7 @@ impl WorkspaceModule for BoardOfDirectorCard {
                 let member_words: Vec<String> = profile.member_name.split_whitespace().map(|w| {
                     let mut chars = w.chars();
                     match chars.next() {
-                        Some(f) => f.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
+                        Some(f) => format!("{}{}", f.to_uppercase().collect::<String>(), chars.as_str().to_lowercase()),
                         None => String::new(),
                     }
                 }).collect();

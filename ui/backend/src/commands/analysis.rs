@@ -16,14 +16,18 @@ pub async fn trigger_core_analysis(
     let final_dir = data_dir.unwrap_or_else(|| "../data".to_string());
     let final_modules = modules.unwrap_or_else(|| "all".to_string());
 
+    // 🎯 FIX: Clone variables to move into the thread closure, keeping originals alive below
+    let ticker_for_thread = ticker.clone();
+    let modules_for_thread = final_modules.clone();
+
     // 🧠 Offload execution to a separate OS background thread to prevent GUI lockups
     tauri::async_runtime::spawn_blocking(move || {
         analysis::runner::run_global_analysis_pipeline(
-            &ticker,
+            &ticker_for_thread,
             final_wacc,
             final_g,
             &final_dir,
-            &final_modules,
+            &modules_for_thread,
         );
     })
     .await

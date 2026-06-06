@@ -6,3 +6,4 @@ pub mod ticker;
 pub mod pipeline;
 pub mod data_loader;
 pub mod popup_manager;
+pub mod analysis;

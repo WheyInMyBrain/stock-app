@@ -34,6 +34,7 @@ fn get_module_registry() -> Vec<Box<dyn WorkspaceModule>> {
         Box::new(crate::pipeline::balance_sheet::BalanceSheetCard),
         Box::new(crate::pipeline::cashflow::CashFlowCard),
         Box::new(crate::pipeline::financial_multiples::CorporateMultiplesCard),
+        Box::new(crate::pipeline::dcf_projections::DcfProjectionsCard),
     ]
 }
 

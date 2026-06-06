@@ -10,6 +10,7 @@ pub mod financial_tables;
 pub mod balance_sheet;
 pub mod cashflow;
 pub mod financial_multiples;
+pub mod dcf_projections;
 pub mod popup;
 
 use serde_json::Value;
