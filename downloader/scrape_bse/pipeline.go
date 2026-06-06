@@ -12,44 +12,11 @@ import (
 	"strings"
 )
 
-// ExecuteWithWarmClient serves as the blazing-fast daemon gateway for the BSE stack.
-// It skips creating fresh client structures, reusing the pre-warmed connection pointer pool.
-func ExecuteWithWarmClient(client *BSEClient, symbol string, workerCount int, targetApi string, globalDataDir string) (string, error) {
-    // 1. Resolve the alphabetic ticker symbol ("IMFA") into its BSE numeric code ("533047")
-    fmt.Printf("[bse_scrape] 🔍 Performing smart search lookup for ticker token: %s...\n", symbol)
-    scripCode, err := GetScripCode(client, symbol, globalDataDir)
-    if err != nil {
-        return "", fmt.Errorf("BSE identifier mapping failed: %w", err)
-    }
-    fmt.Printf("[bse_scrape] 🎯 Successfully mapped %s ----> BSE Scrip Code: %s\n", symbol, scripCode)
-
-    // 2. Dynamic endpoint array loaded from endpoints.go
-    endpoints := GetAllEndpoints()
-    var capturedJSON string
-
-    for _, endpoint := range endpoints {
-        // If a specific API is requested, bypass everything that doesn't match its endpoint name!
-        if targetApi != "" && endpoint.Name() != targetApi {
-            continue
-        }
-
-        fmt.Printf("\n[bse_scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
-
-        // Execute each strategy using the shared, authenticated client and resolved scripCode
-        rawBytes, err := executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir)
-        if err != nil {
-            fmt.Fprintf(os.Stderr, "[bse_scrape] ⚠️ Error running pipeline %s: %v\n", endpoint.Name(), err)
-            return "", err
-        }
-
-        // If the execution pulled valid network data bytes, cast them to a string reference frame
-        if len(rawBytes) > 0 {
-            capturedJSON = string(rawBytes)
-        }
-    }
-
-    return capturedJSON, nil
-}
+const (
+    ColorBlue  = "\033[34m"
+    ColorRed   = "\033[31m"
+    ColorReset = "\033[0m"
+)
 
 // UniversalRecord standardizes asset data rows decoded by individual BSE endpoints.
 type UniversalRecord struct {
@@ -64,43 +31,87 @@ type BSEFilingsEndpoint interface {
 	ParseResponse(body io.Reader) ([]UniversalRecord, error)
 }
 
+// ExecuteWithWarmClient serves as the blazing-fast daemon gateway for the BSE stack.
+func ExecuteWithWarmClient(client *BSEClient, symbol string, workerCount int, targetApi string, globalDataDir string, onlyJson bool) (string, error) {
+    // 🔵 Unified Log: Smart Search Tracker Initiation
+    fmt.Printf("%s[GO-downloader] [bse_scrape] 🔍 Performing smart search lookup for ticker token: %s...%s\n", ColorBlue, symbol, ColorReset)
+    scripCode, err := GetScripCode(client, symbol, globalDataDir)
+    if err != nil {
+        return "", fmt.Errorf("BSE identifier mapping failed: %w", err)
+    }
+    // 🔵 Unified Log: Resolution Handshake Successful
+    fmt.Printf("%s[GO-downloader] 🎯 Successfully mapped %s ----> BSE Scrip Code: %s%s\n", ColorBlue, symbol, scripCode, ColorReset)
+
+    // 2. Dynamic endpoint array loaded from endpoints.go
+    endpoints := GetAllEndpoints()
+    var capturedJSON string
+
+    for _, endpoint := range endpoints {
+        // If a specific API is requested, bypass everything that doesn't match its endpoint name!
+        if targetApi != "" && endpoint.Name() != targetApi {
+            continue
+        }
+
+        // 🔵 Unified Log: Sequential Pipeline Run Target Notification
+        fmt.Printf("\n%s[GO-downloader] 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, endpoint.Name(), ColorReset)
+
+        // Execute each strategy using the shared, authenticated client and resolved scripCode
+        rawBytes, err := executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, onlyJson)
+        if err != nil {
+            // 🚨 Fault Isolation: Marked cleanly in Red
+            fmt.Fprintf(os.Stderr, "%s[GO-downloader] ⚠️ Error running pipeline %s: %v%s\n", ColorRed, endpoint.Name(), err, ColorReset)
+            return "", err
+        }
+
+        // If the execution pulled valid network data bytes, cast them to a string reference frame
+        if len(rawBytes) > 0 {
+            capturedJSON = string(rawBytes)
+        }
+    }
+
+    return capturedJSON, nil
+}
+
 // ExecuteAll serves as the single execution gateway from main.go for the BSE legacy pipeline network.
-func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir string) error {
-	client, err := NewBSEClient()
-	if err != nil {
-		return fmt.Errorf("BSE session initialization failed: %w", err)
-	}
+func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir string, onlyJson bool) error {
+    client, err := NewBSEClient()
+    if err != nil {
+        return fmt.Errorf("BSE session initialization failed: %w", err)
+    }
 
-	fmt.Printf("[bse_scrape] 🔍 Performing smart search lookup for ticker token: %s...\n", symbol)
-	scripCode, err := GetScripCode(client, symbol, globalDataDir)
-	if err != nil {
-		return fmt.Errorf("BSE identifier mapping failed: %w", err)
-	}
-	fmt.Printf("[bse_scrape] 🎯 Successfully mapped %s ----> BSE Scrip Code: %s\n", symbol, scripCode)
+    // 🔵 Unified Log: CLI Smart Search Lookup Tracker
+    fmt.Printf("%s[GO-downloader] 🔍 Performing smart search lookup for ticker token: %s...%s\n", ColorBlue, symbol, ColorReset)
+    scripCode, err := GetScripCode(client, symbol, globalDataDir)
+    if err != nil {
+        return fmt.Errorf("BSE identifier mapping failed: %w", err)
+    }
+    // 🔵 Unified Log: CLI Resolution Handshake Successful
+    fmt.Printf("%s[GO-downloader] 🎯 Successfully mapped %s ----> BSE Scrip Code: %s%s\n", ColorBlue, symbol, scripCode, ColorReset)
 
-	endpoints := GetAllEndpoints()
-	if len(endpoints) == 0 {
-		fmt.Println("[bse_scrape] ℹ️ No active BSE endpoint strategies registered yet.")
-		return nil
-	}
+    endpoints := GetAllEndpoints()
+    if len(endpoints) == 0 {
+        fmt.Printf("%s[GO-downloader] 📌 No active BSE endpoint strategies registered yet.%s\n", ColorBlue, ColorReset)
+        return nil
+    }
 
-	for _, endpoint := range endpoints {
-		if targetApi != "" && endpoint.Name() != targetApi {
-			continue
-		}
+    for _, endpoint := range endpoints {
+        if targetApi != "" && endpoint.Name() != targetApi {
+            continue
+        }
 
-		fmt.Printf("\n[bse_scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
+        // 🔵 Unified Log: CLI Mode Pipeline Execution Notice
+        fmt.Printf("\n%s[GO-downloader] 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, endpoint.Name(), ColorReset)
 
-		// 🎯 FIXED: Discard the streaming byte outputs to match updated 2-value return signature
-		_, _ = executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir)
-	}
+        // 🎯 FIXED: Forward onlyJson into the execution strategy to short-circuit corporate document downloads
+        _, _ = executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, onlyJson)
+    }
 
-	return nil
+    return nil
 }
 
 // executeStrategy maps out the processing loop safely.
 // Updated signature syntax schema to return ([]byte, error) natively up the tracking context chain.
-func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFilingsEndpoint, workerCount int, globalDataDir string) ([]byte, error) {
+func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFilingsEndpoint, workerCount int, globalDataDir string, onlyJson bool) ([]byte, error) {
     var outputDir string
 
     // If Rust provides an explicit global data directory path, anchor it instantly!
@@ -148,7 +159,8 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
 
         for _, dir := range directives {
             targetURL := dir.DownloadURL[15:]
-            fmt.Printf("[bse_scrape] 📊 Fetching institutional market transaction layer: %s\n", dir.Period)
+            // 🔵 Unified Log: Blue institutional deal tracking
+            fmt.Printf("%s[GO-downloader] 📊 Fetching institutional market transaction layer: %s%s\n", ColorBlue, dir.Period, ColorReset)
 
             req, err := http.NewRequest("GET", targetURL, nil)
             if err != nil {
@@ -161,12 +173,14 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
 
             resp, err := client.HTTPClient.Do(req)
             if err != nil {
-                fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Connection error dropped deal fetch for %s: %v\n", dir.Period, err)
+                // 🚨 Fault Isolation: Red dropout notice
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Connection error dropped deal fetch for %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
             if resp.StatusCode != http.StatusOK {
-                fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ BSE API rejected deal entry %s, status code: %d\n", dir.Period, resp.StatusCode)
+                // 🚨 Fault Isolation: Red API rejection notice
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ BSE API rejected deal entry %s, status code: %d%s\n", ColorRed, dir.Period, resp.StatusCode, ColorReset)
                 resp.Body.Close()
                 continue
             }
@@ -174,13 +188,15 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
             dealBytes, err := io.ReadAll(resp.Body)
             resp.Body.Close()
             if err != nil {
-                fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Read failed for transaction stream row %s: %v\n", dir.Period, err)
+                // 🚨 Fault Isolation: Red stream fault notice
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Read failed for transaction stream row %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
             dealPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", dir.Period))
             if err := os.WriteFile(dealPath, dealBytes, 0644); err != nil {
-                fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Failed writing transaction file to disk %s: %v\n", dir.Period, err)
+                // 🚨 Fault Isolation: Red cache write notice
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Failed writing transaction file to disk %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
             }
 
             lastDealsBytes = dealBytes
@@ -206,7 +222,8 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
 
         for _, dir := range directives {
             targetURL := dir.DownloadURL[17:] 
-            fmt.Printf("[bse_scrape] 📈 Processing and transforming tracking metrics: %s\n", dir.Period)
+            // 🔵 Unified Log: Blue market metrics processing tracker
+            fmt.Printf("%s[GO-downloader] 📈 Processing and transforming tracking metrics: %s%s\n", ColorBlue, dir.Period, ColorReset)
 
             req, err := http.NewRequest("GET", targetURL, nil)
             if err != nil {
@@ -219,19 +236,22 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
 
             resp, err := client.HTTPClient.Do(req)
             if err != nil {
-                fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Connection failure for chart horizon %s: %v\n", dir.Period, err)
+                // 🚨 Fault Isolation: Red connection failure notice
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Connection failure for chart horizon %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
             chartBytes, err := io.ReadAll(resp.Body)
             resp.Body.Close()
             if err != nil {
-                fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Read failed for chart stream %s: %v\n", dir.Period, err)
+                // 🚨 Fault Isolation: Red buffer stream fault notice
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Read failed for chart stream %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
             if err := chartAPI.ProcessAndNormalize(outputDir, dir.Period, chartBytes); err != nil {
-                fmt.Fprintf(os.Stderr, "[bse_scrape] ❌ Transformation loop failed for %s: %v\n", dir.Period, err)
+                // 🚨 Fault Isolation: Red alignment matrix notice
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Transformation loop failed for %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
             }
 
             lastChartBytes = chartBytes
@@ -270,9 +290,20 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
     }
 
     metaJSONPath := filepath.Join(outputDir, "endpoint-metadata.json")
-    fmt.Printf("[bse_scrape] 📝 Archiving raw response array payload to: %s\n", metaJSONPath)
+    // 🔵 Unified Log: Blue payload storage notification
+    fmt.Printf("%s[GO-downloader] 📝 Archiving raw response array payload to: %s%s\n", ColorBlue, metaJSONPath, ColorReset)
     if err := os.WriteFile(metaJSONPath, rawBytes, 0644); err != nil {
-        fmt.Fprintf(os.Stderr, "[bse_scrape] ⚠️ Warning: Failed saving metadata JSON file: %v\n", err)
+        // 🚨 Fault Isolation: Red write warnings for missing filesystems
+        fmt.Fprintf(os.Stderr, "%s[GO-downloader] ⚠️ Warning: Failed saving metadata JSON file: %v%s\n", ColorRed, err, ColorReset)
+    }
+
+    // ============================================================================
+    // 🎯 THE MASTER ONLY-JSON SHORT-CIRCUIT BREAKPOINT
+    // ============================================================================
+    if onlyJson {
+        // 🔵 Unified Log: Blue layout pass short-circuit indicator
+        fmt.Printf("%s[GO-downloader] 🟢 Only-JSON mode active for '%s'. Safely bypassing worker document scraping queues.%s\n", ColorBlue, endpoint.Name(), ColorReset)
+        return rawBytes, nil 
     }
 
     bodyReader := bytes.NewReader(rawBytes)
@@ -281,7 +312,8 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
         return nil, fmt.Errorf("failed parsing data payload for %s: %w", endpoint.Name(), err)
     }
 
-    fmt.Printf("[bse_scrape] Strategy '%s' identified %d files for %s.\n", endpoint.Name(), len(records), symbol)
+    // 🔵 Unified Log: Blue records synchronization overview
+    fmt.Printf("%s[GO-downloader] Strategy '%s' identified %d files for %s.%s\n", ColorBlue, endpoint.Name(), len(records), symbol, ColorReset)
 
     if len(records) == 0 {
         return rawBytes, nil 
@@ -297,12 +329,14 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
 
     for _, row := range records {
         if row.DownloadURL == "" || row.DownloadURL == "-" || len(row.DownloadURL) < 8 {
-            fmt.Printf("[bse_scrape] ⚠️ Skipping entry '%s': Invalid or empty download URL string.\n", row.Period)
+            // 🔵 Unified Log: Blue row exclusion notice
+            fmt.Printf("%s[GO-downloader] ⚠️ Skipping entry '%s': Invalid or empty download URL string.%s\n", ColorBlue, row.Period, ColorReset)
             continue
         }
 
         if row.DownloadURL[:4] != "http" {
-            fmt.Printf("[bse_scrape] ⚠️ Skipping entry '%s': Unsupported url prefix: %s\n", row.Period, row.DownloadURL)
+            // 🔵 Unified Log: Blue protocol security warning
+            fmt.Printf("%s[GO-downloader] ⚠️ Skipping entry '%s': Unsupported url prefix: %s%s\n", ColorBlue, row.Period, row.DownloadURL, ColorReset)
             continue
         }
 

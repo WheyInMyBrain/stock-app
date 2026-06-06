@@ -18,6 +18,7 @@ func main() {
     dataDirPtr := flag.String("data-dir", "", "Absolute path to the global unified data directory storage core")
     daemonPtr := flag.Bool("daemon", false, "Boot the application as a permanent in-memory scraping service layer")
     fromTimePtr := flag.String("from", "0", "Lower boundary Unix timestamp marker for dynamic real-time chart delta syncs")
+    onlyJsonPtr := flag.Bool("only-json", false, "Fetch only primary JSON metadata arrays and completely bypass heavy attachment document parsing loop files")
 
     flag.Usage = func() {
         fmt.Printf("Usage: go run ./downloader/main.go [options] SYMBOL\n\n")
@@ -35,7 +36,7 @@ func main() {
     // ============================================================================
     if *daemonPtr {
         RunPersistentDaemonMode(workerCount, globalDataDir)
-        return // Exits here so the application hooks into the endless RAM thread process loop
+        return
     }
 
     // ============================================================================
@@ -54,6 +55,8 @@ func main() {
                 *dataDirPtr = strings.Split(customArg, "=")[1]
             } else if strings.HasPrefix(customArg, "-from=") {
                 *fromTimePtr = strings.Split(customArg, "=")[1]
+            } else if customArg == "-only-json" || customArg == "--only-json" {
+                *onlyJsonPtr = true
             }
         }
     } else {
@@ -68,13 +71,12 @@ func main() {
 
     fmt.Printf("=== 🚀 Starting Multi-Exchange Extraction Engine for: %s ===\n", ticker)
     
-    // Note: If you want to use the `-from` flag value right inside your sequential single-pass loop,
-    // we can forward it by adding it as an extra argument string parameter to your package pipeline signatures.
+    // 🎯 Forward the onlyJson boolean state down into your core strategy execution pipelines
     if mode == "nse" || mode == "both" {
-        _ = scrape_nse.ExecuteAll(ticker, workerCount, targetApi, globalDataDir, *fromTimePtr)
+        _ = scrape_nse.ExecuteAll(ticker, workerCount, targetApi, globalDataDir, *fromTimePtr, *onlyJsonPtr)
     }
     if mode == "bse" || mode == "both" {
-        _ = scrape_bse.ExecuteAll(ticker, workerCount, targetApi, globalDataDir)
+        _ = scrape_bse.ExecuteAll(ticker, workerCount, targetApi, globalDataDir, *onlyJsonPtr)
     }
     fmt.Printf("\n=== 🎉 [%s] Pipelines Completed in %v ===\n", ticker, time.Since(startTime))
 }

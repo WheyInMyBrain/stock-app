@@ -12,8 +12,14 @@ import (
 	"strings"
 )
 
-// ExecuteWithWarmClient now returns the raw JSON payload as a string alongside any network errors
-func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, targetApi string, globalDataDir string, fromTime string) (string, error) {
+const (
+    ColorBlue  = "\033[34m"
+    ColorRed   = "\033[31m"
+    ColorReset = "\033[0m"
+)
+
+// ExecuteWithWarmClient now logs errors uniformly in Red with the downloader prefix
+func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, targetApi string, globalDataDir string, fromTime string, onlyJson bool) (string, error) {
     endpoints := GetAllEndpoints()
     var capturedJSON string
 
@@ -25,9 +31,10 @@ func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, ta
         }
 
         // 🎯 CAPTURE BOTH THE RAW BYTES AND ERROR FROM THE STRATEGY PASS
-        rawBytes, err := executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, fromTime)
+        rawBytes, err := executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, fromTime, onlyJson)
         if err != nil {
-            fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Error running warm pipeline %s: %v\n", endpoint.Name(), err)
+            // 🚨 Fault Isolation: Marked cleanly in Red
+            fmt.Fprintf(os.Stderr, "%s[GO-downloader] ⚠️ Error running warm pipeline %s: %v%s\n", ColorRed, endpoint.Name(), err, ColorReset)
             return "", err
         }
 
@@ -41,23 +48,25 @@ func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, ta
 }
 
 // ExecuteAll is the sole gateway for main.go.
-// It fetches all registered strategies from endpoints.go and runs them sequentially.
-func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir string, fromTime string) error {
+// All informational messages are now strictly wrapped in Blue with the unified terminal tracker prefix
+func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir string, fromTime string, onlyJson bool) error {
     client, err := NewNSEClient()
     if err != nil {
         return fmt.Errorf("NSE session initialization failed: %w", err)
     }
 
-    fmt.Printf("[nse_scrape] 🔍 Resolving dynamic ticker token mapping for: %s...\n", symbol)
+    // 🔵 Unified Log: Token Lookup Tracking
+    fmt.Printf("%s[GO-downloader] 🔍 Resolving dynamic ticker token mapping for: %s...%s\n", ColorBlue, symbol, ColorReset)
     scripCode, err := GetScripCode(client, symbol, globalDataDir)
     if err != nil {
         return fmt.Errorf("NSE identifier mapping failed: %w", err)
     }
-    fmt.Printf("[nse_scrape] 🎯 Successfully mapped %s ----> NSE Token ID: %s\n", symbol, scripCode)
+    // 🔵 Unified Log: Resolution Handshake Completed
+    fmt.Printf("%s[GO-downloader] 🎯 Successfully mapped %s ----> NSE Token ID: %s%s\n", ColorBlue, symbol, scripCode, ColorReset)
 
     endpoints := GetAllEndpoints()
     if len(endpoints) == 0 {
-        fmt.Println("[nse_scrape] ℹ️ No active NSE endpoint strategies registered yet.")
+        fmt.Printf("%s[GO-downloader] ℹ️ No active NSE endpoint strategies registered yet.%s\n", ColorBlue, ColorReset)
         return nil
     }
 
@@ -66,9 +75,10 @@ func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir 
             continue
         }
 
-        fmt.Printf("\n[nse_scrape] 🌀 Running downloader for target endpoint: %s\n", endpoint.Name())
+        // 🔵 Unified Log: Sequential Pipeline Execution Start
+        fmt.Printf("\n%s[GO-downloader] 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, endpoint.Name(), ColorReset)
 
-        _, _ = executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, fromTime)
+        _, _ = executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, fromTime, onlyJson)
     }
 
     return nil
@@ -76,7 +86,7 @@ func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir 
 
 // executeStrategy is unexported (private) to keep the package API surface tiny.
 // Added globalDataDir to signature to handle explicit path injection cleanly
-func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoint FilingsEndpoint, workerCount int, globalDataDir string, fromTime string) ([]byte, error) {
+func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoint FilingsEndpoint, workerCount int, globalDataDir string, fromTime string, onlyJson bool) ([]byte, error) {
     var outputDir string
 
     // If Rust provides an explicit global data directory path, anchor it instantly!
@@ -126,7 +136,7 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
         directives := chartAPI.ParseMultiTimeframes(symbol)
         for _, dir := range directives {
             targetURL := dir.DownloadURL[12:]
-            fmt.Printf("[scrape] 📈 Fetching historical market trend timeline: %s\n", dir.Period)
+            fmt.Printf("%s[GO-downloader] 📈 Fetching historical market trend timeline: %s%s\n", ColorBlue, dir.Period, ColorReset)
 
             req, err := http.NewRequest("GET", targetURL, nil)
             if err != nil {
@@ -138,12 +148,12 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
 
             resp, err := client.HTTPClient.Do(req)
             if err != nil {
-                fmt.Fprintf(os.Stderr, "[scrape] ❌ Chart fetch dropped for %s: %v\n", dir.Period, err)
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Chart fetch dropped for %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
             if resp.StatusCode != http.StatusOK {
-                fmt.Fprintf(os.Stderr, "[scrape] ❌ Chart API rejected timeframe %s, status: %d\n", dir.Period, resp.StatusCode)
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Chart API rejected timeframe %s, status: %d%s\n", ColorRed, dir.Period, resp.StatusCode, ColorReset)
                 resp.Body.Close()
                 continue
             }
@@ -151,21 +161,24 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
             chartBytes, err := io.ReadAll(resp.Body)
             resp.Body.Close()
             if err != nil {
-                fmt.Fprintf(os.Stderr, "[scrape] ❌ Read failed for chart %s: %v\n", dir.Period, err)
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Read failed for chart %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
+            // 🎯 FIX: Added ':' to create a proper short-variable declaration statement
             tfPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", dir.Period))
             if err := os.WriteFile(tfPath, chartBytes, 0644); err != nil {
-                fmt.Fprintf(os.Stderr, "[scrape] ❌ Failed saving chart file %s: %v\n", dir.Period, err)
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Failed saving chart file %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
             }
 
             time.Sleep(150 * time.Millisecond)
         }
-        return nil, nil // 🎯 Return empty bytes for special sub-file query loops
+        return nil, nil 
     }
 
+    // ============================================================================
     // 🛡️ INTERCEPT PEER COMPARISON STRATEGY: Matrix Combination Generator Loop
+    // ============================================================================
     if endpoint.Name() == "peer-comparison-matrix" {
         peerAPI, ok := endpoint.(PeerComparisonAPI)
         if !ok {
@@ -173,7 +186,8 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
         }
 
         combos := peerAPI.GetCombinations(symbol)
-        fmt.Printf("[scrape] 📊 Running grid sweeper across %d distinct valuation peer matrix variants...\n", len(combos))
+        // 🔵 Unified Log: Blue grid sweeping optimization progress indicator
+        fmt.Printf("%s[GO-downloader] 📊 Running grid sweeper across %d distinct valuation peer matrix variants...%s\n", ColorBlue, len(combos), ColorReset)
 
         for _, item := range combos {
             req, err := http.NewRequest("GET", item.URL, nil)
@@ -186,7 +200,8 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
 
             resp, err := client.HTTPClient.Do(req)
             if err != nil {
-                fmt.Fprintf(os.Stderr, "[scrape] ❌ Peer matrix drop for %s: %v\n", item.FileName, err)
+                // 🚨 Fault Isolation: Red connection breakdown
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Peer matrix drop for %s: %v%s\n", ColorRed, item.FileName, err, ColorReset)
                 continue
             }
 
@@ -203,12 +218,13 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
 
             matrixPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", item.FileName))
             if err := os.WriteFile(matrixPath, peerBytes, 0644); err != nil {
-                fmt.Fprintf(os.Stderr, "[scrape] ❌ Failed writing peer matrix %s: %v\n", item.FileName, err)
+                // 🚨 Fault Isolation: Red write breakdown
+                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Failed writing peer matrix %s: %v%s\n", ColorRed, item.FileName, err, ColorReset)
             }
 
             time.Sleep(150 * time.Millisecond)
         }
-        return nil, nil // 🎯 Return empty bytes for special sub-file query loops
+        return nil, nil 
     }
 
     // ============================================================================
@@ -252,9 +268,18 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
     }
 
     metaJSONPath := filepath.Join(outputDir, "endpoint-metadata.json")
-    fmt.Printf("[scrape] 📝 Archiving raw response array payload to: %s\n", metaJSONPath)
+    // 🔵 Unified Log: Blue disk payload caching tracking log
+    fmt.Printf("%s[GO-downloader] 📝 Archiving raw response array payload to: %s%s\n", ColorBlue, metaJSONPath, ColorReset)
     if err := os.WriteFile(metaJSONPath, rawBytes, 0644); err != nil {
-        fmt.Fprintf(os.Stderr, "[scrape] ⚠️ Warning: Failed saving metadata JSON file: %v\n", err)
+        // 🚨 Fault Isolation: Red warning for missing or protected filesystems
+        fmt.Fprintf(os.Stderr, "%s[GO-downloader] ⚠️ Warning: Failed saving metadata JSON file: %v%s\n", ColorRed, err, ColorReset)
+    }
+
+    // 🎯 THE MASTER ONLY-JSON SHORT-CIRCUIT BREAKPOINT
+    if onlyJson {
+        // 🔵 Unified Log: Blue microsecond fast-pass confirmation
+        fmt.Printf("%s[GO-downloader] 🟢 Only-JSON mode active for '%s'. Safely bypassing worker document scraping queues.%s\n", ColorBlue, endpoint.Name(), ColorReset)
+        return rawBytes, nil 
     }
 
     bodyReader := bytes.NewReader(rawBytes)
@@ -263,10 +288,11 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
         return nil, fmt.Errorf("failed parsing data payload for %s: %w", endpoint.Name(), err)
     }
 
-    fmt.Printf("[scrape] Strategy '%s' identified %d files for %s.\n", endpoint.Name(), len(records), symbol)
+    // 🔵 Unified Log: Blue record count verification
+    fmt.Printf("%s[GO-downloader] Strategy '%s' identified %d files for %s.%s\n", ColorBlue, endpoint.Name(), len(records), symbol, ColorReset)
 
     if len(records) == 0 {
-        return rawBytes, nil // 🎯 JSON only endpoint has 0 downstream worker files! Return early.
+        return rawBytes, nil 
     }
 
     tasksChan := make(chan DownloadTask, len(records))
@@ -279,12 +305,14 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
 
     for _, row := range records {
         if row.DownloadURL == "" || row.DownloadURL == "-" || len(row.DownloadURL) < 8 {
-            fmt.Printf("[scrape] ⚠️ Skipping entry '%s': Invalid or empty download URL string.\n", row.Period)
+            // 🔵 Unified Log: Blue row skipping notification
+            fmt.Printf("%s[GO-downloader] ⚠️ Skipping entry '%s': Invalid or empty download URL string.%s\n", ColorBlue, row.Period, ColorReset)
             continue
         }
 
         if row.DownloadURL[:4] != "http" {
-            fmt.Printf("[scrape] ⚠️ Skipping entry '%s': Unsupported url prefix: %s\n", row.Period, row.DownloadURL)
+            // 🔵 Unified Log: Blue domain mismatch warning
+            fmt.Printf("%s[GO-downloader] ⚠️ Skipping entry '%s': Unsupported url prefix: %s%s\n", ColorBlue, row.Period, row.DownloadURL, ColorReset)
             continue
         }
 
@@ -305,5 +333,5 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
     close(tasksChan)
 
     wg.Wait()
-    return rawBytes, nil // 🎯 Return the verified rawBytes alongside normal completion tracking loops!
+    return rawBytes, nil 
 }
