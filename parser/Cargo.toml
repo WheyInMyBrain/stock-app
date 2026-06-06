@@ -3,6 +3,10 @@ name = "parser"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "parser"
+crate-type = ["rlib"]
+
 [dependencies]
 rayon = "1.10"
 quick-xml = "0.36"

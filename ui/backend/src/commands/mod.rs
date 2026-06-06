@@ -1,3 +1,4 @@
+pub mod memory_pool;
 pub mod data_dir;
 pub mod history;
 pub mod layout;

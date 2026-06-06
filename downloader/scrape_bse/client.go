@@ -60,12 +60,12 @@ func NewBSEClient() (*BSEClient, error) {
 	// This tells their WAF that Google generated this inbound user session
 	req.Header.Set("Referer", "https://www.google.com/search?q=bse+india+share+price+history")
 
-	fmt.Println("[bse_client] 🕵️‍♂️ Executing clean Google-Referral organic entry session handshake...")
+	fmt.Println("{BSE} 🕵️‍♂️ Executing clean Google-Referral organic entry session handshake...")
 	resp, err := httpClient.Do(req)
 	
 	if err == nil && resp.StatusCode == http.StatusOK {
 		resp.Body.Close()
-		fmt.Println("🚀 [bse_client] Google handshake accepted! Session context established.")
+		fmt.Println("🚀 {BSE} Google handshake accepted! Session context established.")
 		return &BSEClient{HTTPClient: httpClient}, nil
 	}
 	
@@ -78,7 +78,7 @@ func NewBSEClient() (*BSEClient, error) {
 	// ============================================================================
 	// If Strategy A gets blocked, don't let the application crash. Fall back instantly
 	// to bypassing the root domain and hitting the unguarded API sub-cluster directly.
-	fmt.Println("⚠️  [bse_client] Google entry handshake timed out or flagged. Deploying Direct-to-API fallback cluster...")
+	fmt.Println("⚠️  {BSE} Google entry handshake timed out or flagged. Deploying Direct-to-API fallback cluster...")
 	
 	heartbeatURL := "https://api.bseindia.com/BseIndiaAPI/api/EquityWithDetail/w?Type=EQ"
 	for attempt := 1; attempt <= 2; attempt++ {
@@ -96,7 +96,7 @@ func NewBSEClient() (*BSEClient, error) {
 		resp, err = httpClient.Do(fallbackReq)
 		if err == nil && resp.StatusCode == http.StatusOK {
 			resp.Body.Close()
-			fmt.Println("✅ [bse_client] Fallback session cluster connected. Pipeline active.")
+			fmt.Println("✅ {BSE} Fallback session cluster connected. Pipeline active.")
 			return &BSEClient{HTTPClient: httpClient}, nil
 		}
 		

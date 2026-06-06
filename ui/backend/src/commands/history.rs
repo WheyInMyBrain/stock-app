@@ -1,20 +1,14 @@
+// stock-app/ui/backend/src/commands/history.rs
+
 use std::fs;
-use std::path::PathBuf;
+use crate::commands::data_dir::resolve_data_directory_headless;
 
-fn get_data_directory_path() -> PathBuf {
-    let mut data_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    data_path.pop(); // Up to ui/
-    data_path.pop(); // Up to stock-app/
-    data_path.push("data");
-    data_path
-}
-
-#[tauri::command]
-pub fn get_history_tickers() -> Result<Vec<String>, String> {
-    let data_path = get_data_directory_path();
+/// 🎯 HEADLESS TICKER LIST FETCH: Reads folders cleanly using our active base directory path
+pub fn get_history_tickers_headless() -> Vec<String> {
+    let data_path = resolve_data_directory_headless();
 
     if !data_path.exists() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
 
     let mut tickers = Vec::new();
@@ -23,6 +17,7 @@ pub fn get_history_tickers() -> Result<Vec<String>, String> {
             if let Ok(file_type) = entry.file_type() {
                 if file_type.is_dir() {
                     let folder_name = entry.file_name().to_string_lossy().into_owned();
+                    // Ignore system metadata files and hidden dot directories
                     if !folder_name.starts_with('.') {
                         tickers.push(folder_name);
                     }
@@ -32,5 +27,10 @@ pub fn get_history_tickers() -> Result<Vec<String>, String> {
     }
 
     tickers.sort();
-    Ok(tickers)
+    tickers
+}
+
+#[tauri::command]
+pub fn get_history_tickers() -> Result<Vec<String>, String> {
+    Ok(get_history_tickers_headless())
 }

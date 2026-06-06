@@ -73,13 +73,13 @@ func NewNSEClient() (*NSEClient, error) {
 		// This forces their security nodes to prioritize and approve the session link initialization.
 		req.Header.Set("Referer", "https://www.google.com/search?q=nse+india+corporate+financial+results+archive")
 
-		fmt.Printf("[nse_client] 🕵️‍♂️ Initializing organic Google-Referral cookie handshake (Pass %d/3)...\n", attempt)
+		fmt.Printf("{NSE} 🕵️‍♂️ Initializing organic Google-Referral cookie handshake (Pass %d/3)...\n", attempt)
 		resp, err = httpClient.Do(req)
 		
 		if err == nil {
 			if resp.StatusCode == http.StatusOK {
 				resp.Body.Close()
-				fmt.Println("🚀 [nse_client] Google-Referral handshake accepted. Secure cookie vault primed!")
+				fmt.Println("🚀 {NSE} Google-Referral handshake accepted. Secure cookie vault primed!")
 				return &NSEClient{HTTPClient: httpClient}, nil
 			}
 			resp.Body.Close()

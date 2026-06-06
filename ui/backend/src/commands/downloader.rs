@@ -1,176 +1,167 @@
-use tauri::{AppHandle, command, Emitter};
-use tauri_plugin_shell::ShellExt; 
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
-use std::sync::Mutex;
+// stock-app/ui/backend/src/commands/downloader.rs
+use std::process::{Stdio, Command};
+use std::io::{BufRead, BufReader}; 
+use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt}; 
 use crate::commands::data_loader::WorkspaceDataContext;
-use crate::commands::data_dir::get_active_data_directory;
+use crate::commands::data_dir::resolve_data_directory_headless;
+use crate::commands::memory_pool::update_memory_cache;
 
-static GO_PROCESS_WRITER: Mutex<Option<CommandChild>> = Mutex::new(None);
-
-#[derive(Clone, serde::Serialize)]
-struct GlobalStreamPayload {
-    module_id: String,
-    ticker: String,
-    raw_json: String,
+pub fn initialize_persistent_go_daemon(_app_handle: tauri::AppHandle) {
+    initialize_go_daemon();
 }
 
-#[derive(Clone, serde::Serialize)]
-struct GlobalInvalidationPayload {
-    module_id: String,
-    ticker: String,
-}
+/// 🚀 PURIFIED GO DAEMON SUMMONER
+pub fn initialize_go_daemon() {
+    std::thread::spawn(move || {
+        let active_dir = resolve_data_directory_headless().to_string_lossy().to_string();
+        let mut binaries_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        binaries_dir.push("binaries");
+        let mut sidecar_executable = None;
 
-pub fn initialize_persistent_go_daemon(app_handle: AppHandle) {
-    let current_app = app_handle.clone();
-    
-    tauri::async_runtime::spawn(async move {
-        let active_dir = get_active_data_directory(current_app.clone());
-        let sidecar_setup = current_app
-            .shell()
-            .sidecar("downloader")
-            .unwrap()
-            .args(vec!["--daemon".to_string(), format!("--data-dir={}", active_dir)]);
-
-        match sidecar_setup.spawn() {
-            Ok((mut rx, child_control)) => {
-                {
-                    let mut writer_guard = GO_PROCESS_WRITER.lock().unwrap();
-                    *writer_guard = Some(child_control);
+        if let Ok(entries) = std::fs::read_dir(binaries_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("downloader") {
+                    sidecar_executable = Some(entry.path());
+                    break;
                 }
+            }
+        }
 
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        CommandEvent::Stdout(bytes) => {
-                            let stdout_chunk = String::from_utf8_lossy(&bytes).to_string();
-                            for line in stdout_chunk.lines() {
-                                println!("\x1b[32m{}\x1b[0m", line);
+        let binary_path = match sidecar_executable {
+            Some(p) => p,
+            None => return,
+        };
 
-                                if line.starts_with("SIGNAL_COMPLETED:") {
-                                    let parts: Vec<&str> = line.trim().split(':').collect();
-                                    if parts.len() >= 3 {
-                                        let ticker = parts[1].to_string();
-                                        let module_id = parts[2].to_string();
+        let mut child = match Command::new(&binary_path)
+            .args(&["--daemon", &format!("--data-dir={}", active_dir)])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn() 
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
 
-                                        WorkspaceDataContext::invalidate_ticker(&ticker);
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let active_dir_clone = active_dir.clone();
 
-                                        let _ = current_app.emit("pipeline-invalidated", GlobalInvalidationPayload {
-                                            module_id,
-                                            ticker,
-                                        });
-                                    }
-                                }
+        // Dedicated background thread listening to clear, light-blue Go logs
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout).lines();
+            while let Some(Ok(line)) = reader.next() {
+                let cleaned_line = strip_ansi_escape_codes(&line);
+                println!("\x1b[96m[Go Output] {}\x1b[0m", cleaned_line);
+
+                if line.starts_with("SIGNAL_COMPLETED:") {
+                    let parts: Vec<&str> = line.trim().split(':').collect();
+                    if parts.len() >= 3 {
+                        let ticker = parts[1].to_uppercase();
+                        let api = parts[2].to_string();
+
+                        WorkspaceDataContext::invalidate_ticker(&ticker);
+
+                        let file_path = Path::new(&active_dir_clone)
+                            .join(&ticker)
+                            .join(format!("nse_{}", api))
+                            .join("endpoint-metadata.json");
+
+                        if file_path.exists() {
+                            if let Ok(raw_json) = std::fs::read_to_string(file_path) {
+                                update_memory_cache(&ticker, &api, raw_json);
                             }
                         }
-                        CommandEvent::Stderr(bytes) => {
-                            print!("\x1b[31m🚨 [GO DAEMON ERROR]: {}\x1b[0m", String::from_utf8_lossy(&bytes));
-                        }
-                        _ => {}
                     }
                 }
             }
-            Err(err) => println!("❌ [CRITICAL DAEMON FAULT]: {}", err),
-        }
+        });
+
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Some(Ok(line)) = reader.next() {
+                println!("\x1b[31m🚨 [GO DAEMON ERROR]: {}\x1b[0m", line);
+            }
+        });
+
+        let _ = child.wait();
     });
 }
 
-#[command]
+#[tauri::command]
 pub async fn run_sidecar_downloader(
-    app_handle: AppHandle, 
+    _app_handle: tauri::AppHandle, 
     _data_dir_override: Option<String>,
     extra_args: Option<Vec<String>>, 
 ) -> Result<String, String> {
     let flags = extra_args.ok_or_else(|| "Missing execution flags".to_string())?;
-    if flags.is_empty() { return Err("Flags empty".to_string()); }
+    run_sidecar_downloader_native(flags).await
+}
 
-    let ticker = &flags[0];
-    let mut mode = "both".to_string();
-    let mut api = "".to_string();
-    let mut is_stream_requested = false;
-    let mut module_id = "unknown_module".to_string();
-    let mut from_arg = "".to_string();
+/// ⚡ UNIFIED IPC DISPATCHER
+/// Channels 100% of transmissions across the Unix Domain Socket to trigger Go execution routines perfectly.
+pub async fn run_sidecar_downloader_native(extra_args: Vec<String>) -> Result<String, String> {
+    if extra_args.is_empty() { return Err("Flags empty".to_string()); }
 
-    for flag in &flags[1..] {
-        if flag.starts_with("--mode=") { mode = flag.split('=').nth(1).unwrap_or("both").to_string(); }
-        else if flag.starts_with("--api=") { api = flag.split('=').nth(1).unwrap_or("").to_string(); }
-        else if flag.starts_with("--module_id=") { module_id = flag.split('=').nth(1).unwrap_or("unknown_module").to_string(); }
-        else if flag.starts_with("--from=") { from_arg = flag.to_string(); }
-        else if flag == "--stream" { is_stream_requested = true; }
-    }
+    let active_dir = resolve_data_directory_headless().to_string_lossy().to_string();
+    let socket_path = Path::new(&active_dir).join("downloader_engine.sock");
 
-    let active_dir = get_active_data_directory(app_handle.clone());
-
-    if is_stream_requested && !api.is_empty() {
-        let fallback_exchange = if mode == "both" { "nse" } else { &mode };
-        let cached_file_path = std::path::Path::new(&active_dir)
-            .join(ticker).join(format!("{}_{}", fallback_exchange, api)).join("endpoint-metadata.json");
-
-        if cached_file_path.exists() {
-            if let Ok(cached_json_string) = std::fs::read_to_string(cached_file_path) {
-                let _ = app_handle.emit("live-memory-data", GlobalStreamPayload {
-                    module_id: module_id.clone(),
-                    ticker: ticker.to_string(),
-                    raw_json: cached_json_string,
-                });
-            }
-        }
-    }
-
-    if is_stream_requested {
-        let socket_path = std::path::Path::new(&active_dir).join("downloader_engine.sock");
-        let app_clone = app_handle.clone();
-        let ticker_clone = ticker.to_string();
-        let mode_clone = mode.clone();
-        let api_clone = api.clone();
-        let module_clone = module_id.clone();
-        let from_clone = from_arg.clone();
-
-        tauri::async_runtime::spawn(async move {
-            match tokio::net::UnixStream::connect(&socket_path).await {
-                Ok(mut socket) => {
-                    let instruction_payload = if !from_clone.is_empty() {
-                        format!("RUN {} {} {} {} --stream --metadata_module={}\n", mode_clone, api_clone, from_clone, ticker_clone, module_clone)
-                    } else {
-                        format!("RUN {} {} {} --stream --metadata_module={}\n", mode_clone, api_clone, ticker_clone, module_clone)
-                    };
-                    
-                    if socket.write_all(instruction_payload.as_bytes()).await.is_ok() {
-                        let mut header_buffer = [0u8; 4];
-                        if socket.read_exact(&mut header_buffer).await.is_ok() {
-                            let payload_size = u32::from_be_bytes(header_buffer) as usize;
-                            let mut data_buffer = vec![0u8; payload_size];
-                            if socket.read_exact(&mut data_buffer).await.is_ok() {
-                                if let Ok(raw_json_string) = String::from_utf8(data_buffer) {
-                                    let _ = app_clone.emit("live-memory-data", GlobalStreamPayload {
-                                        module_id: module_clone,
-                                        ticker: ticker_clone,
-                                        raw_json: raw_json_string,
-                                    });
+    match tokio::net::UnixStream::connect(&socket_path).await {
+        Ok(mut socket) => {
+            let mut payload_parts = vec!["RUN".to_string()];
+            payload_parts.extend(extra_args.clone());
+            
+            let instruction_payload = payload_parts.join(" ") + "\n";
+            
+            if socket.write_all(instruction_payload.as_bytes()).await.is_ok() {
+                // If a stream loop was explicitly requested anywhere in the argument matrix slice
+                if extra_args.iter().any(|f| f == "--stream" || f == "-stream") {
+                    let mut header_buffer = [0u8; 4];
+                    if socket.read_exact(&mut header_buffer).await.is_ok() {
+                        let payload_size = u32::from_be_bytes(header_buffer) as usize;
+                        let mut data_buffer = vec![0u8; payload_size];
+                        if socket.read_exact(&mut data_buffer).await.is_ok() {
+                            if let Ok(raw_json_string) = String::from_utf8(data_buffer) {
+                                // Dynamically detect ticker and api flags to update memory cache index slots seamlessly
+                                let ticker = extra_args.iter().find(|f| !f.starts_with("-")).cloned().unwrap_or_default();
+                                let api = extra_args.iter()
+                                    .find(|f| f.starts_with("--api="))
+                                    .map(|f| f.split('=').nth(1).unwrap_or(""))
+                                    .unwrap_or("");
+                                
+                                if !ticker.is_empty() && !api.is_empty() {
+                                    update_memory_cache(&ticker.to_uppercase(), api, raw_json_string.clone());
                                 }
+                                return Ok(raw_json_string);
                             }
                         }
                     }
-                }
-                Err(e) => println!("🚨 [SOCKET ERROR]: {}", e),
+                    return Err("Failed reading payload response from socket stream".to_string());
+                } 
+                
+                // One-Shot Ingestion Pass
+                return Ok("Signal accepted over socket layer successfully".to_string());
             }
-        });
-
-        return Ok("Signal dispatched via dedicated socket link successfully".to_string());
+            Err("Failed packing instructions down socket channel".to_string())
+        }
+        Err(e) => Err(format!("🚨 [IPC CONNECTION FAILED]: {}", e)),
     }
+}
 
-    let mut writer_guard = GO_PROCESS_WRITER.lock().unwrap();
-    if let Some(ref mut child) = *writer_guard {
-        let command_payload = if !from_arg.is_empty() {
-            format!("RUN {} {} {} {} --metadata_module={}\n", mode, api, from_arg, ticker, module_id)
+fn strip_ansi_escape_codes(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            while let Some(&next_c) = chars.peek() {
+                chars.next();
+                if next_c == 'm' { break; }
+            }
         } else {
-            format!("RUN {} {} {} --metadata_module={}\n", mode, api, ticker, module_id)
-        };
-        
-        println!("\x1b[32m🚀 [DAEMON PAYLOAD DISPATCH]: {}\x1b[0m", command_payload.trim_end());
-        
-        child.write(command_payload.as_bytes()).map_err(|e| e.to_string())?;
-        Ok("Signal dispatched via fallback engine".to_string())
-    } else {
-        Err("Daemon offline".to_string())
+            result.push(c);
+        }
     }
+    result
 }

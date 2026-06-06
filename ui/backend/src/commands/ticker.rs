@@ -1,24 +1,21 @@
 // stock-app/ui/backend/src/commands/ticker.rs
-
-use tauri::{AppHandle, Emitter, Manager, command};
 use tokio::time::{sleep, Duration};
 use std::sync::RwLock;
-use crate::commands::downloader::run_sidecar_downloader;
+// 🎯 FIXED: Import the purified native execution signature instead of the Tauri one
+use crate::commands::downloader::run_sidecar_downloader_native;
 use crate::commands::data_loader::WorkspaceDataContext;
-use crate::commands::data_dir::get_active_data_directory;
 
-static ACTIVE_TICKER: RwLock<Option<String>> = RwLock::new(None);
-
+pub static ACTIVE_TICKER: RwLock<Option<String>> = RwLock::new(None);
 pub static POPUP_FROM_TIMESTAMP: RwLock<i64> = RwLock::new(0);
+pub static CHART_ACTIVE: RwLock<bool> = RwLock::new(false);
 
-#[command]
 pub fn set_active_workspace(ticker: Option<String>) {
     let mut active = ACTIVE_TICKER.write().unwrap();
     *active = ticker.clone();
     println!("💼 [WORKSPACE CHANGED]: Active target focus tracking updated to: {:?}", active);
 }
 
-fn get_registered_module_ids(app_handle: &AppHandle) -> Vec<(String, u64, Vec<String>)> {
+fn get_registered_module_ids() -> Vec<(String, u64, Vec<String>)> {
     let mut modules = vec![
         (
             "stock_stats".to_string(), 
@@ -31,15 +28,9 @@ fn get_registered_module_ids(app_handle: &AppHandle) -> Vec<(String, u64, Vec<St
         ),
     ];
 
-    let mut has_active_chart_popup = false;
-    for (window_label, _) in app_handle.webview_windows() {
-        if window_label.starts_with("win_stock_chart_") {
-            has_active_chart_popup = true;
-            break;
-        }
-    }
+    let has_active_chart = *CHART_ACTIVE.read().unwrap();
 
-    if has_active_chart_popup {
+    if has_active_chart {
         let current_from = *POPUP_FROM_TIMESTAMP.read().unwrap();
         modules.push((
             "stock_chart".to_string(), 
@@ -56,7 +47,7 @@ fn get_registered_module_ids(app_handle: &AppHandle) -> Vec<(String, u64, Vec<St
     modules
 }
 
-pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
+pub fn spawn_global_ticker_daemon() {
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -77,7 +68,7 @@ pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
                 };
 
                 if let Some(ticker) = active_ticker {
-                    let modules = get_registered_module_ids(&app_handle);
+                    let modules = get_registered_module_ids();
                     let mut unique_execution_groups: Vec<(Vec<String>, Vec<String>)> = Vec::new();
 
                     for (module_id, interval, extra_flags) in modules {
@@ -93,36 +84,14 @@ pub fn spawn_global_ticker_daemon(app_handle: AppHandle) {
                         }
                     }
 
-                    for (execution_flags, dependent_modules) in unique_execution_groups {
-                        let current_app = app_handle.clone();
-                        let target_ticker = ticker.clone();
-
+                    for (execution_flags, _dependent_modules) in unique_execution_groups {
+                        let ticker_clone = ticker.clone(); 
+                        
                         tokio::spawn(async move {
-                            let active_dir = get_active_data_directory(current_app.clone());
-                            
-                            let result = run_sidecar_downloader(
-                                current_app.clone(),
-                                Some(active_dir),
-                                Some(execution_flags)
-                            ).await;
+                            let result = run_sidecar_downloader_native(execution_flags).await;
 
                             if result.is_ok() {
-                                WorkspaceDataContext::invalidate_ticker(&target_ticker);
-
-                                #[derive(Clone, serde::Serialize)]
-                                struct GenericPayload { module_id: String, ticker: String }
-
-                                for (_, webview_window) in current_app.webview_windows() {
-                                    for current_module in &dependent_modules {
-                                        let _ = webview_window.emit(
-                                            "pipeline-invalidated",
-                                            GenericPayload { 
-                                                module_id: current_module.clone(), 
-                                                ticker: target_ticker.clone() 
-                                            }
-                                        );
-                                    }
-                                }
+                                WorkspaceDataContext::invalidate_ticker(&ticker_clone);
                             }
                         });
                     }

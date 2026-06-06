@@ -13,7 +13,7 @@ import (
 )
 
 const (
-    ColorBlue  = "\033[34m"
+    ColorBlue  = "\033[96m"
     ColorRed   = "\033[31m"
     ColorReset = "\033[0m"
 )
@@ -34,13 +34,13 @@ type BSEFilingsEndpoint interface {
 // ExecuteWithWarmClient serves as the blazing-fast daemon gateway for the BSE stack.
 func ExecuteWithWarmClient(client *BSEClient, symbol string, workerCount int, targetApi string, globalDataDir string, onlyJson bool) (string, error) {
     // 🔵 Unified Log: Smart Search Tracker Initiation
-    fmt.Printf("%s[GO-downloader] [bse_scrape] 🔍 Performing smart search lookup for ticker token: %s...%s\n", ColorBlue, symbol, ColorReset)
+    fmt.Printf("%s{BSE}  🔍 Performing smart search lookup for ticker token: %s...%s\n", ColorBlue, symbol, ColorReset)
     scripCode, err := GetScripCode(client, symbol, globalDataDir)
     if err != nil {
         return "", fmt.Errorf("BSE identifier mapping failed: %w", err)
     }
     // 🔵 Unified Log: Resolution Handshake Successful
-    fmt.Printf("%s[GO-downloader] 🎯 Successfully mapped %s ----> BSE Scrip Code: %s%s\n", ColorBlue, symbol, scripCode, ColorReset)
+    fmt.Printf("%s{BSE} 🎯 Successfully mapped %s ----> BSE Scrip Code: %s%s\n", ColorBlue, symbol, scripCode, ColorReset)
 
     // 2. Dynamic endpoint array loaded from endpoints.go
     endpoints := GetAllEndpoints()
@@ -53,13 +53,13 @@ func ExecuteWithWarmClient(client *BSEClient, symbol string, workerCount int, ta
         }
 
         // 🔵 Unified Log: Sequential Pipeline Run Target Notification
-        fmt.Printf("\n%s[GO-downloader] 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, endpoint.Name(), ColorReset)
+        fmt.Printf("\n%s{BSE} 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, endpoint.Name(), ColorReset)
 
         // Execute each strategy using the shared, authenticated client and resolved scripCode
         rawBytes, err := executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, onlyJson)
         if err != nil {
             // 🚨 Fault Isolation: Marked cleanly in Red
-            fmt.Fprintf(os.Stderr, "%s[GO-downloader] ⚠️ Error running pipeline %s: %v%s\n", ColorRed, endpoint.Name(), err, ColorReset)
+            fmt.Fprintf(os.Stderr, "%s{BSE} ⚠️ Error running pipeline %s: %v%s\n", ColorRed, endpoint.Name(), err, ColorReset)
             return "", err
         }
 
@@ -80,17 +80,17 @@ func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir 
     }
 
     // 🔵 Unified Log: CLI Smart Search Lookup Tracker
-    fmt.Printf("%s[GO-downloader] 🔍 Performing smart search lookup for ticker token: %s...%s\n", ColorBlue, symbol, ColorReset)
+    fmt.Printf("%s{BSE} 🔍 Performing smart search lookup for ticker token: %s...%s\n", ColorBlue, symbol, ColorReset)
     scripCode, err := GetScripCode(client, symbol, globalDataDir)
     if err != nil {
         return fmt.Errorf("BSE identifier mapping failed: %w", err)
     }
     // 🔵 Unified Log: CLI Resolution Handshake Successful
-    fmt.Printf("%s[GO-downloader] 🎯 Successfully mapped %s ----> BSE Scrip Code: %s%s\n", ColorBlue, symbol, scripCode, ColorReset)
+    fmt.Printf("%s{BSE} 🎯 Successfully mapped %s ----> BSE Scrip Code: %s%s\n", ColorBlue, symbol, scripCode, ColorReset)
 
     endpoints := GetAllEndpoints()
     if len(endpoints) == 0 {
-        fmt.Printf("%s[GO-downloader] 📌 No active BSE endpoint strategies registered yet.%s\n", ColorBlue, ColorReset)
+        fmt.Printf("%s{BSE} 📌 No active BSE endpoint strategies registered yet.%s\n", ColorBlue, ColorReset)
         return nil
     }
 
@@ -100,7 +100,7 @@ func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir 
         }
 
         // 🔵 Unified Log: CLI Mode Pipeline Execution Notice
-        fmt.Printf("\n%s[GO-downloader] 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, endpoint.Name(), ColorReset)
+        fmt.Printf("\n%s{BSE} 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, endpoint.Name(), ColorReset)
 
         // 🎯 FIXED: Forward onlyJson into the execution strategy to short-circuit corporate document downloads
         _, _ = executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, onlyJson)
@@ -160,7 +160,7 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
         for _, dir := range directives {
             targetURL := dir.DownloadURL[15:]
             // 🔵 Unified Log: Blue institutional deal tracking
-            fmt.Printf("%s[GO-downloader] 📊 Fetching institutional market transaction layer: %s%s\n", ColorBlue, dir.Period, ColorReset)
+            fmt.Printf("%s{BSE} 📊 Fetching institutional market transaction layer: %s%s\n", ColorBlue, dir.Period, ColorReset)
 
             req, err := http.NewRequest("GET", targetURL, nil)
             if err != nil {
@@ -174,13 +174,13 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
             resp, err := client.HTTPClient.Do(req)
             if err != nil {
                 // 🚨 Fault Isolation: Red dropout notice
-                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Connection error dropped deal fetch for %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
+                fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Connection error dropped deal fetch for %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
             if resp.StatusCode != http.StatusOK {
                 // 🚨 Fault Isolation: Red API rejection notice
-                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ BSE API rejected deal entry %s, status code: %d%s\n", ColorRed, dir.Period, resp.StatusCode, ColorReset)
+                fmt.Fprintf(os.Stderr, "%s{BSE} ❌ BSE API rejected deal entry %s, status code: %d%s\n", ColorRed, dir.Period, resp.StatusCode, ColorReset)
                 resp.Body.Close()
                 continue
             }
@@ -189,14 +189,14 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
             resp.Body.Close()
             if err != nil {
                 // 🚨 Fault Isolation: Red stream fault notice
-                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Read failed for transaction stream row %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
+                fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Read failed for transaction stream row %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
             dealPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", dir.Period))
             if err := os.WriteFile(dealPath, dealBytes, 0644); err != nil {
                 // 🚨 Fault Isolation: Red cache write notice
-                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Failed writing transaction file to disk %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
+                fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Failed writing transaction file to disk %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
             }
 
             lastDealsBytes = dealBytes
@@ -223,7 +223,7 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
         for _, dir := range directives {
             targetURL := dir.DownloadURL[17:] 
             // 🔵 Unified Log: Blue market metrics processing tracker
-            fmt.Printf("%s[GO-downloader] 📈 Processing and transforming tracking metrics: %s%s\n", ColorBlue, dir.Period, ColorReset)
+            fmt.Printf("%s{BSE} 📈 Processing and transforming tracking metrics: %s%s\n", ColorBlue, dir.Period, ColorReset)
 
             req, err := http.NewRequest("GET", targetURL, nil)
             if err != nil {
@@ -237,7 +237,7 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
             resp, err := client.HTTPClient.Do(req)
             if err != nil {
                 // 🚨 Fault Isolation: Red connection failure notice
-                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Connection failure for chart horizon %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
+                fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Connection failure for chart horizon %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
@@ -245,13 +245,13 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
             resp.Body.Close()
             if err != nil {
                 // 🚨 Fault Isolation: Red buffer stream fault notice
-                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Read failed for chart stream %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
+                fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Read failed for chart stream %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
             if err := chartAPI.ProcessAndNormalize(outputDir, dir.Period, chartBytes); err != nil {
                 // 🚨 Fault Isolation: Red alignment matrix notice
-                fmt.Fprintf(os.Stderr, "%s[GO-downloader] ❌ Transformation loop failed for %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
+                fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Transformation loop failed for %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
             }
 
             lastChartBytes = chartBytes
@@ -291,10 +291,10 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
 
     metaJSONPath := filepath.Join(outputDir, "endpoint-metadata.json")
     // 🔵 Unified Log: Blue payload storage notification
-    fmt.Printf("%s[GO-downloader] 📝 Archiving raw response array payload to: %s%s\n", ColorBlue, metaJSONPath, ColorReset)
+    fmt.Printf("%s{BSE} 📝 Archiving raw response array payload to: %s%s\n", ColorBlue, metaJSONPath, ColorReset)
     if err := os.WriteFile(metaJSONPath, rawBytes, 0644); err != nil {
         // 🚨 Fault Isolation: Red write warnings for missing filesystems
-        fmt.Fprintf(os.Stderr, "%s[GO-downloader] ⚠️ Warning: Failed saving metadata JSON file: %v%s\n", ColorRed, err, ColorReset)
+        fmt.Fprintf(os.Stderr, "%s{BSE} ⚠️ Warning: Failed saving metadata JSON file: %v%s\n", ColorRed, err, ColorReset)
     }
 
     // ============================================================================
@@ -302,7 +302,7 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
     // ============================================================================
     if onlyJson {
         // 🔵 Unified Log: Blue layout pass short-circuit indicator
-        fmt.Printf("%s[GO-downloader] 🟢 Only-JSON mode active for '%s'. Safely bypassing worker document scraping queues.%s\n", ColorBlue, endpoint.Name(), ColorReset)
+        fmt.Printf("%s{BSE} 🟢 Only-JSON mode active for '%s'. Safely bypassing worker document scraping queues.%s\n", ColorBlue, endpoint.Name(), ColorReset)
         return rawBytes, nil 
     }
 
@@ -313,7 +313,7 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
     }
 
     // 🔵 Unified Log: Blue records synchronization overview
-    fmt.Printf("%s[GO-downloader] Strategy '%s' identified %d files for %s.%s\n", ColorBlue, endpoint.Name(), len(records), symbol, ColorReset)
+    fmt.Printf("%s{BSE} Strategy '%s' identified %d files for %s.%s\n", ColorBlue, endpoint.Name(), len(records), symbol, ColorReset)
 
     if len(records) == 0 {
         return rawBytes, nil 
@@ -330,13 +330,13 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
     for _, row := range records {
         if row.DownloadURL == "" || row.DownloadURL == "-" || len(row.DownloadURL) < 8 {
             // 🔵 Unified Log: Blue row exclusion notice
-            fmt.Printf("%s[GO-downloader] ⚠️ Skipping entry '%s': Invalid or empty download URL string.%s\n", ColorBlue, row.Period, ColorReset)
+            fmt.Printf("%s{BSE} ⚠️ Skipping entry '%s': Invalid or empty download URL string.%s\n", ColorBlue, row.Period, ColorReset)
             continue
         }
 
         if row.DownloadURL[:4] != "http" {
             // 🔵 Unified Log: Blue protocol security warning
-            fmt.Printf("%s[GO-downloader] ⚠️ Skipping entry '%s': Unsupported url prefix: %s%s\n", ColorBlue, row.Period, row.DownloadURL, ColorReset)
+            fmt.Printf("%s{BSE} ⚠️ Skipping entry '%s': Unsupported url prefix: %s%s\n", ColorBlue, row.Period, row.DownloadURL, ColorReset)
             continue
         }
 
