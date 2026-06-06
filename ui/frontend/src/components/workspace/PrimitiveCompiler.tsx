@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import { InteractiveChartViewer } from "./stock_chart";
 import { TableComponent, TableRowComponent } from "./tables";
+import { InteractiveChart } from "./InteractiveChart";
 
 export interface UiPrimitiveNode {
-  type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container" | "select" | "vector_canvas" | "vector_path" | "vector_rect" | "popup_workspace" | "chart_viewer" | "table" | "table_row";
+  type: "grid" | "card" | "metric" | "bar_graph" | "text" | "container" | "select" | "vector_canvas" | "vector_path" | "vector_rect" | "popup_workspace" | "chart_viewer" | "table" | "table_row" | "interactive_chart";
   className?: string;
   style?: React.CSSProperties;
   children?: UiPrimitiveNode[];
@@ -231,6 +232,9 @@ export default function PrimitiveCompiler({ node, colors, cardBg, keyIndex = 0 }
 
     case "table_row":
       return <TableRowComponent node={node} colors={colors} cardBg={cardBg} keyIndex={keyIndex} />;
+
+    case "interactive_chart":
+      return <InteractiveChart key={keyIndex} node={node} />;
 
     default:
       return null;

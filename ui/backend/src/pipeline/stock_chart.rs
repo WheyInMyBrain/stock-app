@@ -1,10 +1,56 @@
-// stock-app/ui/backend/src/pipeline/stock_chart.rs
-
 use serde_json::{json, Value};
 use crate::commands::pipeline::CatalogItem;
 use crate::pipeline::{WorkspaceModule, WorkspaceDataContext};
 
 pub struct StockChartCard;
+
+// 📊 Pure, dependency-free calendar calculation helper mapping epoch milliseconds to readable labels
+fn format_timestamp(ms: i64, is_intraday: bool) -> String {
+    let seconds = ms / 1000;
+    
+    if is_intraday {
+        let secs_in_day = seconds.rem_euclid(86400);
+        let hours = secs_in_day / 3600;
+        let minutes = (secs_in_day / 60) % 60;
+        return format!("{:02}:{:02}", hours, minutes);
+    }
+
+    let days = seconds / 86400;
+    let mut year = 1970;
+    let mut days_left = days;
+
+    if days_left >= 0 {
+        loop {
+            let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+            let days_in_year = if is_leap { 366 } else { 365 };
+            if days_left < days_in_year {
+                break;
+            }
+            days_left -= days_in_year;
+            year += 1;
+        }
+        
+        let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let month_days = if is_leap {
+            [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        } else {
+            [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        };
+        
+        let mut month = 1;
+        for &days_in_month in &month_days {
+            if days_left < days_in_month {
+                break;
+            }
+            days_left -= days_in_month;
+            month += 1;
+        }
+        let day = days_left + 1;
+        format!("{:04}-{:02}-{:02}", year, month, day)
+    } else {
+        "Historic".to_string()
+    }
+}
 
 impl WorkspaceModule for StockChartCard {
     fn catalog_definition(&self) -> CatalogItem {
@@ -46,10 +92,10 @@ impl WorkspaceModule for StockChartCard {
 
         // Fallback definitions
         let mut current_price_str = "₹N/A".to_string();
-        let mut path_string = "".to_string();
         let mut price_high = 0.0;
         let mut price_low = 0.0;
         let mut delta_string = "No session change data".to_string();
+        let mut chart_stream_data = Vec::new();
 
         // Parse coordinates from nested "grapthData" block matrix frame
         if let Some(graph_data) = chart_json["grapthData"].as_array() {
@@ -89,36 +135,24 @@ impl WorkspaceModule for StockChartCard {
                         delta_string = "₹0.00 (0.00%)".to_string();
                     }
 
-                    // EDGE-TO-EDGE CANVAS TRANSLATION (Width: 500, Height: 180)
-                    let canvas_w = 500.0;
-                    let canvas_h = 180.0;
-                    let padding_y = 10.0; 
-                    let usable_h = canvas_h - (padding_y * 2.0);
-
-                    let total_points = points.len();
-                    let price_range = if price_high == price_low { 1.0 } else { price_high - price_low };
-
-                    let mut segments = Vec::new();
-                    for (i, p) in points.iter().enumerate() {
-                        let x = if total_points > 1 {
-                            (i as f64 / (total_points - 1) as f64) * canvas_w
-                        } else {
-                            canvas_w / 2.0
-                        };
-
-                        let y = padding_y + (usable_h - (((p.1 - price_low) / price_range) * usable_h));
-                        
-                        if i == 0 {
-                            segments.push(format!("M {:.1} {:.1}", x, y));
-                        } else {
-                            segments.push(format!("L {:.1} {:.1}", x, y));
-                        }
+                    // 🎯 STEP 4: TRANSLATE TIME SERIES TO THE COMPACT INTERACTIVE PLOT MATRIX
+                    let is_intraday = active_tf == "1D";
+                    chart_stream_data.reserve(points.len());
+                    
+                    for p in points {
+                        let formatted_label = format_timestamp(p.0, is_intraday);
+                        chart_stream_data.push(json!({
+                            "time_horizon": formatted_label,
+                            "market_value": p.1
+                        }));
                     }
-                    path_string = segments.join(" ");
                 }
             }
         }
 
+        // ==============================================================================
+        // 📊 STEP 5: OUTPUT CONSOLIDATED CARDS SPECIFICATION UNIFIED MESH
+        // ==============================================================================
         Ok(json!({
             "type": "card",
             "title": current_price_str,
@@ -128,7 +162,6 @@ impl WorkspaceModule for StockChartCard {
                 {
                     "type": "container",
                     "className": "flex flex-row justify-between items-center w-full mt-1 mb-2 pointer-events-auto",
-                    // 🚀 RESTORED STYLE DICTIONARY: This locks the items on opposite sides and stops select stretching!
                     "style": { "display": "flex", "flexDirection": "row", "justifyContent": "between" },
                     "children": [
                         {
@@ -145,18 +178,12 @@ impl WorkspaceModule for StockChartCard {
                     ]
                 },
                 {
-                    "type": "vector_canvas",
-                    "className": "w-full flex-1",
-                    "style": { "padding": "0px", "margin": "0px" },
-                    "children": [
-                        {
-                            "type": "vector_path",
-                            "d": path_string,
-                            "stroke": "currentColor", 
-                            "stroke_width": 1.5,
-                            "className": "opacity-90 transition-all duration-300"
-                        }
-                    ]
+                    "type": "interactive_chart",
+                    "xAxisKey": "time_horizon",
+                    "series": [
+                        { "key": "market_value", "label": "Spot Value", "stroke": "#38bdf8", "strokeWidth": 1.75 }
+                    ],
+                    "data": chart_stream_data
                 }
             ]
         }))
