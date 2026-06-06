@@ -28,6 +28,9 @@ fn main() {
             // popup
             commands::popup_manager::spawn_native_popup,
             commands::popup_manager::compile_popup_telemetry
+
+            //analysis
+            commands::analysis::trigger_core_analysis
         ])
         .setup(|app| {
             let app_handle = app.handle().clone();
