@@ -47,7 +47,7 @@ impl CentralFinancialsDB {
         let df_shp = LazyFrame::scan_parquet(&shp_path, Default::default()).ok()?.collect().ok()?;
 
         // ==============================================================================
-        // 📊 CORE SHARES OUTSTANDING LOADER
+        // 📊 OPTIMIZED SHARES OUTSTANDING LOADER (Zipped Iterators)
         // ==============================================================================
         let mut share_history_timeline = HashMap::new();
         let shp_tag = df_shp.column("tag_name").ok()?.str().ok()?;
@@ -55,23 +55,30 @@ impl CentralFinancialsDB {
         let shp_bounds = df_shp.column("date_bounds").ok()?.str().ok()?;
         let shp_val = df_shp.column("raw_value").ok()?.str().ok()?;
 
-        for idx in 0..df_shp.shape().0 {
-            if shp_tag.get(idx).unwrap_or("") == "NumberOfShares" {
-                let context = shp_ctx.get(idx).unwrap_or("");
+        // Using zipped iterators avoids the slow chunk-traversal overhead of .get(idx)
+        for (((tag, ctx), bounds), val) in shp_tag.iter()
+            .zip(shp_ctx.iter())
+            .zip(shp_bounds.iter())
+            .zip(shp_val.iter()) 
+        {
+            if tag.unwrap_or("") == "NumberOfShares" {
+                let context = ctx.unwrap_or("");
                 if context == "ShareholdingPatternI" || context == "ShareholdingPattern_ContextI" {
-                    let date_key = shp_bounds.get(idx).unwrap_or("").to_string();
-                    let raw_str = shp_val.get(idx).unwrap_or("0").replace(",", "").replace(" ", "");
-                    let parsed_shares: f64 = raw_str.parse().unwrap_or(0.0);
-                    
-                    if parsed_shares > 1_000_000.0 && !date_key.is_empty() {
-                        share_history_timeline.insert(date_key, parsed_shares);
+                    let date_key = bounds.unwrap_or("");
+                    if !date_key.is_empty() {
+                        let raw_str = val.unwrap_or("0").replace(",", "").replace(" ", "");
+                        if let Ok(parsed_shares) = raw_str.parse::<f64>() {
+                            if parsed_shares > 1_000_000.0 {
+                                share_history_timeline.insert(date_key.to_string(), parsed_shares);
+                            }
+                        }
                     }
                 }
             }
         }
 
         // ==============================================================================
-        // 📊 TAXONOMY-GOVERNED DETECTOR ENGINE (Two-Pass Metadata Scanner)
+        // 📊 SINGLE-PASS COLLAPSED FINANCIALS ENGINE (Zero Repeated Scans)
         // ==============================================================================
         let date_bounds_col = df_fin.column("date_bounds").ok()?.str().ok()?;
         let source_file_col = df_fin.column("source_file").ok()?.str().ok()?;
@@ -79,78 +86,72 @@ impl CentralFinancialsDB {
         let raw_value_col = df_fin.column("raw_value").ok()?.str().ok()?;
 
         #[derive(Default)]
-        struct FileMeta {
+        struct FileCacheEntry {
             date: String,
             nature: String,
             has_bse_annual_bounds: bool,
+            metrics: HashMap<String, f64>,
         }
 
-        let mut file_metadata_map: HashMap<String, FileMeta> = HashMap::new();
+        let mut file_processing_map: HashMap<String, FileCacheEntry> = HashMap::new();
 
-        // 🎯 PASS 1: Extract authentic reporting properties directly from the internal taxonomy data rows
-        for idx in 0..df_fin.shape().0 {
-            let file = source_file_col.get(idx).unwrap_or("");
-            if file.is_empty() { continue; }
+        // One single pass through the dataframe extracts metadata and fills metrics simultaneously
+        for (((bounds, file), tag), val) in date_bounds_col.iter()
+            .zip(source_file_col.iter())
+            .zip(tag_name_col.iter())
+            .zip(raw_value_col.iter()) 
+        {
+            let file_name = match file {
+                Some(f) if !f.is_empty() => f,
+                _ => continue,
+            };
 
-            let tag = tag_name_col.get(idx).unwrap_or("");
-            let raw_val = raw_value_col.get(idx).unwrap_or("").trim().to_string();
+            let tag_str = tag.unwrap_or("");
+            let val_str = val.unwrap_or("");
+            let bounds_str = bounds.unwrap_or("");
 
-            let entry = file_metadata_map.entry(file.to_string()).or_default();
+            let entry = file_processing_map.entry(file_name.to_string()).or_default();
 
-            if tag == "DateOfEndOfReportingPeriod" && !raw_val.is_empty() && raw_val != "NA" {
-                entry.date = raw_val;
-            } else if tag == "NatureOfReportStandaloneConsolidated" && !raw_val.is_empty() && raw_val != "NA" {
-                entry.nature = raw_val.to_uppercase(); // e.g., "CONSOLIDATED" or "STANDALONE"
+            // Intercept taxonomy metadata tokens on the fly
+            if tag_str == "DateOfEndOfReportingPeriod" && !val_str.is_empty() && val_str != "NA" {
+                entry.date = val_str.trim().to_string();
+            } else if tag_str == "NatureOfReportStandaloneConsolidated" && !val_str.is_empty() && val_str != "NA" {
+                entry.nature = val_str.trim().to_uppercase();
             }
 
-            if exchange == Exchange::Bse {
-                let bounds = date_bounds_col.get(idx).unwrap_or("");
-                if bounds.contains("-04-01 to ") {
-                    entry.has_bse_annual_bounds = true;
-                }
+            if exchange == Exchange::Bse && bounds_str.contains("-04-01 to ") {
+                entry.has_bse_annual_bounds = true;
             }
+
+            // Parse and cleanly store the numeric observation inside the mapped bucket
+            let cleaned_val: f64 = val_str.replace(",", "").replace(" ", "").trim().parse().unwrap_or(0.0);
+            entry.metrics.insert(tag_str.to_string(), cleaned_val);
         }
 
+        // ==============================================================================
+        // 📊 TAXONOMY SELECTION FILTER (Post-Pass Matrix Construction)
+        // ==============================================================================
         let mut sorted_file_keys = Vec::new();
         let mut document_matrix = HashMap::new();
         let mut file_to_date_map = HashMap::new();
 
-        // 🎯 PASS 2: Filter and compile reporting arrays using purely taxonomy-derived properties
-        for idx in 0..df_fin.shape().0 {
-            let file = source_file_col.get(idx).unwrap_or("").to_string();
-            if file.is_empty() { continue; }
+        // Loop over unique files map instead of thousands of rows
+        for (file_key, cache) in file_processing_map {
+            let is_consolidated = cache.nature.contains("CONSOLIDATED");
+            let mut is_candidate = is_consolidated && !cache.date.is_empty() && cache.date.ends_with("-03-31");
 
-            let tag = tag_name_col.get(idx).unwrap_or("").to_string();
-            let raw_val = raw_value_col.get(idx).unwrap_or("");
+            if is_candidate && exchange == Exchange::Bse {
+                is_candidate = cache.has_bse_annual_bounds;
+            }
 
-            if let Some(meta) = file_metadata_map.get(&file) {
-                // Check report nature and end date directly from the internal cells (No filename string-checking!)
-                let is_consolidated = meta.nature.contains("CONSOLIDATED");
-                let mut is_candidate = is_consolidated && !meta.date.is_empty() && meta.date.ends_with("-03-31");
-
-                if is_candidate && exchange == Exchange::Bse {
-                    // Retain full-year duration tracking for BSE audited entries
-                    is_candidate = meta.has_bse_annual_bounds;
-                }
-
-                if is_candidate {
-                    if !document_matrix.contains_key(&file) {
-                        sorted_file_keys.push(file.clone());
-                        document_matrix.insert(file.clone(), HashMap::new());
-                        file_to_date_map.insert(file.clone(), meta.date.clone());
-                    }
-                    
-                    let cleaned_val: f64 = raw_val.replace(",", "").replace(" ", "").trim().parse().unwrap_or(0.0);
-                    
-                    // Populate metrics into the matrix bucket
-                    if let Some(metrics) = document_matrix.get_mut(&file) {
-                        metrics.insert(tag, cleaned_val);
-                    }
-                }
+            if is_candidate {
+                sorted_file_keys.push(file_key.clone());
+                file_to_date_map.insert(file_key.clone(), cache.date);
+                document_matrix.insert(file_key, cache.metrics);
             }
         }
 
-        // Organize reporting entries chronologically based on authentic statement endpoint dates
+        // Organize reporting entries chronologically based on statement endpoint dates
         let file_to_date_ref = &file_to_date_map;
         sorted_file_keys.sort_by(|a, b| {
             let d_a = file_to_date_ref.get(a).map(|s| s.as_str()).unwrap_or("");

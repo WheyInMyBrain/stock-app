@@ -11,6 +11,10 @@ pub mod balance_sheet;
 pub mod cashflow;
 pub mod financial_multiples;
 pub mod dcf_projections;
+pub mod epv_projections;
+pub mod merton_bates;
+pub mod merton_kmv;
+pub mod monte_carlo;
 pub mod popup;
 
 use serde_json::Value;
