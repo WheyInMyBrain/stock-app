@@ -1,5 +1,3 @@
-// analysis/src/data_loader.rs
-
 use std::collections::HashMap;
 use std::path::Path;
 use std::fs::File;
@@ -17,7 +15,7 @@ pub struct UnifiedCompanyMatrix {
     pub document_matrix: HashMap<String, HashMap<String, f64>>, // Stores ALL tags present in the parquets!
     pub share_history_timeline: HashMap<String, f64>,
     
-    // 🎯 CLEANED: Retains only raw, sequential timeline vectors and price mappings
+    // Retains only raw, sequential timeline vectors and price mappings
     pub raw_chart_records: Vec<(String, f64)>,
     pub price_timeline: HashMap<String, f64>,
 }
@@ -73,62 +71,78 @@ impl CentralFinancialsDB {
         }
 
         // ==============================================================================
-        // 📊 UNRESTRICTED DYNAMIC ALIGNMENT MACHINE (No Tag Lists!)
+        // 📊 TAXONOMY-GOVERNED DETECTOR ENGINE (Two-Pass Metadata Scanner)
         // ==============================================================================
         let date_bounds_col = df_fin.column("date_bounds").ok()?.str().ok()?;
         let source_file_col = df_fin.column("source_file").ok()?.str().ok()?;
         let tag_name_col = df_fin.column("tag_name").ok()?.str().ok()?;
         let raw_value_col = df_fin.column("raw_value").ok()?.str().ok()?;
 
+        #[derive(Default)]
+        struct FileMeta {
+            date: String,
+            nature: String,
+            has_bse_annual_bounds: bool,
+        }
+
+        let mut file_metadata_map: HashMap<String, FileMeta> = HashMap::new();
+
+        // 🎯 PASS 1: Extract authentic reporting properties directly from the internal taxonomy data rows
+        for idx in 0..df_fin.shape().0 {
+            let file = source_file_col.get(idx).unwrap_or("");
+            if file.is_empty() { continue; }
+
+            let tag = tag_name_col.get(idx).unwrap_or("");
+            let raw_val = raw_value_col.get(idx).unwrap_or("").trim().to_string();
+
+            let entry = file_metadata_map.entry(file.to_string()).or_default();
+
+            if tag == "DateOfEndOfReportingPeriod" && !raw_val.is_empty() && raw_val != "NA" {
+                entry.date = raw_val;
+            } else if tag == "NatureOfReportStandaloneConsolidated" && !raw_val.is_empty() && raw_val != "NA" {
+                entry.nature = raw_val.to_uppercase(); // e.g., "CONSOLIDATED" or "STANDALONE"
+            }
+
+            if exchange == Exchange::Bse {
+                let bounds = date_bounds_col.get(idx).unwrap_or("");
+                if bounds.contains("-04-01 to ") {
+                    entry.has_bse_annual_bounds = true;
+                }
+            }
+        }
+
         let mut sorted_file_keys = Vec::new();
         let mut document_matrix = HashMap::new();
         let mut file_to_date_map = HashMap::new();
 
+        // 🎯 PASS 2: Filter and compile reporting arrays using purely taxonomy-derived properties
         for idx in 0..df_fin.shape().0 {
             let file = source_file_col.get(idx).unwrap_or("").to_string();
+            if file.is_empty() { continue; }
+
             let tag = tag_name_col.get(idx).unwrap_or("").to_string();
             let raw_val = raw_value_col.get(idx).unwrap_or("");
 
-            // Enforce basic core file layout criteria
-            let mut is_candidate = match exchange {
-                Exchange::Bse => file.contains("Consolidated") && file.contains("_MC") && date_bounds_col.get(idx).unwrap_or("").contains("-04-01 to "),
-                Exchange::Nse => file.contains("Consolidated"),
-            };
+            if let Some(meta) = file_metadata_map.get(&file) {
+                // Check report nature and end date directly from the internal cells (No filename string-checking!)
+                let is_consolidated = meta.nature.contains("CONSOLIDATED");
+                let mut is_candidate = is_consolidated && !meta.date.is_empty() && meta.date.ends_with("-03-31");
 
-            if is_candidate {
-                let parsed_date = match exchange {
-                    Exchange::Bse => {
-                        let bounds_str = date_bounds_col.get(idx).unwrap_or("");
-                        bounds_str.split(" to ").collect::<Vec<&str>>().get(1).unwrap_or(&"2024-03-31").to_string()
-                    },
-                    Exchange::Nse => {
-                        let prefix = file.split('_').next().unwrap_or("31-Mar-2024");
-                        let comps: Vec<&str> = prefix.split('-').collect();
-                        if comps.len() >= 3 {
-                            let m_num = match comps[1].to_lowercase().as_str() {
-                                "jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04", "may" => "05", "jun" => "06", 
-                                "jul" => "07", "aug" => "08", "sep" => "09", "oct" => "10", "nov" => "11", "dec" => "12", _ => "03"
-                            };
-                            format!("{}-{}-{}", comps[2], m_num, comps[0])
-                        } else { "2024-03-31".to_string() }
-                    }
-                };
-
-                // March-Annual Gatekeeper protects your data array dimensions from quarterly files
-                if exchange == Exchange::Nse && !parsed_date.ends_with("-03-31") {
-                    is_candidate = false;
+                if is_candidate && exchange == Exchange::Bse {
+                    // Retain full-year duration tracking for BSE audited entries
+                    is_candidate = meta.has_bse_annual_bounds;
                 }
 
                 if is_candidate {
                     if !document_matrix.contains_key(&file) {
                         sorted_file_keys.push(file.clone());
                         document_matrix.insert(file.clone(), HashMap::new());
-                        file_to_date_map.insert(file.clone(), parsed_date);
+                        file_to_date_map.insert(file.clone(), meta.date.clone());
                     }
                     
                     let cleaned_val: f64 = raw_val.replace(",", "").replace(" ", "").trim().parse().unwrap_or(0.0);
                     
-                    // Natively pick and insert whatever accounting tag is present in this row!
+                    // Populate metrics into the matrix bucket
                     if let Some(metrics) = document_matrix.get_mut(&file) {
                         metrics.insert(tag, cleaned_val);
                     }
@@ -136,7 +150,7 @@ impl CentralFinancialsDB {
             }
         }
 
-        // Organize unique files chronologically
+        // Organize reporting entries chronologically based on authentic statement endpoint dates
         let file_to_date_ref = &file_to_date_map;
         sorted_file_keys.sort_by(|a, b| {
             let d_a = file_to_date_ref.get(a).map(|s| s.as_str()).unwrap_or("");
@@ -145,7 +159,7 @@ impl CentralFinancialsDB {
         });
 
         // ==============================================================================
-        // 📊 🎯 PURE INGESTION: HISTORICAL CHART RECORDS BROKER
+        // 📊 INGESTION: HISTORICAL CHART RECORDS BROKER
         // ==============================================================================
         let mut raw_chart_records = Vec::new();
         let mut price_timeline = HashMap::new();

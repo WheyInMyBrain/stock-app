@@ -1,5 +1,3 @@
-// analysis/src/main.rs
-
 use polars::prelude::PolarsResult;
 use std::env;
 
@@ -22,8 +20,9 @@ fn main() -> PolarsResult<()> {
         println!("💡 Available Keys:");
         println!("   ├── wacc=<number>         (Default: 0.12)");
         println!("   ├── term_g=<number>       (Default: 0.04)");
-        println!("   └── data-dir=<path>       (Default: ../data)");
-        println!("\n👉 Example: cargo run --release IMFA wacc=0.13 data-dir=/absolute/path/to/data");
+        println!("   ├── data-dir=<path>       (Default: ../data)");
+        println!("   └── run=<modules>         (Default: all, e.g., multiples,dcf,mc)");
+        println!("\n👉 Example: cargo run --release IMFA wacc=0.13 run=multiples,dcf data-dir=/absolute/path/to/data");
         return Ok(());
     }
 
@@ -33,7 +32,8 @@ fn main() -> PolarsResult<()> {
     // Core fallback defaults
     let mut wacc: f64 = 0.12;
     let mut terminal_g: f64 = 0.04;
-    let mut data_dir: String = "../data".to_string(); // 🎯 FIXED: Centralized tracking path fallback
+    let mut data_dir: String = "../data".to_string(); 
+    let mut modules_selector: String = "all".to_string(); // 🎯 NEW: Dynamic selective execution track default
 
     // Iterate through key-value overrides passed anywhere after the ticker parameter
     for arg in args.iter().skip(2) {
@@ -51,8 +51,11 @@ fn main() -> PolarsResult<()> {
                     }
                 }
                 "data_dir" | "data-dir" | "--data-dir" => {
-                    // 🎯 FIXED: Extract explicit data repository target string context safely
                     data_dir = val_str.trim().to_string();
+                }
+                // 🎯 NEW: Parse custom module selection triggers or shorthand tokens from console inputs
+                "modules" | "run" | "track" => {
+                    modules_selector = val_str.trim().to_string();
                 }
                 unknown => {
                     println!("⚠️ WARNING: Ignored unrecognized parameter key: '{}'", unknown);
@@ -66,11 +69,11 @@ fn main() -> PolarsResult<()> {
     println!("=================================================================================");
     println!("📈 RUNNING ANALYSIS WORKSPACE CORE MATRIX FOR TICKER: {}", ticker);
     println!("📍 Target Unified Data Storage Path Coordinate: {}", data_dir);
+    println!("🎯 Active Analytical Scope Target Tracker      : {}", modules_selector);
     println!("=================================================================================");
 
-    // 🎯 Execute your clean consolidated data broker picker pipeline matrix
-    // NOTE: You will update runner::run_global_analysis_pipeline's signature next to pass down data_dir!
-    runner::run_global_analysis_pipeline(ticker, wacc, terminal_g, &data_dir);
+    // 🎯 Execute the updated pipeline orchestration sequence passing down the selective modules choice
+    runner::run_global_analysis_pipeline(ticker, wacc, terminal_g, &data_dir, &modules_selector);
 
     Ok(())
 }
