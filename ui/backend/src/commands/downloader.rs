@@ -1,17 +1,40 @@
 // stock-app/ui/backend/src/commands/downloader.rs
 use std::process::{Stdio, Command};
-use std::io::{BufRead, BufReader}; 
+use std::io::{BufRead, BufReader as StdBufReader}; 
 use std::path::Path;
-use tokio::io::{AsyncReadExt, AsyncWriteExt}; 
+use std::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader as TokioBufReader, AsyncBufReadExt}; 
 use crate::commands::data_loader::WorkspaceDataContext;
 use crate::commands::data_dir::resolve_data_directory_headless;
 use crate::commands::memory_pool::update_memory_cache;
+
+#[derive(Clone, Debug)]
+pub struct ActiveDownload {
+    pub current_api: String,
+    pub filename: String,
+    pub percentage: f32,
+    pub current_step: usize,
+    pub total_steps: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct IngestionProgress {
+    pub ticker: String,
+    pub nse_active: bool,
+    pub bse_active: bool,
+    pub nse_downloads: Vec<ActiveDownload>,
+    pub bse_downloads: Vec<ActiveDownload>,
+    pub is_done: bool,
+    pub current_phase: String,
+    pub last_step: usize,
+}
+
+pub static ACTIVE_INGESTION: Mutex<Option<IngestionProgress>> = Mutex::new(None);
 
 pub fn initialize_persistent_go_daemon(_app_handle: tauri::AppHandle) {
     initialize_go_daemon();
 }
 
-/// 🚀 PURIFIED GO DAEMON SUMMONER
 pub fn initialize_go_daemon() {
     std::thread::spawn(move || {
         let active_dir = resolve_data_directory_headless().to_string_lossy().to_string();
@@ -49,9 +72,8 @@ pub fn initialize_go_daemon() {
         let stderr = child.stderr.take().unwrap();
         let active_dir_clone = active_dir.clone();
 
-        // Dedicated background thread listening to clear, light-blue Go logs
         std::thread::spawn(move || {
-            let mut reader = BufReader::new(stdout).lines();
+            let mut reader = StdBufReader::new(stdout).lines();
             while let Some(Ok(line)) = reader.next() {
                 let cleaned_line = strip_ansi_escape_codes(&line);
                 println!("\x1b[96m[Go Output] {}\x1b[0m", cleaned_line);
@@ -80,7 +102,7 @@ pub fn initialize_go_daemon() {
         });
 
         std::thread::spawn(move || {
-            let mut reader = BufReader::new(stderr).lines();
+            let mut reader = StdBufReader::new(stderr).lines();
             while let Some(Ok(line)) = reader.next() {
                 println!("\x1b[31m🚨 [GO DAEMON ERROR]: {}\x1b[0m", line);
             }
@@ -100,13 +122,32 @@ pub async fn run_sidecar_downloader(
     run_sidecar_downloader_native(flags).await
 }
 
-/// ⚡ UNIFIED IPC DISPATCHER
-/// Channels 100% of transmissions across the Unix Domain Socket to trigger Go execution routines perfectly.
 pub async fn run_sidecar_downloader_native(extra_args: Vec<String>) -> Result<String, String> {
     if extra_args.is_empty() { return Err("Flags empty".to_string()); }
 
+    let ticker = extra_args.iter().find(|f| !f.starts_with("-")).cloned().unwrap_or_default().to_uppercase();
     let active_dir = resolve_data_directory_headless().to_string_lossy().to_string();
     let socket_path = Path::new(&active_dir).join("downloader_engine.sock");
+
+    let mode = extra_args.iter()
+        .find(|f| f.starts_with("--mode=") || f.starts_with("-mode="))
+        .map(|f| f.split('=').nth(1).unwrap_or("both"))
+        .unwrap_or("both");
+    let initial_phase = if mode == "bse" { "BSE" } else { "NSE" };
+
+    {
+        let mut guard = ACTIVE_INGESTION.lock().unwrap();
+        *guard = Some(IngestionProgress {
+            ticker: ticker.clone(),
+            nse_active: mode == "both" || mode == "nse",
+            bse_active: mode == "both" || mode == "bse",
+            nse_downloads: Vec::new(),
+            bse_downloads: Vec::new(),
+            is_done: false,
+            current_phase: initial_phase.to_string(),
+            last_step: 0,
+        });
+    }
 
     match tokio::net::UnixStream::connect(&socket_path).await {
         Ok(mut socket) => {
@@ -116,23 +157,108 @@ pub async fn run_sidecar_downloader_native(extra_args: Vec<String>) -> Result<St
             let instruction_payload = payload_parts.join(" ") + "\n";
             
             if socket.write_all(instruction_payload.as_bytes()).await.is_ok() {
-                // If a stream loop was explicitly requested anywhere in the argument matrix slice
+                let mut reader = TokioBufReader::new(socket);
+                let mut line = String::new();
+
+                loop {
+                    // Stop checkpoint guard
+                    {
+                        if ACTIVE_INGESTION.lock().unwrap().is_none() {
+                            return Err("Cancelled by user request".to_string());
+                        }
+                    }
+
+                    line.clear();
+                    match reader.read_line(&mut line).await {
+                        Ok(0) => break, 
+                        Ok(_) => {
+                            let trimmed = line.trim();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            if trimmed == "PAYLOAD_START" {
+                                break;
+                            }
+
+                            if trimmed.starts_with("GO_TELEMETRY|") {
+                                let parts: Vec<&str> = trimmed.split('|').collect();
+                                let mut exchange = String::new();
+                                let mut api_name = String::new();
+                                let mut file_name = String::new();
+                                let mut pct_val = 0.0f32;
+                                let mut step_cur = 0;
+                                let mut step_tot = 0;
+
+                                for part in parts {
+                                    if part.starts_with("EXCH:") {
+                                        exchange = part[5..].to_string();
+                                    } else if part.starts_with("API:") {
+                                        api_name = part[4..].to_string();
+                                    } else if part.starts_with("FILE:") {
+                                        file_name = part[5..].to_string();
+                                    } else if part.starts_with("PCT:") {
+                                        if let Ok(val) = part[4..].parse::<f32>() {
+                                            pct_val = val;
+                                        }
+                                    } else if part.starts_with("STEP:") {
+                                        let step_str = &part[5..];
+                                        let step_parts: Vec<&str> = step_str.split('/').collect();
+                                        if step_parts.len() == 2 {
+                                            step_cur = step_parts[0].parse::<usize>().unwrap_or(0);
+                                            step_tot = step_parts[1].parse::<usize>().unwrap_or(0);
+                                        }
+                                    }
+                                }
+
+                                if let Some(ref mut progress) = *ACTIVE_INGESTION.lock().unwrap() {
+                                    if !api_name.is_empty() {
+                                        // 🎯 STATELESS DECOUPLING: Route directly into the targeted vector track based on the exchange tag
+                                        let target_vec = if exchange == "NSE" {
+                                            &mut progress.nse_downloads
+                                        } else {
+                                            &mut progress.bse_downloads
+                                        };
+
+                                        if let Some(existing) = target_vec.iter_mut().find(|d| d.current_api == api_name) {
+                                            if !file_name.is_empty() { existing.filename = file_name; }
+                                            if trimmed.contains("|PCT:") { existing.percentage = pct_val; }
+                                            if step_cur > 0 { existing.current_step = step_cur; }
+                                            if step_tot > 0 { existing.total_steps = step_tot; }
+                                        } else {
+                                            target_vec.push(ActiveDownload {
+                                                current_api: api_name,
+                                                filename: file_name,
+                                                percentage: pct_val,
+                                                current_step: step_cur,
+                                                total_steps: step_tot,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+
                 if extra_args.iter().any(|f| f == "--stream" || f == "-stream") {
                     let mut header_buffer = [0u8; 4];
-                    if socket.read_exact(&mut header_buffer).await.is_ok() {
+                    if reader.read_exact(&mut header_buffer).await.is_ok() {
                         let payload_size = u32::from_be_bytes(header_buffer) as usize;
                         let mut data_buffer = vec![0u8; payload_size];
-                        if socket.read_exact(&mut data_buffer).await.is_ok() {
+                        if reader.read_exact(&mut data_buffer).await.is_ok() {
                             if let Ok(raw_json_string) = String::from_utf8(data_buffer) {
-                                // Dynamically detect ticker and api flags to update memory cache index slots seamlessly
-                                let ticker = extra_args.iter().find(|f| !f.starts_with("-")).cloned().unwrap_or_default();
                                 let api = extra_args.iter()
                                     .find(|f| f.starts_with("--api="))
                                     .map(|f| f.split('=').nth(1).unwrap_or(""))
                                     .unwrap_or("");
                                 
                                 if !ticker.is_empty() && !api.is_empty() {
-                                    update_memory_cache(&ticker.to_uppercase(), api, raw_json_string.clone());
+                                    update_memory_cache(&ticker, api, raw_json_string.clone());
+                                }
+
+                                if let Some(ref mut progress) = *ACTIVE_INGESTION.lock().unwrap() {
+                                    progress.is_done = true;
                                 }
                                 return Ok(raw_json_string);
                             }
@@ -141,12 +267,18 @@ pub async fn run_sidecar_downloader_native(extra_args: Vec<String>) -> Result<St
                     return Err("Failed reading payload response from socket stream".to_string());
                 } 
                 
-                // One-Shot Ingestion Pass
+                if let Some(ref mut progress) = *ACTIVE_INGESTION.lock().unwrap() {
+                    progress.is_done = true;
+                }
                 return Ok("Signal accepted over socket layer successfully".to_string());
             }
             Err("Failed packing instructions down socket channel".to_string())
         }
-        Err(e) => Err(format!("🚨 [IPC CONNECTION FAILED]: {}", e)),
+        Err(e) => {
+            let mut guard = ACTIVE_INGESTION.lock().unwrap();
+            *guard = None; 
+            Err(format!("🚨 [IPC CONNECTION FAILED]: {}", e))
+        }
     }
 }
 

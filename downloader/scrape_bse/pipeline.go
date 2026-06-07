@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
+    "time"
 	"strings"
 )
 
@@ -31,48 +31,70 @@ type BSEFilingsEndpoint interface {
 	ParseResponse(body io.Reader) ([]UniversalRecord, error)
 }
 
-// ExecuteWithWarmClient serves as the blazing-fast daemon gateway for the BSE stack.
-func ExecuteWithWarmClient(client *BSEClient, symbol string, workerCount int, targetApi string, globalDataDir string, onlyJson bool) (string, error) {
-    // 🔵 Unified Log: Smart Search Tracker Initiation
+// ExecuteWithWarmClient coordinates the BSE API batch queue concurrently with absolute fault isolation
+func ExecuteWithWarmClient(client *BSEClient, symbol string, workerCount int, targetApi string, globalDataDir string, onlyJson bool, telemetry interface{ WriteLine(string) }) (string, error) {
     fmt.Printf("%s{BSE}  🔍 Performing smart search lookup for ticker token: %s...%s\n", ColorBlue, symbol, ColorReset)
     scripCode, err := GetScripCode(client, symbol, globalDataDir)
     if err != nil {
         return "", fmt.Errorf("BSE identifier mapping failed: %w", err)
     }
-    // 🔵 Unified Log: Resolution Handshake Successful
     fmt.Printf("%s{BSE} 🎯 Successfully mapped %s ----> BSE Scrip Code: %s%s\n", ColorBlue, symbol, scripCode, ColorReset)
 
-    // 2. Dynamic endpoint array loaded from endpoints.go
     endpoints := GetAllEndpoints()
-    var capturedJSON string
-
+    totalSteps := 0
     for _, endpoint := range endpoints {
-        // If a specific API is requested, bypass everything that doesn't match its endpoint name!
-        if targetApi != "" && endpoint.Name() != targetApi {
-            continue
-        }
-
-        // 🔵 Unified Log: Sequential Pipeline Run Target Notification
-        fmt.Printf("\n%s{BSE} 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, endpoint.Name(), ColorReset)
-
-        // Execute each strategy using the shared, authenticated client and resolved scripCode
-        rawBytes, err := executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, onlyJson)
-        if err != nil {
-            // 🚨 Fault Isolation: Marked cleanly in Red
-            fmt.Fprintf(os.Stderr, "%s{BSE} ⚠️ Error running pipeline %s: %v%s\n", ColorRed, endpoint.Name(), err, ColorReset)
-            return "", err
-        }
-
-        // If the execution pulled valid network data bytes, cast them to a string reference frame
-        if len(rawBytes) > 0 {
-            capturedJSON = string(rawBytes)
+        if targetApi == "" || endpoint.Name() == targetApi {
+            totalSteps++
         }
     }
 
+    sem := make(chan struct{}, 2)
+    var wg sync.WaitGroup
+    var mu sync.Mutex 
+    var capturedJSON string
+
+    currentStep := 0
+    for _, endpoint := range endpoints {
+        if targetApi != "" && endpoint.Name() != targetApi {
+            continue
+        }
+        currentStep++ 
+
+        wg.Add(1)
+        go func(ep BSEFilingsEndpoint, step int) {
+            defer wg.Done()
+
+            sem <- struct{}{}
+            defer func() { <-sem }() 
+
+            if telemetry != nil {
+                telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:BSE|API:%s|STATUS:START|STEP:%d/%d", ep.Name(), step, totalSteps))
+            }
+
+            fmt.Printf("\n%s{BSE} 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, ep.Name(), ColorReset)
+
+            rawBytes, err := executeStrategy(client, symbol, scripCode, ep, workerCount, globalDataDir, onlyJson, telemetry, step, totalSteps)
+            
+            mu.Lock()
+            defer mu.Unlock()
+
+            if err != nil {
+                // 🛡️ ISOLATED FAULT BOUNDARY: Log the drop but do not fail the overarching batch function
+                fmt.Fprintf(os.Stderr, "%s{BSE} ⚠️ Error running pipeline %s: %v%s\n", ColorRed, ep.Name(), err, ColorReset)
+                return
+            }
+
+            if len(rawBytes) > 0 {
+                capturedJSON = string(rawBytes)
+            }
+        }(endpoint, currentStep)
+    }
+
+    wg.Wait()
     return capturedJSON, nil
 }
 
-// ExecuteAll serves as the single execution gateway from main.go for the BSE legacy pipeline network.
+// ExecuteAll manages standalone CLI runs for BSE strategies concurrently with pacing controls
 func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir string, onlyJson bool) error {
     client, err := NewBSEClient()
     if err != nil {
@@ -94,41 +116,101 @@ func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir 
         return nil
     }
 
+    // 1. Pre-calculate total steps to maintain consistent step math contexts
+    totalSteps := 0
+    for _, endpoint := range endpoints {
+        if targetApi == "" || endpoint.Name() == targetApi {
+            totalSteps++
+        }
+    }
+
+    // 🎯 FIREWALL SEMAPHORE: Restricts simultaneous active endpoints to 2 to safeguard network limits
+    sem := make(chan struct{}, 1)
+    var wg sync.WaitGroup
+    var mu sync.Mutex
+    var firstErr error
+
+    currentStep := 0
     for _, endpoint := range endpoints {
         if targetApi != "" && endpoint.Name() != targetApi {
             continue
         }
+        currentStep++
 
-        // 🔵 Unified Log: CLI Mode Pipeline Execution Notice
-        fmt.Printf("\n%s{BSE} 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, endpoint.Name(), ColorReset)
+        wg.Add(1)
+        // 🚀 MULTIPROCESSING: Spawn each independent strategy in parallel
+        go func(ep BSEFilingsEndpoint, step int) {
+            defer wg.Done()
 
-        // 🎯 FIXED: Forward onlyJson into the execution strategy to short-circuit corporate document downloads
-        _, _ = executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, onlyJson)
+            // 🛑 ACQUIRE SLOT: Blocks if 2 strategies are already running across the parallel stack
+            sem <- struct{}{}
+            defer func() { <-sem }() // 🟢 RELEASE SLOT
+
+            // 🔵 Unified Log: CLI Mode Pipeline Execution Notice
+            fmt.Printf("\n%s{BSE} 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, ep.Name(), ColorReset)
+
+            // 🎯 SIGNATURE COMPLIANCE: Pass nil for telemetry, along with step context trackers to satisfy compiler requirements
+            _, err := executeStrategy(client, symbol, scripCode, ep, workerCount, globalDataDir, onlyJson, nil, step, totalSteps)
+            
+            mu.Lock()
+            if err != nil && firstErr == nil {
+                firstErr = err // Safely store first broken context trace without concurrent overwrite races
+            }
+            mu.Unlock()
+        }(endpoint, currentStep)
     }
 
-    return nil
+    wg.Wait() // Wait for all concurrent routines to conclude operations
+    return firstErr
 }
 
-// executeStrategy maps out the processing loop safely.
-// Updated signature syntax schema to return ([]byte, error) natively up the tracking context chain.
-func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFilingsEndpoint, workerCount int, globalDataDir string, onlyJson bool) ([]byte, error) {
+type progressTrackingReader struct {
+    io.Reader
+    apiName     string
+    filename    string
+    totalBytes  int64
+    readBytes   int64
+    currentStep int
+    totalSteps  int
+    telemetry   interface{ WriteLine(string) }
+}
+
+func (ptr *progressTrackingReader) Read(p []byte) (int, error) {
+    n, err := ptr.Reader.Read(p)
+    if n > 0 {
+        ptr.readBytes += int64(n)
+        if ptr.totalBytes > 0 && ptr.telemetry != nil {
+            pct := (float64(ptr.readBytes) / float64(ptr.totalBytes)) * 100.0
+            ptr.telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:BSE|API:%s|FILE:%s|PCT:%.1f|STEP:%d/%d", ptr.apiName, ptr.filename, pct, ptr.currentStep, ptr.totalSteps))
+        }
+    }
+    return n, err
+}
+
+func executeStrategy(
+    client *BSEClient,
+    symbol, scripCode string,
+    endpoint BSEFilingsEndpoint,
+    workerCount int,
+    globalDataDir string, 
+    onlyJson bool,
+    telemetry interface{ WriteLine(string) },
+    currentStep int,
+    totalSteps int,
+) ([]byte, error) {
     var outputDir string
 
-    // If Rust provides an explicit global data directory path, anchor it instantly!
-    // Otherwise, drop down to the bulletproof absolute fallback path calculator for raw terminal runs.
     if globalDataDir != "" {
         outputDir = filepath.Join(globalDataDir, symbol, "bse_"+endpoint.Name())
         if err := os.MkdirAll(outputDir, 0755); err != nil {
             return nil, fmt.Errorf("failed creating explicit global BSE target directory: %w", err)
         }
     } else {
-        // Mount automated directory path right away: data/{symbol}/bse_{api_name}
         baseDir, err := buildSaveDirectory(symbol, endpoint.Name())
         if err != nil {
             return nil, fmt.Errorf("failed creating directories: %w", err)
         }
 
-        // 🎯 DEFINITIVE ABSOLUTE PATH RESOLUTION FOR BSE
         absPath, err := filepath.Abs(baseDir)
         if err != nil {
             return nil, fmt.Errorf("failed to compute absolute path context: %w", err)
@@ -146,7 +228,7 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
     }
 
     // ============================================================================
-    // 🛡️ INTERCEPT DEALS STRATEGY: Handle Bulk (type=1) and Block (type=2) dynamics sequentially
+    // 🛡️ INTERCEPT DEALS STRATEGY: Handle Bulk and Block dynamics sequentially
     // ============================================================================
     if endpoint.Name() == "bulk-block-deals" {
         dealsAPI, ok := endpoint.(BSEBulkBlockDealsAPI)
@@ -158,8 +240,8 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
         var lastDealsBytes []byte
 
         for _, dir := range directives {
+            filename := fmt.Sprintf("%s.json", dir.Period)
             targetURL := dir.DownloadURL[15:]
-            // 🔵 Unified Log: Blue institutional deal tracking
             fmt.Printf("%s{BSE} 📊 Fetching institutional market transaction layer: %s%s\n", ColorBlue, dir.Period, ColorReset)
 
             req, err := http.NewRequest("GET", targetURL, nil)
@@ -173,40 +255,51 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
 
             resp, err := client.HTTPClient.Do(req)
             if err != nil {
-                // 🚨 Fault Isolation: Red dropout notice
                 fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Connection error dropped deal fetch for %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
             if resp.StatusCode != http.StatusOK {
-                // 🚨 Fault Isolation: Red API rejection notice
                 fmt.Fprintf(os.Stderr, "%s{BSE} ❌ BSE API rejected deal entry %s, status code: %d%s\n", ColorRed, dir.Period, resp.StatusCode, ColorReset)
                 resp.Body.Close()
                 continue
             }
 
-            dealBytes, err := io.ReadAll(resp.Body)
+            tracker := &progressTrackingReader{
+                Reader:      resp.Body,
+                apiName:     endpoint.Name(),
+                filename:    filename,
+                totalBytes:  resp.ContentLength,
+                currentStep: currentStep,
+                totalSteps:  totalSteps,
+                telemetry:   telemetry,
+            }
+
+            dealBytes, err := io.ReadAll(tracker)
             resp.Body.Close()
             if err != nil {
-                // 🚨 Fault Isolation: Red stream fault notice
                 fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Read failed for transaction stream row %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
-            dealPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", dir.Period))
+            // 🎯 TELEMETRY FLUSH: Explicit completion ticket allocation
+            if telemetry != nil {
+                telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:BSE|API:%s|FILE:%s|PCT:100.0|STEP:%d/%d", endpoint.Name(), filename, currentStep, totalSteps))
+            }
+
+            dealPath := filepath.Join(outputDir, filename)
             if err := os.WriteFile(dealPath, dealBytes, 0644); err != nil {
-                // 🚨 Fault Isolation: Red cache write notice
                 fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Failed writing transaction file to disk %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
             }
 
             lastDealsBytes = dealBytes
-            time.Sleep(150 * time.Millisecond)
+            time.Sleep(100 * time.Millisecond)
         }
         return lastDealsBytes, nil 
     }
 
     // ============================================================================
-    // 🛡️ INTERCEPT CHART STRATEGY: Handle History chart timewise dynamics sequentially
+    // 🛡️ INTERCEPT CHART STRATEGY: Handle History chart multi-horizons sequentially
     // ============================================================================
     if endpoint.Name() == "historical-chart-data" {
         chartAPI, ok := endpoint.(interface {
@@ -221,8 +314,8 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
         var lastChartBytes []byte
 
         for _, dir := range directives {
+            filename := fmt.Sprintf("%s.json", dir.Period)
             targetURL := dir.DownloadURL[17:] 
-            // 🔵 Unified Log: Blue market metrics processing tracker
             fmt.Printf("%s{BSE} 📈 Processing and transforming tracking metrics: %s%s\n", ColorBlue, dir.Period, ColorReset)
 
             req, err := http.NewRequest("GET", targetURL, nil)
@@ -236,32 +329,44 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
 
             resp, err := client.HTTPClient.Do(req)
             if err != nil {
-                // 🚨 Fault Isolation: Red connection failure notice
                 fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Connection failure for chart horizon %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
-            chartBytes, err := io.ReadAll(resp.Body)
+            tracker := &progressTrackingReader{
+                Reader:      resp.Body,
+                apiName:     endpoint.Name(),
+                filename:    filename,
+                totalBytes:  resp.ContentLength,
+                currentStep: currentStep,
+                totalSteps:  totalSteps,
+                telemetry:   telemetry,
+            }
+
+            chartBytes, err := io.ReadAll(tracker)
             resp.Body.Close()
             if err != nil {
-                // 🚨 Fault Isolation: Red buffer stream fault notice
                 fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Read failed for chart stream %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
+            // 🎯 TELEMETRY FLUSH: Explicit completion ticket allocation
+            if telemetry != nil {
+                telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:BSE|API:%s|FILE:%s|PCT:100.0|STEP:%d/%d", endpoint.Name(), filename, currentStep, totalSteps))
+            }
+
             if err := chartAPI.ProcessAndNormalize(outputDir, dir.Period, chartBytes); err != nil {
-                // 🚨 Fault Isolation: Red alignment matrix notice
                 fmt.Fprintf(os.Stderr, "%s{BSE} ❌ Transformation loop failed for %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
             }
 
             lastChartBytes = chartBytes
-            time.Sleep(150 * time.Millisecond)
+            time.Sleep(100 * time.Millisecond)
         }
         return lastChartBytes, nil 
     }
 
     // ============================================================================
-    // STANDARD 1-TO-1 FILE DOWNLOAD PIPELINE FOR ALL BSE ENDPOINTS
+    // STANDARD 1-TO-1 FILE DOWNLOAD PIPELINE FOR ALL BSE ENDPOINTS (SEQUENTIAL)
     // ============================================================================
     apiURL := endpoint.BuildURL(scripCode)
     req, err := http.NewRequest("GET", apiURL, nil)
@@ -284,24 +389,33 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
         return nil, fmt.Errorf("API %s rejected request with status: %d", endpoint.Name(), resp.StatusCode)
     }
 
-    rawBytes, err := io.ReadAll(resp.Body)
+    tracker := &progressTrackingReader{
+        Reader:      resp.Body,
+        apiName:     endpoint.Name(),
+        filename:    "endpoint-metadata.json",
+        totalBytes:  resp.ContentLength,
+        currentStep: currentStep,
+        totalSteps:  totalSteps,
+        telemetry:   telemetry,
+    }
+
+    rawBytes, err := io.ReadAll(tracker)
     if err != nil {
         return nil, fmt.Errorf("failed reading body bytes: %w", err)
     }
 
+    // 🎯 TELEMETRY FLUSH: Explicit completion marker for index JSON payloads
+    if telemetry != nil {
+        telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:BSE|API:%s|FILE:endpoint-metadata.json|PCT:100.0|STEP:%d/%d", endpoint.Name(), currentStep, totalSteps))
+    }
+
     metaJSONPath := filepath.Join(outputDir, "endpoint-metadata.json")
-    // 🔵 Unified Log: Blue payload storage notification
     fmt.Printf("%s{BSE} 📝 Archiving raw response array payload to: %s%s\n", ColorBlue, metaJSONPath, ColorReset)
     if err := os.WriteFile(metaJSONPath, rawBytes, 0644); err != nil {
-        // 🚨 Fault Isolation: Red write warnings for missing filesystems
         fmt.Fprintf(os.Stderr, "%s{BSE} ⚠️ Warning: Failed saving metadata JSON file: %v%s\n", ColorRed, err, ColorReset)
     }
 
-    // ============================================================================
-    // 🎯 THE MASTER ONLY-JSON SHORT-CIRCUIT BREAKPOINT
-    // ============================================================================
     if onlyJson {
-        // 🔵 Unified Log: Blue layout pass short-circuit indicator
         fmt.Printf("%s{BSE} 🟢 Only-JSON mode active for '%s'. Safely bypassing worker document scraping queues.%s\n", ColorBlue, endpoint.Name(), ColorReset)
         return rawBytes, nil 
     }
@@ -312,30 +426,19 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
         return nil, fmt.Errorf("failed parsing data payload for %s: %w", endpoint.Name(), err)
     }
 
-    // 🔵 Unified Log: Blue records synchronization overview
     fmt.Printf("%s{BSE} Strategy '%s' identified %d files for %s.%s\n", ColorBlue, endpoint.Name(), len(records), symbol, ColorReset)
 
     if len(records) == 0 {
         return rawBytes, nil 
     }
 
-    tasksChan := make(chan DownloadTask, len(records))
-    var wg sync.WaitGroup
-
-    for w := 1; w <= workerCount; w++ {
-        wg.Add(1)
-        go downloadFileWorker(client, tasksChan, &wg)
-    }
-
     for _, row := range records {
         if row.DownloadURL == "" || row.DownloadURL == "-" || len(row.DownloadURL) < 8 {
-            // 🔵 Unified Log: Blue row exclusion notice
             fmt.Printf("%s{BSE} ⚠️ Skipping entry '%s': Invalid or empty download URL string.%s\n", ColorBlue, row.Period, ColorReset)
             continue
         }
 
         if row.DownloadURL[:4] != "http" {
-            // 🔵 Unified Log: Blue protocol security warning
             fmt.Printf("%s{BSE} ⚠️ Skipping entry '%s': Unsupported url prefix: %s%s\n", ColorBlue, row.Period, row.DownloadURL, ColorReset)
             continue
         }
@@ -348,14 +451,68 @@ func executeStrategy(client *BSEClient, symbol, scripCode string, endpoint BSEFi
         localName := fmt.Sprintf("%s%s", row.Period, ext)
         fullDiskPath := filepath.Join(outputDir, localName)
 
-        tasksChan <- DownloadTask{
-            URL:      row.DownloadURL,
-            SavePath: fullDiskPath,
-            FileName: localName,
+        if _, err := os.Stat(fullDiskPath); err == nil {
+            fmt.Printf("{BSE} ⏭️ Skipped (Already Downloaded): %s\n", localName)
+            if telemetry != nil {
+                telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:BSE|API:%s|FILE:%s|PCT:100.0|STEP:%d/%d", endpoint.Name(), localName, currentStep, totalSteps))
+            }
+            continue
         }
-    }
-    close(tasksChan)
 
-    wg.Wait()
+        fmt.Printf("{BSE} ⏳ Downloading: %s\n", localName)
+        fileReq, err := http.NewRequest("GET", row.DownloadURL, nil)
+        if err != nil {
+            fmt.Printf("{BSE} ❌ Request fail for %s: %v\n", localName, err)
+            continue
+        }
+        fileReq.Header.Set("User-Agent", UserAgent)
+        fileReq.Header.Set("Origin", Origin)
+        fileReq.Header.Set("Referer", Referer)
+
+        fileResp, err := client.HTTPClient.Do(fileReq)
+        if err != nil {
+            fmt.Printf("{BSE} ❌ Connection error for %s: %v\n", localName, err)
+            continue
+        }
+
+        if fileResp.StatusCode != http.StatusOK {
+            fmt.Printf("{BSE} ❌ Server rejected %s: HTTP Status Code %d\n", localName, fileResp.StatusCode)
+            fileResp.Body.Close()
+            continue
+        }
+
+        out, err := os.Create(fullDiskPath)
+        if err != nil {
+            fmt.Printf("{BSE} ❌ Disk create error for %s: %v\n", localName, err)
+            fileResp.Body.Close()
+            continue
+        }
+
+        fileTracker := &progressTrackingReader{
+            Reader:      fileResp.Body,
+            apiName:     endpoint.Name(),
+            filename:    localName,
+            totalBytes:  fileResp.ContentLength,
+            currentStep: currentStep,
+            totalSteps:  totalSteps,
+            telemetry:   telemetry,
+        }
+
+        _, err = io.Copy(out, fileTracker)
+        out.Close()
+        fileResp.Body.Close()
+
+        if err != nil {
+            fmt.Printf("{BSE} ❌ Write processing fail for %s: %v\n", localName, err)
+        } else {
+            fmt.Printf("{BSE} ✅ Finished: %s\n", localName)
+            if telemetry != nil {
+                telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:BSE|API:%s|FILE:%s|PCT:100.0|STEP:%d/%d", endpoint.Name(), localName, currentStep, totalSteps))
+            }
+        }
+
+        time.Sleep(100 * time.Millisecond)
+    }
+
     return rawBytes, nil
 }

@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
+    "time"
 	"strings"
 )
 
@@ -18,37 +18,64 @@ const (
     ColorReset = "\033[0m"
 )
 
-// ExecuteWithWarmClient now logs errors uniformly in Red with the downloader prefix
-func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, targetApi string, globalDataDir string, fromTime string, onlyJson bool) (string, error) {
+// ExecuteWithWarmClient coordinates the NSE API batch queue concurrently with absolute fault isolation
+func ExecuteWithWarmClient(client *NSEClient, symbol string, workerCount int, targetApi string, globalDataDir string, fromTime string, onlyJson bool, telemetry interface{ WriteLine(string) }) (string, error) {
     endpoints := GetAllEndpoints()
     var capturedJSON string
 
     scripCode, _ := GetScripCode(client, symbol, globalDataDir)
 
+    totalSteps := 0
+    for _, endpoint := range endpoints {
+        if targetApi == "" || endpoint.Name() == targetApi {
+            totalSteps++
+        }
+    }
+
+    sem := make(chan struct{}, 1)
+    var wg sync.WaitGroup
+    var mu sync.Mutex 
+
+    currentStep := 0
     for _, endpoint := range endpoints {
         if targetApi != "" && endpoint.Name() != targetApi {
             continue
         }
+        currentStep++ 
 
-        // 🎯 CAPTURE BOTH THE RAW BYTES AND ERROR FROM THE STRATEGY PASS
-        rawBytes, err := executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, fromTime, onlyJson)
-        if err != nil {
-            // 🚨 Fault Isolation: Marked cleanly in Red
-            fmt.Fprintf(os.Stderr, "%s{NSE} ⚠️ Error running warm pipeline %s: %v%s\n", ColorRed, endpoint.Name(), err, ColorReset)
-            return "", err
-        }
+        wg.Add(1)
+        go func(ep FilingsEndpoint, step int) {
+            defer wg.Done()
 
-        // If the execution pulled valid network data bytes, cast them to a string reference frame
-        if len(rawBytes) > 0 {
-            capturedJSON = string(rawBytes)
-        }
+            sem <- struct{}{}
+            defer func() { <-sem }() 
+
+            if telemetry != nil {
+                telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:NSE|API:%s|STATUS:START|STEP:%d/%d", ep.Name(), step, totalSteps))
+            }
+
+            rawBytes, err := executeStrategy(client, symbol, scripCode, ep, workerCount, globalDataDir, fromTime, onlyJson, telemetry, step, totalSteps)
+            
+            mu.Lock()
+            defer mu.Unlock()
+
+            if err != nil {
+                // 🛡️ ISOLATED FAULT BOUNDARY: Log the drop but do not fail the overarching batch function
+                fmt.Fprintf(os.Stderr, "%s{NSE} ⚠️ Error running warm pipeline %s: %v%s\n", ColorRed, ep.Name(), err, ColorReset)
+                return
+            }
+
+            if len(rawBytes) > 0 {
+                capturedJSON = string(rawBytes)
+            }
+        }(endpoint, currentStep)
     }
 
+    wg.Wait()
     return capturedJSON, nil
 }
 
-// ExecuteAll is the sole gateway for main.go.
-// All informational messages are now strictly wrapped in Blue with the unified terminal tracker prefix
+// ExecuteAll manages standalone CLI runs for NSE strategies concurrently with pacing controls
 func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir string, fromTime string, onlyJson bool) error {
     client, err := NewNSEClient()
     if err != nil {
@@ -70,54 +97,112 @@ func ExecuteAll(symbol string, workerCount int, targetApi string, globalDataDir 
         return nil
     }
 
+    // 1. Pre-calculate total steps to maintain consistent step math contexts
+    totalSteps := 0
+    for _, endpoint := range endpoints {
+        if targetApi == "" || endpoint.Name() == targetApi {
+            totalSteps++
+        }
+    }
+
+    // 🎯 FIREWALL SEMAPHORE: Restricts simultaneous active endpoints to 2 to safeguard network limits
+    sem := make(chan struct{}, 2)
+    var wg sync.WaitGroup
+    var mu sync.Mutex
+    var firstErr error
+
+    currentStep := 0
     for _, endpoint := range endpoints {
         if targetApi != "" && endpoint.Name() != targetApi {
             continue
         }
+        currentStep++
 
-        // 🔵 Unified Log: Sequential Pipeline Execution Start
-        fmt.Printf("\n%s{NSE} 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, endpoint.Name(), ColorReset)
+        wg.Add(1)
+        // 🚀 MULTIPROCESSING: Spawn each independent strategy in parallel
+        go func(ep FilingsEndpoint, step int) {
+            defer wg.Done()
 
-        _, _ = executeStrategy(client, symbol, scripCode, endpoint, workerCount, globalDataDir, fromTime, onlyJson)
+            // 🛑 ACQUIRE SLOT: Blocks if 2 strategies are already running across the parallel stack
+            sem <- struct{}{}
+            defer func() { <-sem }() // 🟢 RELEASE SLOT
+
+            // 🔵 Unified Log: Sequential Pipeline Execution Start
+            fmt.Printf("\n%s{NSE} 🌀 Running downloader for target endpoint: %s%s\n", ColorBlue, ep.Name(), ColorReset)
+
+            // 🎯 SIGNATURE COMPLIANCE: Pass nil for telemetry, along with step context trackers to satisfy compiler requirements
+            _, err := executeStrategy(client, symbol, scripCode, ep, workerCount, globalDataDir, fromTime, onlyJson, nil, step, totalSteps)
+            
+            mu.Lock()
+            if err != nil && firstErr == nil {
+                firstErr = err // Safely store first broken context trace without concurrent overwrite races
+            }
+            mu.Unlock()
+        }(endpoint, currentStep)
     }
 
-    return nil
+    wg.Wait() // Wait for all concurrent routines to conclude operations
+    return firstErr
 }
 
-// executeStrategy is unexported (private) to keep the package API surface tiny.
-// Added globalDataDir to signature to handle explicit path injection cleanly
-func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoint FilingsEndpoint, workerCount int, globalDataDir string, fromTime string, onlyJson bool) ([]byte, error) {
+type progressTrackingReader struct {
+    io.Reader
+    apiName     string
+    filename    string
+    totalBytes  int64
+    readBytes   int64
+    currentStep int
+    totalSteps  int
+    telemetry   interface{ WriteLine(string) }
+}
+
+func (ptr *progressTrackingReader) Read(p []byte) (int, error) {
+    n, err := ptr.Reader.Read(p)
+    if n > 0 {
+        ptr.readBytes += int64(n)
+        if ptr.totalBytes > 0 && ptr.telemetry != nil {
+            pct := (float64(ptr.readBytes) / float64(ptr.totalBytes)) * 100.0
+            // 📡 Safely push unified progress to Rust: GO_TELEMETRY|API:x|FILE:y|PCT:z|STEP:a/b
+            ptr.telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:NSE|API:%s|FILE:%s|PCT:%.1f|STEP:%d/%d", ptr.apiName, ptr.filename, pct, ptr.currentStep, ptr.totalSteps))
+        }
+    }
+    return n, err
+}
+
+func executeStrategy(
+    client *NSEClient, 
+    symbol string, 
+    scripCode string, 
+    endpoint FilingsEndpoint, 
+    workerCount int, 
+    globalDataDir string, 
+    fromTime string, 
+    onlyJson bool,
+    telemetry interface{ WriteLine(string) },
+    currentStep int,
+    totalSteps int,
+) ([]byte, error) {
     var outputDir string
 
-    // If Rust provides an explicit global data directory path, anchor it instantly!
-    // Otherwise, use the bulletproof path resolution fallback logic for normal CLI runs.
     if globalDataDir != "" {
         outputDir = filepath.Join(globalDataDir, symbol, "nse_"+endpoint.Name())
         if err := os.MkdirAll(outputDir, 0755); err != nil {
             return nil, fmt.Errorf("failed creating explicit global target directory: %w", err)
         }
     } else {
-        // Mount automated directory path right away: data/{symbol}/{api_name}
         baseDir, err := buildSaveDirectory(symbol, endpoint.Name())
         if err != nil {
             return nil, fmt.Errorf("failed creating directories: %w", err)
         }
 
-        // Convert whatever path baseDir generated into a true absolute path clean-cut representation
         absPath, err := filepath.Abs(baseDir)
         if err != nil {
             return nil, fmt.Errorf("failed to compute absolute path context: %w", err)
         }
 
-        // If "downloader/data" is anywhere in the computed absolute filesystem string, 
-        // we split the path right at the root module block and anchor it back to "stock-app/data" safely.
         if strings.Contains(absPath, filepath.Join("downloader", "data")) {
-            // Splitting at the exact platform-native representation of "downloader" segment
             parts := strings.Split(absPath, filepath.Join("downloader", "data"))
-            // parts[0] is now guaranteed to be the clean absolute path straight to: /Users/aseem/Project/stock-app/
             outputDir = filepath.Join(parts[0], "data", symbol, "nse_"+endpoint.Name())
-            
-            // Regenerate the directory structures safely at the true root coordinates
             if err := os.MkdirAll(outputDir, 0755); err != nil {
                 return nil, fmt.Errorf("failed generating unified parent directory mapping: %w", err)
             }
@@ -126,7 +211,9 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
         }
     }
 
-    // 🛡️ INTERCEPT CHART STRATEGY: Handle Multi-Timeframe logic dynamically
+    // ============================================================================
+    // 🛡️ INTERCEPT CHART STRATEGY: Handle Multi-Timeframe logic sequentially
+    // ============================================================================
     if endpoint.Name() == "historical-chart-data" {
         chartAPI, ok := endpoint.(HistoricalChartAPI)
         if !ok {
@@ -136,6 +223,7 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
         directives := chartAPI.ParseMultiTimeframes(symbol)
         for _, dir := range directives {
             targetURL := dir.DownloadURL[12:]
+            filename := fmt.Sprintf("%s.json", dir.Period)
             fmt.Printf("%s{NSE} 📈 Fetching historical market trend timeline: %s%s\n", ColorBlue, dir.Period, ColorReset)
 
             req, err := http.NewRequest("GET", targetURL, nil)
@@ -152,32 +240,40 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
                 continue
             }
 
-            if resp.StatusCode != http.StatusOK {
-                fmt.Fprintf(os.Stderr, "%s{NSE} ❌ Chart API rejected timeframe %s, status: %d%s\n", ColorRed, dir.Period, resp.StatusCode, ColorReset)
-                resp.Body.Close()
-                continue
+            tracker := &progressTrackingReader{
+                Reader:      resp.Body,
+                apiName:     endpoint.Name(),
+                filename:    filename,
+                totalBytes:  resp.ContentLength,
+                currentStep: currentStep,
+                totalSteps:  totalSteps,
+                telemetry:   telemetry,
             }
 
-            chartBytes, err := io.ReadAll(resp.Body)
+            chartBytes, err := io.ReadAll(tracker)
             resp.Body.Close()
             if err != nil {
                 fmt.Fprintf(os.Stderr, "%s{NSE} ❌ Read failed for chart %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
                 continue
             }
 
-            // 🎯 FIX: Added ':' to create a proper short-variable declaration statement
-            tfPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", dir.Period))
+            // 🎯 TELEMETRY FLUSH: Explicit completion ticket allocation (FIXED: localName -> filename)
+            if telemetry != nil {
+                telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:NSE|API:%s|FILE:%s|PCT:100.0|STEP:%d/%d", endpoint.Name(), filename, currentStep, totalSteps))
+            }
+
+            tfPath := filepath.Join(outputDir, filename)
             if err := os.WriteFile(tfPath, chartBytes, 0644); err != nil {
                 fmt.Fprintf(os.Stderr, "%s{NSE} ❌ Failed saving chart file %s: %v%s\n", ColorRed, dir.Period, err, ColorReset)
             }
 
-            time.Sleep(150 * time.Millisecond)
+            time.Sleep(100 * time.Millisecond)
         }
         return nil, nil 
     }
 
     // ============================================================================
-    // 🛡️ INTERCEPT PEER COMPARISON STRATEGY: Matrix Combination Generator Loop
+    // 🛡️ INTERCEPT PEER COMPARISON STRATEGY: Matrix Combination Generator sequentially
     // ============================================================================
     if endpoint.Name() == "peer-comparison-matrix" {
         peerAPI, ok := endpoint.(PeerComparisonAPI)
@@ -186,10 +282,10 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
         }
 
         combos := peerAPI.GetCombinations(symbol)
-        // 🔵 Unified Log: Blue grid sweeping optimization progress indicator
         fmt.Printf("%s{NSE} 📊 Running grid sweeper across %d distinct valuation peer matrix variants...%s\n", ColorBlue, len(combos), ColorReset)
 
         for _, item := range combos {
+            filename := fmt.Sprintf("%s.json", item.FileName)
             req, err := http.NewRequest("GET", item.URL, nil)
             if err != nil {
                 return nil, err
@@ -200,7 +296,6 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
 
             resp, err := client.HTTPClient.Do(req)
             if err != nil {
-                // 🚨 Fault Isolation: Red connection breakdown
                 fmt.Fprintf(os.Stderr, "%s{NSE} ❌ Peer matrix drop for %s: %v%s\n", ColorRed, item.FileName, err, ColorReset)
                 continue
             }
@@ -210,25 +305,39 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
                 continue
             }
 
-            peerBytes, err := io.ReadAll(resp.Body)
+            tracker := &progressTrackingReader{
+                Reader:      resp.Body,
+                apiName:     endpoint.Name(),
+                filename:    filename,
+                totalBytes:  resp.ContentLength,
+                currentStep: currentStep,
+                totalSteps:  totalSteps,
+                telemetry:   telemetry,
+            }
+
+            peerBytes, err := io.ReadAll(tracker)
             resp.Body.Close()
             if err != nil {
                 continue
             }
 
-            matrixPath := filepath.Join(outputDir, fmt.Sprintf("%s.json", item.FileName))
+            // 🎯 TELEMETRY FLUSH: Explicit completion ticket allocation (FIXED: localName -> filename)
+            if telemetry != nil {
+                telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:NSE|API:%s|FILE:%s|PCT:100.0|STEP:%d/%d", endpoint.Name(), filename, currentStep, totalSteps))
+            }
+
+            matrixPath := filepath.Join(outputDir, filename)
             if err := os.WriteFile(matrixPath, peerBytes, 0644); err != nil {
-                // 🚨 Fault Isolation: Red write breakdown
                 fmt.Fprintf(os.Stderr, "%s{NSE} ❌ Failed writing peer matrix %s: %v%s\n", ColorRed, item.FileName, err, ColorReset)
             }
 
-            time.Sleep(150 * time.Millisecond)
+            time.Sleep(100 * time.Millisecond)
         }
         return nil, nil 
     }
 
     // ============================================================================
-    // STANDARD 1-TO-1 FILE DOWNLOAD PIPELINE FOR ALL OTHER ENDPOINTS
+    // STANDARD 1-TO-1 FILE DOWNLOAD PIPELINE FOR ALL OTHER ENDPOINTS (SEQUENTIAL)
     // ============================================================================
     apiURL := endpoint.BuildURL(symbol)
     if endpoint.Name() == "real-time-chart-delta" {
@@ -262,22 +371,33 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
         return nil, fmt.Errorf("API %s rejected request with status: %d", endpoint.Name(), resp.StatusCode)
     }
 
-    rawBytes, err := io.ReadAll(resp.Body)
+    tracker := &progressTrackingReader{
+        Reader:      resp.Body,
+        apiName:     endpoint.Name(),
+        filename:    "endpoint-metadata.json",
+        totalBytes:  resp.ContentLength,
+        currentStep: currentStep,
+        totalSteps:  totalSteps,
+        telemetry:   telemetry,
+    }
+
+    rawBytes, err := io.ReadAll(tracker)
     if err != nil {
         return nil, fmt.Errorf("failed reading body bytes: %w", err)
     }
 
+    // 🎯 TELEMETRY FLUSH: Explicit completion marker for index JSON payloads
+    if telemetry != nil {
+        telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:NSE|API:%s|FILE:endpoint-metadata.json|PCT:100.0|STEP:%d/%d", endpoint.Name(), currentStep, totalSteps))
+    }
+
     metaJSONPath := filepath.Join(outputDir, "endpoint-metadata.json")
-    // 🔵 Unified Log: Blue disk payload caching tracking log
     fmt.Printf("%s{NSE} 📝 Archiving raw response array payload to: %s%s\n", ColorBlue, metaJSONPath, ColorReset)
     if err := os.WriteFile(metaJSONPath, rawBytes, 0644); err != nil {
-        // 🚨 Fault Isolation: Red warning for missing or protected filesystems
         fmt.Fprintf(os.Stderr, "%s{NSE} ⚠️ Warning: Failed saving metadata JSON file: %v%s\n", ColorRed, err, ColorReset)
     }
 
-    // 🎯 THE MASTER ONLY-JSON SHORT-CIRCUIT BREAKPOINT
     if onlyJson {
-        // 🔵 Unified Log: Blue microsecond fast-pass confirmation
         fmt.Printf("%s{NSE} 🟢 Only-JSON mode active for '%s'. Safely bypassing worker document scraping queues.%s\n", ColorBlue, endpoint.Name(), ColorReset)
         return rawBytes, nil 
     }
@@ -288,31 +408,18 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
         return nil, fmt.Errorf("failed parsing data payload for %s: %w", endpoint.Name(), err)
     }
 
-    // 🔵 Unified Log: Blue record count verification
     fmt.Printf("%s{NSE} Strategy '%s' identified %d files for %s.%s\n", ColorBlue, endpoint.Name(), len(records), symbol, ColorReset)
 
     if len(records) == 0 {
         return rawBytes, nil 
     }
 
-    tasksChan := make(chan DownloadTask, len(records))
-    var wg sync.WaitGroup
-
-    for w := 1; w <= workerCount; w++ {
-        wg.Add(1)
-        go downloadFileWorker(client, tasksChan, &wg)
-    }
-
     for _, row := range records {
         if row.DownloadURL == "" || row.DownloadURL == "-" || len(row.DownloadURL) < 8 {
-            // 🔵 Unified Log: Blue row skipping notification
-            fmt.Printf("%s{NSE} ⚠️ Skipping entry '%s': Invalid or empty download URL string.%s\n", ColorBlue, row.Period, ColorReset)
             continue
         }
 
         if row.DownloadURL[:4] != "http" {
-            // 🔵 Unified Log: Blue domain mismatch warning
-            fmt.Printf("%s{NSE} ⚠️ Skipping entry '%s': Unsupported url prefix: %s%s\n", ColorBlue, row.Period, row.DownloadURL, ColorReset)
             continue
         }
 
@@ -324,14 +431,58 @@ func executeStrategy(client *NSEClient, symbol string, scripCode string, endpoin
         localName := fmt.Sprintf("%s%s", row.Period, ext)
         fullDiskPath := filepath.Join(outputDir, localName)
 
-        tasksChan <- DownloadTask{
-            URL:      row.DownloadURL,
-            SavePath: fullDiskPath,
-            FileName: localName,
+        if _, err := os.Stat(fullDiskPath); err == nil {
+            if telemetry != nil {
+                telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:NSE|API:%s|FILE:%s|PCT:100.0|STEP:%d/%d", endpoint.Name(), localName, currentStep, totalSteps))
+            }
+            continue
         }
-    }
-    close(tasksChan)
 
-    wg.Wait()
+        fileReq, err := http.NewRequest("GET", row.DownloadURL, nil)
+        if err != nil {
+            continue
+        }
+        fileReq.Header.Set("User-Agent", UserAgent)
+        fileReq.Header.Set("Referer", Referer)
+
+        fileResp, err := client.HTTPClient.Do(fileReq)
+        if err != nil {
+            continue
+        }
+
+        if fileResp.StatusCode != http.StatusOK {
+            fileResp.Body.Close()
+            continue
+        }
+
+        out, err := os.Create(fullDiskPath)
+        if err != nil {
+            fileResp.Body.Close()
+            continue
+        }
+
+        fileTracker := &progressTrackingReader{
+            Reader:      fileResp.Body,
+            apiName:     endpoint.Name(),
+            filename:    localName,
+            totalBytes:  fileResp.ContentLength,
+            currentStep: currentStep,
+            totalSteps:  totalSteps,
+            telemetry:   telemetry,
+        }
+
+        _, err = io.Copy(out, fileTracker)
+        out.Close()
+        fileResp.Body.Close()
+
+        if err == nil {
+            if telemetry != nil {
+                telemetry.WriteLine(fmt.Sprintf("GO_TELEMETRY|EXCH:NSE|API:%s|FILE:%s|PCT:100.0|STEP:%d/%d", endpoint.Name(), localName, currentStep, totalSteps))
+            }
+        }
+
+        time.Sleep(100 * time.Millisecond)
+    }
+
     return rawBytes, nil 
 }

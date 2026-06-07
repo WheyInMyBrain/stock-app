@@ -6,6 +6,7 @@ import (
     "net"
     "os"
     "strings"
+    "sync"
     "time"
     "downloader/scrape_bse"
     "downloader/scrape_nse"
@@ -16,6 +17,23 @@ const (
     ColorRed   = "\033[31m"
     ColorReset = "\033[0m"
 )
+
+// SocketSafeWriter wraps a network connection with a mutex. This ensures that concurrent 
+// worker threads can report progress down the active IPC link simultaneously without 
+// interleaving or corrupting the text transmission lines.
+type SocketSafeWriter struct {
+    Mu   sync.Mutex
+    Conn net.Conn
+}
+
+// WriteLine safely serializes strings down the open socket channel followed by a newline separator
+func (sw *SocketSafeWriter) WriteLine(line string) {
+    sw.Mu.Lock()
+    defer sw.Mu.Unlock()
+    if sw.Conn != nil {
+        fmt.Fprint(sw.Conn, line+"\n")
+    }
+}
 
 func RunPersistentDaemonMode(workerCount int, globalDataDir string) {
     // Platform-neutral standard descriptor initialization override
@@ -103,22 +121,53 @@ func RunPersistentDaemonMode(workerCount int, globalDataDir string) {
                 fmt.Printf("\n%s === 🚀 IPC Connection Accepted: Fetching metrics for: %s ===%s\n", ColorBlue, ticker, ColorReset)
                 os.Stdout.Sync()
 
+                var wg sync.WaitGroup
+                var mu sync.Mutex // 🎯 Protects shared variables from parallel write data races
                 var rawJSONPayload string
                 var pipelineErr error
 
-                // 🎯 DIRECT TRANSMISSION: Target API passed exactly as input (blank or filled)
+                // 🎯 INSTANTIATE TELEMETRY LINK: 
+                telemetryWriter := &SocketSafeWriter{Conn: c}
+
+                // 🚀 PARALLEL INGESTION: Fire both exchange pipelines concurrently since they target completely independent networks
                 if (mode == "nse" || mode == "both") && nseClient != nil {
-                    rawJSONPayload, pipelineErr = scrape_nse.ExecuteWithWarmClient(nseClient, ticker, workerCount, targetApi, globalDataDir, fromTimeStr, onlyJsonMode)
+                    wg.Add(1)
+                    go func() {
+                        defer wg.Done()
+                        nsePayload, nseErr := scrape_nse.ExecuteWithWarmClient(nseClient, ticker, workerCount, targetApi, globalDataDir, fromTimeStr, onlyJsonMode, telemetryWriter)
+                        
+                        mu.Lock()
+                        defer mu.Unlock()
+                        if nseErr != nil {
+                            fmt.Fprintf(os.Stderr, "%s 🚨 [NSE CRITICAL BATCH FAULT]: %v%s\n", ColorRed, nseErr, ColorReset)
+                            pipelineErr = nseErr
+                        } else if nsePayload != "" {
+                            rawJSONPayload = nsePayload
+                        }
+                    }()
                 }
-                
-                if pipelineErr == nil && (mode == "bse" || mode == "both") && bseClient != nil {
-                    bsePayload, bseErr := scrape_bse.ExecuteWithWarmClient(bseClient, ticker, workerCount, targetApi, globalDataDir, onlyJsonMode)
-                    if bseErr != nil {
-                        pipelineErr = bseErr
-                    } else if bsePayload != "" {
-                        rawJSONPayload = bsePayload
-                    }
+
+                if (mode == "bse" || mode == "both") && bseClient != nil {
+                    wg.Add(1)
+                    go func() {
+                        defer wg.Done()
+                        bsePayload, bseErr := scrape_bse.ExecuteWithWarmClient(bseClient, ticker, workerCount, targetApi, globalDataDir, onlyJsonMode, telemetryWriter)
+                        
+                        mu.Lock()
+                        defer mu.Unlock()
+                        if bseErr != nil {
+                            fmt.Fprintf(os.Stderr, "%s 🚨 [BSE CRITICAL BATCH FAULT]: %v%s\n", ColorRed, bseErr, ColorReset)
+                            if pipelineErr == nil {
+                                pipelineErr = bseErr
+                            }
+                        } else if bsePayload != "" {
+                            rawJSONPayload = bsePayload
+                        }
+                    }()
                 }
+
+                // Block and wait for both parallel background network branches to complete operations
+                wg.Wait()
 
                 if pipelineErr != nil {
                     fmt.Fprintf(os.Stderr, "%s 🚨 [IPC FETCH FAULT]: Pipeline error during lookup: %v%s\n", ColorRed, pipelineErr, ColorReset)
@@ -128,6 +177,8 @@ func RunPersistentDaemonMode(workerCount int, globalDataDir string) {
                 if isStreamMode && rawJSONPayload != "" {
                     fmt.Printf("%s ⚡ [IPC BINARY PIPE ACTIVE]: Transmitting framed byte matrix stream directly over socket...%s\n", ColorBlue, ColorReset)
                     os.Stdout.Sync()
+
+                    telemetryWriter.WriteLine("PAYLOAD_START")
 
                     if writeErr := WriteFramedPayload(c, rawJSONPayload); writeErr != nil {
                         fmt.Fprintf(os.Stderr, "%s 🚨 [IPC WRITE CRITICAL FAULT]: Failed writing bytes down frame channel: %v%s\n", ColorRed, writeErr, ColorReset)
