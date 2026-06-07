@@ -35,8 +35,6 @@ pub fn trigger_core_analysis(
         None => resolve_data_directory_headless().to_string_lossy().to_string(),
     };
 
-    println!("\x1b[33m[ANALYSIS] 🚀 [ANALYSIS ENGINE]: Invoked valuation matrix compilation for ticker [{}]\x1b[0m", current_ticker);
-
     // C. Execute the library pipeline orchestration sequence directly
     analysis::runner::run_global_analysis_pipeline(
         &current_ticker,

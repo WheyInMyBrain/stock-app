@@ -10,8 +10,6 @@ def run_ocr_pipeline(ticker: str, data_dir_override: str = None):
     try:
         script_dir = Path(__file__).resolve().parent
         
-        # 🎯 FIXED: If data-dir parameter string exists, anchor directly to it!
-        # Otherwise, fall back naturally onto the default relative asset folder tract coordinate.
         if data_dir_override:
             data_root = Path(data_dir_override)
         else:
