@@ -20,7 +20,7 @@ pub fn dump_matrix_report_to_disk<T>(
         if let Ok(mut file) = File::create(target_file_path) {
             if file.write_all(json_str.as_bytes()).is_ok() {
                 println!(
-                    "💾 [{success_log_tag} SUCCESS]: Document saved. Runtime: {:?}",
+                    "\x1b[38;5;130m[ANALYSIS] 💾 [{success_log_tag}] Runtime: {:?}\x1b[0m",
                     timer.elapsed()
                 );
             }

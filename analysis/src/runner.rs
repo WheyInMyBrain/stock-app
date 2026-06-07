@@ -33,24 +33,24 @@ fn should_run(module_name: &str, selector: &str) -> bool {
 pub fn run_global_analysis_pipeline(ticker: &str, wacc: f64, terminal_g: f64, data_dir: &str, modules_selector: &str) {
     let target_dir = format!("{}/{}/analysis", data_dir, ticker);
     if let Err(e) = create_dir_all(&target_dir) {
-        println!("\x1b[33m[ANALYSIS] ❌ [SYSTEM ERROR]: Failed to establish output folder path hierarchy: {}\x1b[0m", e);
+        println!("\x1b[38;5;130m[ANALYSIS] ❌ [SYSTEM ERROR]: Failed to establish output folder path hierarchy: {}\x1b[0m", e);
         return;
     }
 
     let dir_ref = &target_dir;
     let ticker_ref = ticker;
     
-    println!("\x1b[33m[ANALYSIS] 🏛️  [DATA BROKER]: Pre-fetching unrestricted Parquet tables for [{ticker}]...\x1b[0m");
+    println!("\x1b[38;5;130m[ANALYSIS] 🏛️  [DATA BROKER]: Pre-fetching unrestricted Parquet tables for [{ticker}]...\x1b[0m");
     
     let bse_data_matrix = CentralFinancialsDB::load_exchange_matrix(ticker, LoaderExchange::Bse, data_dir);
     let nse_data_matrix = CentralFinancialsDB::load_exchange_matrix(ticker, LoaderExchange::Nse, data_dir);
 
     match (&bse_data_matrix, &nse_data_matrix) {
-        (Some(_), Some(_)) => println!("\x1b[33m[ANALYSIS] ⚖️  [LISTING DETECTED]: Dual-Exchange Asset. Filtering thread scope targets...\x1b[0m"),
-        (Some(_), None)    => println!("\x1b[33m[ANALYSIS] 📢 [LISTING DETECTED]: Exclusive BSE Listing. Skipping NSE tracks cleanly...\x1b[0m"),
-        (None, Some(_))    => println!("\x1b[33m[ANALYSIS] 📢 [LISTING DETECTED]: Exclusive NSE Listing. Skipping BSE tracks cleanly...\x1b[0m"),
+        (Some(_), Some(_)) => println!("\x1b[38;5;130m[ANALYSIS] ⚖️  [LISTING DETECTED]: Dual-Exchange Asset. Filtering thread scope targets...\x1b[0m"),
+        (Some(_), None)    => println!("\x1b[38;5;130m[ANALYSIS] 📢 [LISTING DETECTED]: Exclusive BSE Listing. Skipping NSE tracks cleanly...\x1b[0m"),
+        (None, Some(_))    => println!("\x1b[38;5;130m[ANALYSIS] 📢 [LISTING DETECTED]: Exclusive NSE Listing. Skipping BSE tracks cleanly...\x1b[0m"),
         (None, None) => {
-            println!("\x1b[33m[ANALYSIS] ❌ [DATA CRISIS]: No Parquet files found for [{ticker}] at location: {data_dir}. Aborting pipeline.\x1b[0m");
+            println!("\x1b[38;5;130m[ANALYSIS] ❌ [DATA CRISIS]: No Parquet files found for [{ticker}] at location: {data_dir}. Aborting pipeline.\x1b[0m");
             TOTAL_TASKS.store(0, Ordering::SeqCst);
             COMPLETED_TASKS.store(0, Ordering::SeqCst);
             return;
