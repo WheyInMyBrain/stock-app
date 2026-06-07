@@ -66,7 +66,6 @@ func RunPersistentDaemonMode(workerCount int, globalDataDir string) {
                     return
                 }
 
-                // 🎯 FIXED: Starts as a clean blank string. If no flag is passed, it remains blank.
                 mode := "both"
                 targetApi := "" 
                 var fromTimeStr string
@@ -137,7 +136,6 @@ func RunPersistentDaemonMode(workerCount int, globalDataDir string) {
 
                 fmt.Printf("%s === 🎉 [%s] Pipelines Completed in %v over IPC Socket ===%s\n\n", ColorBlue, ticker, time.Since(startTime), ColorReset)
                 
-                // Returns structural tracking feedback exactly as parsed 
                 fmt.Printf("SIGNAL_COMPLETED:%s:%s\n", ticker, targetApi)
                 os.Stdout.Sync() 
             }
