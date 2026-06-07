@@ -95,6 +95,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*.spec
 
 # Ignore testing caches and structural workspace layout tracks
 .cache/

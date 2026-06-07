@@ -1,3 +1,4 @@
+# stock-app/ocr/processors.py
 import os
 import time
 from typing import BinaryIO
@@ -23,7 +24,7 @@ class DoclingProcessor(BaseDocumentProcessor):
                 InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
             }
         )
-        print("🚀 [Docling Engine] Hardware-aware DocumentConverter initialized.")
+        print("\x1b[35m[OCR] 🚀 [Docling Engine] Hardware-aware DocumentConverter initialized.\x1b[0m")
         
     def process(self, file_stream: BinaryIO, total_pages: int, output_path: str) -> str:
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -34,7 +35,7 @@ class DoclingProcessor(BaseDocumentProcessor):
             format=InputFormat.PDF
         )
         
-        print(f"⏳ [Docling] Beginning native conversion on {total_pages} pages...")
+        print(f"\x1b[35m[OCR] ⏳ [Docling] Beginning native conversion on {total_pages} pages...\x1b[0m")
         start_time = time.time()
         
         result = self.converter.convert(doc_stream)
@@ -45,5 +46,5 @@ class DoclingProcessor(BaseDocumentProcessor):
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(full_markdown)
             
-        print(f"✅ Processing complete in {elapsed:.1f}s! Saved: {output_path}")
+        print(f"\x1b[35m[OCR] ✅ Processing complete in {elapsed:.1f}s! Saved: {output_path}\x1b[0m")
         return full_markdown

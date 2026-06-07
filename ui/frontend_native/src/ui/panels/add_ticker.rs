@@ -4,21 +4,25 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 // 🎯 THREAD-SAFE GLOBAL WORKFLOW STATE MONITORS
+static OCR_IS_RUNNING: AtomicBool = AtomicBool::new(false);
 static PARSER_IS_RUNNING: AtomicBool = AtomicBool::new(false);
 static ANALYSIS_IS_RUNNING: AtomicBool = AtomicBool::new(false);
 static WORKFLOW_COMPLETE: AtomicBool = AtomicBool::new(false);
 
 // 🎯 HIGH-RESOLUTION METRIC TIMING CHANNELS (IN MILLISECONDS)
 static DOWNLOAD_DURATION_MS: AtomicU64 = AtomicU64::new(0);
+static OCR_DURATION_MS: AtomicU64 = AtomicU64::new(0);
 static PARSER_DURATION_MS: AtomicU64 = AtomicU64::new(0);
 static ANALYSIS_DURATION_MS: AtomicU64 = AtomicU64::new(0);
 
 static DOWNLOAD_START_TIME: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+static OCR_START_TIME: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static PARSER_START_TIME: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static ANALYSIS_START_TIME: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
 // 🎯 WORKFLOW ENGINE PARAMETER SNAPSHOT TRACKERS
 static REQ_RUN_DOWNLOAD: AtomicBool = AtomicBool::new(false);
+static REQ_RUN_OCR: AtomicBool = AtomicBool::new(false);
 static REQ_RUN_PARSE: AtomicBool = AtomicBool::new(false);
 static REQ_RUN_ANALYZE: AtomicBool = AtomicBool::new(false);
 
@@ -66,14 +70,16 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
     
     let is_download_running = active_download_snapshot.as_ref().map_or(false, |p| !p.is_done);
     
+    let is_ocr_running = OCR_IS_RUNNING.load(Ordering::Relaxed);
     let is_parser_running = PARSER_IS_RUNNING.load(Ordering::Relaxed);
     let is_analysis_running = ANALYSIS_IS_RUNNING.load(Ordering::Relaxed);
 
     // 🧠 CENTRAL ENGINE CHECKPOINTS EVALUATION
-    let global_is_running = is_download_running || is_parser_running || is_analysis_running;
+    let global_is_running = is_download_running || is_ocr_running || is_parser_running || is_analysis_running;
     let global_is_done = WORKFLOW_COMPLETE.load(Ordering::Relaxed);
 
     let req_download = REQ_RUN_DOWNLOAD.load(Ordering::Relaxed);
+    let req_ocr = REQ_RUN_OCR.load(Ordering::Relaxed);
     let req_parse = REQ_RUN_PARSE.load(Ordering::Relaxed);
     let req_analyze = REQ_RUN_ANALYZE.load(Ordering::Relaxed);
 
@@ -165,7 +171,31 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                         }
                     }
 
-                    // 📦 STAGE 2 TIMELINE NODE: DATA INGESTION STRUCTURAL PARSER
+                    // 📦 STAGE 2 TIMELINE NODE: DOCUMENT OCR EXTRACTION PIPELINE
+                    if req_ocr {
+                        if is_ocr_running {
+                            let elapsed_txt = if let Some(start) = *OCR_START_TIME.lock().unwrap() {
+                                format!(" [{:.1}s]", start.elapsed().as_secs_f32())
+                            } else {
+                                "".to_string()
+                            };
+                            ui.label(egui::RichText::new(format!("🔄 Step 2: Extracting Document OCR...{}", elapsed_txt)).strong());
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| { ui.add_space(24.0); ui.label(egui::RichText::new("Running Docling AI engine layers to reconstruct financial markdown files...").small().weak()); });
+                            ui.add_space(6.0);
+                            draw_minimal_progress_line_with_est(ui, 50.0, "Est: ~45s");
+                            ui.add_space(16.0);
+                        } else if is_parser_running || is_analysis_running || global_is_done {
+                            let duration = format_ms(OCR_DURATION_MS.load(Ordering::Relaxed));
+                            ui.label(egui::RichText::new(format!("✅ Step 2: Document OCR Extraction Complete [{}]", duration)).small().weak());
+                            ui.add_space(14.0);
+                        } else {
+                            ui.label(egui::RichText::new("⏳ Step 2: Document OCR Extraction (Queued...)").small().weak());
+                            ui.add_space(14.0);
+                        }
+                    }
+
+                    // 📦 STAGE 3 TIMELINE NODE: DATA INGESTION STRUCTURAL PARSER
                     if req_parse {
                         if is_parser_running {
                             let elapsed_txt = if let Some(start) = *PARSER_START_TIME.lock().unwrap() {
@@ -173,7 +203,7 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                             } else {
                                 "".to_string()
                             };
-                            ui.label(egui::RichText::new(format!("🔄 Step 2: Parsing Market Structures...{}", elapsed_txt)).strong());
+                            ui.label(egui::RichText::new(format!("🔄 Step 3: Parsing Market Structures...{}", elapsed_txt)).strong());
                             ui.add_space(8.0);
                             ui.horizontal(|ui| { ui.add_space(24.0); ui.label(egui::RichText::new("Compiling exchange filing chunks into optimized Parquet tables...").small().weak()); });
                             ui.add_space(6.0);
@@ -181,15 +211,15 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                             ui.add_space(16.0);
                         } else if is_analysis_running || global_is_done {
                             let duration = format_ms(PARSER_DURATION_MS.load(Ordering::Relaxed));
-                            ui.label(egui::RichText::new(format!("✅ Step 2: Parse Market Structures Complete [{}]", duration)).small().weak());
+                            ui.label(egui::RichText::new(format!("✅ Step 3: Parse Market Structures Complete [{}]", duration)).small().weak());
                             ui.add_space(14.0);
                         } else {
-                            ui.label(egui::RichText::new("⏳ Step 2: Parse Market Structures (Queued...)").small().weak());
+                            ui.label(egui::RichText::new("⏳ Step 3: Parse Market Structures (Queued...)").small().weak());
                             ui.add_space(14.0);
                         }
                     }
 
-                    // 📦 STAGE 3 TIMELINE NODE: MULTI-THREADED ANALYSIS MATRICES
+                    // 📦 STAGE 4 TIMELINE NODE: MULTI-THREADED ANALYSIS MATRICES
                     if req_analyze {
                         if is_analysis_running {
                             let elapsed_txt = if let Some(start) = *ANALYSIS_START_TIME.lock().unwrap() {
@@ -197,7 +227,7 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                             } else {
                                 "".to_string()
                             };
-                            ui.label(egui::RichText::new(format!("🔄 Step 3: Core Financial Analysis Active...{}", elapsed_txt)).strong());
+                            ui.label(egui::RichText::new(format!("🔄 Step 4: Core Financial Analysis Active...{}", elapsed_txt)).strong());
                             ui.add_space(8.0);
                             ui.horizontal(|ui| { ui.add_space(24.0); ui.label(egui::RichText::new("Executing parallel DCF projection models, EPV tracks, and Monte Carlo matrices...").small().weak()); });
                             ui.add_space(6.0);
@@ -212,10 +242,10 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                             draw_minimal_progress_line_with_est(ui, analysis_pct, "Est: ~3.5s");
                         } else if global_is_done {
                             let duration = format_ms(ANALYSIS_DURATION_MS.load(Ordering::Relaxed));
-                            ui.label(egui::RichText::new(format!("✅ Step 3: Core Financial Analysis Complete [{}]", duration)).small().weak());
+                            ui.label(egui::RichText::new(format!("✅ Step 4: Core Financial Analysis Complete [{}]", duration)).small().weak());
                             ui.add_space(14.0);
                         } else {
-                            ui.label(egui::RichText::new("⏳ Step 3: Core Financial Analysis (Queued...)").small().weak());
+                            ui.label(egui::RichText::new("⏳ Step 4: Core Financial Analysis (Queued...)").small().weak());
                             ui.add_space(14.0);
                         }
                     }
@@ -233,11 +263,9 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
             ui.label(egui::RichText::new(format!("🎉 INGESTION COMPLETE FOR {}", ticker)).heading());
             ui.add_space(15.0);
             
-            // 🎯 FIXED: Direct, helpful workflow directive prompt
             ui.label(egui::RichText::new("Select this ticker from the sidebar to load its data and see all the analysis.").strong());
             ui.add_space(25.0);
 
-            // 🎯 FIXED: Execution timing analytics grid display block
             ui.allocate_ui(egui::vec2(440.0, 0.0), |ui| {
                 egui::Frame::none()
                     .fill(egui::Color32::from_rgb(16, 16, 16))
@@ -262,17 +290,24 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                                     ui.label(format_ms(ms));
                                     ui.end_row();
                                 }
+                                if req_ocr {
+                                    let ms = OCR_DURATION_MS.load(Ordering::Relaxed);
+                                    overall_total_ms += ms;
+                                    ui.label("2. Document OCR Extraction");
+                                    ui.label(format_ms(ms));
+                                    ui.end_row();
+                                }
                                 if req_parse {
                                     let ms = PARSER_DURATION_MS.load(Ordering::Relaxed);
                                     overall_total_ms += ms;
-                                    ui.label("2. Parse Market Structures");
+                                    ui.label("3. Parse Market Structures");
                                     ui.label(format_ms(ms));
                                     ui.end_row();
                                 }
                                 if req_analyze {
                                     let ms = ANALYSIS_DURATION_MS.load(Ordering::Relaxed);
                                     overall_total_ms += ms;
-                                    ui.label("3. Core Financial Analysis");
+                                    ui.label("4. Core Financial Analysis");
                                     ui.label(format_ms(ms));
                                     ui.end_row();
                                 }
@@ -291,6 +326,7 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                 *download_guard = None;
                 WORKFLOW_COMPLETE.store(false, Ordering::Relaxed);
                 REQ_RUN_DOWNLOAD.store(false, Ordering::Relaxed);
+                REQ_RUN_OCR.store(false, Ordering::Relaxed);
                 REQ_RUN_PARSE.store(false, Ordering::Relaxed);
                 REQ_RUN_ANALYZE.store(false, Ordering::Relaxed);
             }
@@ -306,8 +342,9 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
 
             let input_id = egui::Id::new("add_ticker_input_buffer_field");
             let step1_id = egui::Id::new("add_ticker_step1_download");
-            let step2_id = egui::Id::new("add_ticker_step2_parse");
-            let step3_id = egui::Id::new("add_ticker_step3_analyze");
+            let step2_id = egui::Id::new("add_ticker_step2_ocr");
+            let step3_id = egui::Id::new("add_ticker_step3_parse");
+            let step4_id = egui::Id::new("add_ticker_step4_analyze");
             let nse_id = egui::Id::new("add_ticker_nse_checked");
             let bse_id = egui::Id::new("add_ticker_bse_checked");
 
@@ -328,8 +365,8 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
 
                     if step1_download {
                         ui.add_space(14.0);
-                        let mut nse_checked = ui.data_mut(|d| d.get_temp::<bool>(nse_id).unwrap_or(false));
-                        let mut bse_checked = ui.data_mut(|d| d.get_temp::<bool>(bse_id).unwrap_or(false));
+                        let mut nse_checked = ui.data_mut(|d| d.get_temp::<bool>(nse_id).unwrap_or(true));
+                        let mut bse_checked = ui.data_mut(|d| d.get_temp::<bool>(bse_id).unwrap_or(true));
 
                         ui.horizontal(|ui| {
                             ui.add_space(24.0); 
@@ -341,13 +378,18 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
 
                     ui.add_space(24.0);
 
-                    let mut step2_parse = ui.data_mut(|d| d.get_temp::<bool>(step2_id).unwrap_or(true));
-                    if ui.checkbox(&mut step2_parse, "2. Parse Market Structures").changed() { ui.data_mut(|d| d.insert_temp(step2_id, step2_parse)); }
+                    let mut step2_ocr = ui.data_mut(|d| d.get_temp::<bool>(step2_id).unwrap_or(true));
+                    if ui.checkbox(&mut step2_ocr, "2. Document OCR Extraction").changed() { ui.data_mut(|d| d.insert_temp(step2_id, step2_ocr)); }
 
                     ui.add_space(24.0);
 
-                    let mut step3_analyze = ui.data_mut(|d| d.get_temp::<bool>(step3_id).unwrap_or(true));
-                    if ui.checkbox(&mut step3_analyze, "3. Core Financial Analysis").changed() { ui.data_mut(|d| d.insert_temp(step3_id, step3_analyze)); }
+                    let mut step3_parse = ui.data_mut(|d| d.get_temp::<bool>(step3_id).unwrap_or(true));
+                    if ui.checkbox(&mut step3_parse, "3. Parse Market Structures").changed() { ui.data_mut(|d| d.insert_temp(step3_id, step3_parse)); }
+
+                    ui.add_space(24.0);
+
+                    let mut step4_analyze = ui.data_mut(|d| d.get_temp::<bool>(step4_id).unwrap_or(true));
+                    if ui.checkbox(&mut step4_analyze, "4. Core Financial Analysis").changed() { ui.data_mut(|d| d.insert_temp(step4_id, step4_analyze)); }
                 });
             });
 
@@ -357,29 +399,31 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                 let ticker_symbol = input_buffer.trim().to_uppercase();
                 if !ticker_symbol.is_empty() {
                     let run_download = ui.data_mut(|d| d.get_temp::<bool>(step1_id).unwrap_or(true));
-                    let run_parse = ui.data_mut(|d| d.get_temp::<bool>(step2_id).unwrap_or(true));
-                    let run_analyze = ui.data_mut(|d| d.get_temp::<bool>(step3_id).unwrap_or(true));
+                    let run_ocr = ui.data_mut(|d| d.get_temp::<bool>(step2_id).unwrap_or(true));
+                    let run_parse = ui.data_mut(|d| d.get_temp::<bool>(step3_id).unwrap_or(true));
+                    let run_analyze = ui.data_mut(|d| d.get_temp::<bool>(step4_id).unwrap_or(true));
 
-                    let nse_checked = ui.data_mut(|d| d.get_temp::<bool>(nse_id).unwrap_or(false));
-                    let bse_checked = ui.data_mut(|d| d.get_temp::<bool>(bse_id).unwrap_or(false));
+                    let nse_checked = ui.data_mut(|d| d.get_temp::<bool>(nse_id).unwrap_or(true));
+                    let bse_checked = ui.data_mut(|d| d.get_temp::<bool>(bse_id).unwrap_or(true));
 
                     let mut args = vec![ticker_symbol.clone()];
                     if nse_checked && !bse_checked { args.push("--mode=nse".to_string()); } 
                     else if bse_checked && !nse_checked { args.push("--mode=bse".to_string()); } 
                     else { args.push("--mode=both".to_string()); }
 
-                    // Seed precise intent selection flags down memory registers right away
                     REQ_RUN_DOWNLOAD.store(run_download, Ordering::Relaxed);
+                    REQ_RUN_OCR.store(run_ocr, Ordering::Relaxed);
                     REQ_RUN_PARSE.store(run_parse, Ordering::Relaxed);
                     REQ_RUN_ANALYZE.store(run_analyze, Ordering::Relaxed);
 
-                    // 🎯 RESET HIGH-RESOLUTION TIMING AND WORKFLOW CONTAINERS BEFORE THREAD LAUNCH
                     DOWNLOAD_DURATION_MS.store(0, Ordering::Relaxed);
+                    OCR_DURATION_MS.store(0, Ordering::Relaxed);
                     PARSER_DURATION_MS.store(0, Ordering::Relaxed);
                     ANALYSIS_DURATION_MS.store(0, Ordering::Relaxed);
                     WORKFLOW_COMPLETE.store(false, Ordering::Relaxed);
 
                     if let Ok(mut start) = DOWNLOAD_START_TIME.lock() { *start = None; }
+                    if let Ok(mut start) = OCR_START_TIME.lock() { *start = None; }
                     if let Ok(mut start) = PARSER_START_TIME.lock() { *start = None; }
                     if let Ok(mut start) = ANALYSIS_START_TIME.lock() { *start = None; }
 
@@ -388,10 +432,29 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                     tokio::spawn(async move {
                         if run_download {
                             if let Ok(mut start) = DOWNLOAD_START_TIME.lock() { *start = Some(std::time::Instant::now()); }
-                            let _ = crate::core::downloader::dispatch_download(args).await;
+                            // 🎯 FIXED: Print to console on error
+                            if let Err(e) = crate::core::downloader::dispatch_download(args).await {
+                                println!("\x1b[96m[Go Downloader] ❌ IPC Instruction Refused: {}\x1b[0m", e);
+                            }
                             if let Ok(mut start) = DOWNLOAD_START_TIME.lock() {
                                 if let Some(t) = start.take() { DOWNLOAD_DURATION_MS.store(t.elapsed().as_millis() as u64, Ordering::Relaxed); }
                             }
+                        }
+
+                        if run_ocr {
+                            OCR_IS_RUNNING.store(true, Ordering::Relaxed);
+                            if let Ok(mut start) = OCR_START_TIME.lock() { *start = Some(std::time::Instant::now()); }
+                            
+                            let ocr_config = crate::core::ocr::OcrConfig { ticker: ticker_symbol.clone(), data_dir_override: None };
+                            // 🎯 FIXED: Print to console on error instead of throwing away silently
+                            if let Err(e) = crate::core::ocr::dispatch_ocr(ocr_config) {
+                                println!("\x1b[35m[OCR] ❌ Ingestion Subprocess Execution Refused: {}\x1b[0m", e);
+                            }
+                            
+                            if let Ok(mut start) = OCR_START_TIME.lock() {
+                                if let Some(t) = start.take() { OCR_DURATION_MS.store(t.elapsed().as_millis() as u64, Ordering::Relaxed); }
+                            }
+                            OCR_IS_RUNNING.store(false, Ordering::Relaxed);
                         }
 
                         if run_parse {
@@ -399,7 +462,10 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                             if let Ok(mut start) = PARSER_START_TIME.lock() { *start = Some(std::time::Instant::now()); }
                             
                             let parse_config = crate::core::parser::ParserConfig { ticker: ticker_symbol.clone(), data_dir_override: None };
-                            let _ = crate::core::parser::dispatch_parse(parse_config);
+                            // 🎯 FIXED: Print to console on error
+                            if let Err(e) = crate::core::parser::dispatch_parse(parse_config) {
+                                println!("\x1b[93m[PARSER] ❌ Ingestion Process Execution Refused: {}\x1b[0m", e);
+                            }
                             
                             if let Ok(mut start) = PARSER_START_TIME.lock() {
                                 if let Some(t) = start.take() { PARSER_DURATION_MS.store(t.elapsed().as_millis() as u64, Ordering::Relaxed); }
@@ -414,7 +480,10 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                             let analysis_config = crate::core::analysis::AnalysisConfig {
                                 ticker: ticker_symbol.clone(), wacc: None, terminal_g: None, data_dir_override: None, modules: None,
                             };
-                            let _ = crate::core::analysis::dispatch_analysis(analysis_config);
+                            // 🎯 FIXED: Print to console on error
+                            if let Err(e) = crate::core::analysis::dispatch_analysis(analysis_config) {
+                                println!("\x1b[33m[ANALYSIS] ❌ Valuation Compilation Matrix Execution Refused: {}\x1b[0m", e);
+                            }
                             
                             if let Ok(mut start) = ANALYSIS_START_TIME.lock() {
                                 if let Some(t) = start.take() { ANALYSIS_DURATION_MS.store(t.elapsed().as_millis() as u64, Ordering::Relaxed); }

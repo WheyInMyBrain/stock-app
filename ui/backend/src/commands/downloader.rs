@@ -1,7 +1,7 @@
 // stock-app/ui/backend/src/commands/downloader.rs
 use std::process::{Stdio, Command};
 use std::io::{BufRead, BufReader as StdBufReader}; 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader as TokioBufReader, AsyncBufReadExt}; 
 use crate::commands::data_loader::WorkspaceDataContext;
@@ -31,21 +31,31 @@ pub struct IngestionProgress {
 
 pub static ACTIVE_INGESTION: Mutex<Option<IngestionProgress>> = Mutex::new(None);
 
-pub fn initialize_persistent_go_daemon(_app_handle: tauri::AppHandle) {
-    initialize_go_daemon();
+/// 🛠️ Bulletproof Binaries Directory Resolver: Checks both production paths 
+/// and local development manifest directories to ensure paths never break.
+fn resolve_binaries_directory() -> PathBuf {
+    if let Ok(mut exe_path) = std::env::current_exe() {
+        exe_path.pop();
+        exe_path.push("binaries");
+        if exe_path.exists() {
+            return exe_path;
+        }
+    }
+    let mut manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_path.push("binaries");
+    manifest_path
 }
 
 pub fn initialize_go_daemon() {
     std::thread::spawn(move || {
         let active_dir = resolve_data_directory_headless().to_string_lossy().to_string();
-        let mut binaries_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        binaries_dir.push("binaries");
-        let mut sidecar_executable = None;
+        let binaries_dir = resolve_binaries_directory();
 
+        let mut sidecar_executable = None;
         if let Ok(entries) = std::fs::read_dir(binaries_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with("downloader") {
+                if name.starts_with("downloader-") {
                     sidecar_executable = Some(entry.path());
                     break;
                 }
@@ -54,7 +64,10 @@ pub fn initialize_go_daemon() {
 
         let binary_path = match sidecar_executable {
             Some(p) => p,
-            None => return,
+            None => {
+                println!("❌ [SYSTEM ERROR]: Target sidecar downloader binary missing from tracker locations.");
+                return;
+            }
         };
 
         let mut child = match Command::new(&binary_path)
@@ -112,9 +125,7 @@ pub fn initialize_go_daemon() {
     });
 }
 
-#[tauri::command]
 pub async fn run_sidecar_downloader(
-    _app_handle: tauri::AppHandle, 
     _data_dir_override: Option<String>,
     extra_args: Option<Vec<String>>, 
 ) -> Result<String, String> {
@@ -161,7 +172,6 @@ pub async fn run_sidecar_downloader_native(extra_args: Vec<String>) -> Result<St
                 let mut line = String::new();
 
                 loop {
-
                     line.clear();
                     match reader.read_line(&mut line).await {
                         Ok(0) => break, 

@@ -11,7 +11,7 @@ class InMemoryPDFLoader(BaseDocumentLoader):
             raise FileNotFoundError(f"❌ Error: Targeted path does not exist: {source_path}")
             
         filename = os.path.basename(source_path)
-        print(f"📂 [Memory Loader] Streaming file bytes into RAM: {filename}")
+        print(f"\x1b[35m[OCR] 📂 [Memory Loader] Streaming file bytes into RAM: {filename}\x1b[0m")
         
         # 🎯 CASE 1: The file is wrapped inside a ZIP archive
         if source_path.endswith('.zip'):
@@ -24,7 +24,7 @@ class InMemoryPDFLoader(BaseDocumentLoader):
                 
                 # Take the first matched PDF asset found in the zip structure
                 target_pdf_name = pdf_files[0]
-                print(f"📦 [Zip Extractor] Extracting internal file into RAM: {target_pdf_name}")
+                print(f"\x1b[35m[OCR] 📦 [Zip Extractor] Extracting internal file into RAM: {target_pdf_name}\x1b[0m")
                 
                 # Read the uncompressed file stream directly into an independent RAM object
                 memory_buffer = io.BytesIO(zip_ref.read(target_pdf_name))
