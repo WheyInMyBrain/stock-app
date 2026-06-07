@@ -4,3 +4,5 @@ pub mod sidebar;
 pub mod workspace;
 pub mod panels;
 pub mod setup;
+pub mod layouts;
+pub mod widgets;
