@@ -13,9 +13,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 use rayon::prelude::*;
-use tracing::{info, warn, error};
 
-// 🎯 FIXED: A local, unified container layout to harmonize parallel chunks into a single uniform type
+// A local, unified container layout to harmonize parallel chunks into a single uniform type
 #[derive(Debug, Clone)]
 struct UnifiedRecord {
     source_file: String,
@@ -53,6 +52,8 @@ pub struct PipelineResult {
 }
 
 /// 🚀 THE HIGH-SPEED ENGINE ENTRY POINT: Fully asynchronous/thread-safe execution loop
+// stock-app/parser/src/lib.rs
+
 pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
     data_dir: P,
     ticker: &str,
@@ -68,7 +69,8 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
         total_elapsed_ms: 0,
     };
 
-    info!(target_symbol = %current_ticker, base_repository = ?base_path, "Initiating parallel dataset parsing routines");
+    // 🎯 FIXED: Print initial start sequence in bright yellow color code with [PARSER] tag
+    println!("\x1b[93m[PARSER] 🚀 Initiating parallel dataset parsing routines for ticker [{}]\x1b[0m", current_ticker);
 
     for folder in targets::TARGET_REPORT_FOLDERS {
         let group_start = Instant::now();
@@ -86,7 +88,6 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
         let entries: Vec<_> = match glob::glob(&target_glob) {
             Ok(paths) => paths.flatten().collect(),
             Err(_) => {
-                warn!(directory = ?target_folder, "Target filings folder tract missing from file system. Skipping.");
                 continue;
             }
         };
@@ -100,7 +101,7 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
         // ============================================================================
         if *folder == "ocr/annual-reports" {
             let stream_results: Vec<_> = entries
-                .into_par_iter() // Parallelize computation across CPU threads cleanly using Rayon
+                .into_par_iter() 
                 .filter_map(|path| {
                     match ocr_parser::extract_all_statements_from_file(&path) {
                         Ok(records) => {
@@ -145,8 +146,7 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
 
                 group_total_rows += particulars_vec.len();
 
-                // Call optimized zero-copy function passing owned vectors cleanly
-                if let Err(e) = utils::save_ocr_to_parquet(
+                if let Err(_) = utils::save_ocr_to_parquet(
                     base_path,
                     &current_ticker,
                     &statement_type,
@@ -157,26 +157,31 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
                     notes_vec,
                     curr_vec,
                     prev_vec,
-                ) {
-                    error!(statement = %statement_type, error = %e, "Failed serialization loop for OCR Parquet generation.");
-                }
+                ) {}
             }
 
-            pipeline_summary.grand_total_rows += group_total_rows;
-            pipeline_summary.group_results.push(GroupMetrics {
+            let metrics = GroupMetrics {
                 folder_name: folder.to_string(),
                 processed_files: processed_files.load(Ordering::Relaxed),
                 skipped_files: skipped_files.load(Ordering::Relaxed),
                 total_rows: group_total_rows,
                 elapsed_ms: group_start.elapsed().as_millis(),
-            });
+            };
+
+            // 🎯 FIXED: Print completed sub-group matrix line immediately in bright yellow
+            println!(
+                "\x1b[93m[PARSER] 📁 Group: {:<38} | Rows: {:<6} | Processed: {:<3} | Time: {}ms\x1b[0m",
+                metrics.folder_name, metrics.total_rows, metrics.processed_files, metrics.elapsed_ms
+            );
+
+            pipeline_summary.grand_total_rows += group_total_rows;
+            pipeline_summary.group_results.push(metrics);
             continue; 
         }
 
         // ============================================================================
         // 📁 ROUTE B: INGESTION FOR STRUCTURAL REPORT CHUNKS (XML)
         // ============================================================================
-        // Rayon parses the entries concurrently into uniform thread chunks
         let chunks_vector: Vec<Vec<UnifiedRecord>> = entries
             .into_par_iter()
             .filter_map(|path| {
@@ -184,7 +189,6 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
                     match bse_parser::parse_bse_file(&path, folder) {
                         Ok(records) => {
                             processed_files.fetch_add(1, Ordering::Relaxed);
-                            // 🎯 FIXED: Map BSE records into the local uniform struct
                             let mapped = records.into_iter().map(|r| UnifiedRecord {
                                 source_file: r.source_file,
                                 tag_name: r.tag_name,
@@ -203,7 +207,6 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
                     match nse_parser::parse_nse_file(&path, folder) {
                         Ok(records) => {
                             processed_files.fetch_add(1, Ordering::Relaxed);
-                            // 🎯 FIXED: Map NSE records into the identical uniform struct to align types cleanly
                             let mapped = records.into_iter().map(|r| UnifiedRecord {
                                 source_file: r.source_file,
                                 tag_name: r.tag_name,
@@ -224,7 +227,6 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
             })
             .collect();
 
-        // Single pre-allocation scan to determine exact sizes to avoid internal re-allocations
         let combined_capacity: usize = chunks_vector.iter().map(|c| c.len()).sum();
         if combined_capacity == 0 {
             continue;
@@ -238,7 +240,6 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
             values: Vec::with_capacity(combined_capacity),
         };
 
-        // Flatten chunks smoothly without creating intermediate intermediate structures
         for chunk in chunks_vector {
             for record in chunk {
                 accumulator.files.push(record.source_file);
@@ -249,7 +250,6 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
             }
         }
 
-        // Fire zero-copy serialization pass 
         match utils::save_to_parquet(
             base_path,
             &current_ticker,
@@ -261,21 +261,33 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
             accumulator.values,
         ) {
             Ok(_) => {
-                pipeline_summary.grand_total_rows += combined_capacity;
-                pipeline_summary.group_results.push(GroupMetrics {
+                let metrics = GroupMetrics {
                     folder_name: folder.to_string(),
                     processed_files: processed_files.load(Ordering::Relaxed),
                     skipped_files: skipped_files.load(Ordering::Relaxed),
                     total_rows: combined_capacity,
                     elapsed_ms: group_start.elapsed().as_millis(),
-                });
+                };
+
+                // 🎯 FIXED: Print completed sub-group matrix line immediately in bright yellow
+                println!(
+                    "\x1b[93m[PARSER] 📁 Group: {:<38} | Rows: {:<6} | Processed: {:<3} | Time: {}ms\x1b[0m",
+                    metrics.folder_name, metrics.total_rows, metrics.processed_files, metrics.elapsed_ms
+                );
+
+                pipeline_summary.grand_total_rows += combined_capacity;
+                pipeline_summary.group_results.push(metrics);
             }
-            Err(e) => {
-                error!(target_group = folder, error = %e, "Failed serialization loop for standard Parquet generation.");
-            }
+            Err(_) => {}
         }
     }
 
     pipeline_summary.total_elapsed_ms = pipeline_start.elapsed().as_millis();
+
+    println!("\x1b[93m[PARSER] ---------------------------------------------------------------------------------\x1b[0m");
+    println!("\x1b[93m[PARSER] 📈 Grand Total Data Rows Synchronized: {}\x1b[0m", pipeline_summary.grand_total_rows);
+    println!("\x1b[93m[PARSER] ⏱️ Full Run Pipeline Execution Time   : {}ms\x1b[0m", pipeline_summary.total_elapsed_ms);
+    println!("\x1b[93m[PARSER] =================================================================================\x1b[0m");
+
     Ok(pipeline_summary)
 }

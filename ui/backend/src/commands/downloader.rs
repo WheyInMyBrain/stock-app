@@ -161,12 +161,6 @@ pub async fn run_sidecar_downloader_native(extra_args: Vec<String>) -> Result<St
                 let mut line = String::new();
 
                 loop {
-                    // Stop checkpoint guard
-                    {
-                        if ACTIVE_INGESTION.lock().unwrap().is_none() {
-                            return Err("Cancelled by user request".to_string());
-                        }
-                    }
 
                     line.clear();
                     match reader.read_line(&mut line).await {
@@ -212,7 +206,6 @@ pub async fn run_sidecar_downloader_native(extra_args: Vec<String>) -> Result<St
 
                                 if let Some(ref mut progress) = *ACTIVE_INGESTION.lock().unwrap() {
                                     if !api_name.is_empty() {
-                                        // 🎯 STATELESS DECOUPLING: Route directly into the targeted vector track based on the exchange tag
                                         let target_vec = if exchange == "NSE" {
                                             &mut progress.nse_downloads
                                         } else {

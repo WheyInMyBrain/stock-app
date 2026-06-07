@@ -1,5 +1,14 @@
 // stock-app/ui/backend/src/commands/analysis.rs
 use crate::commands::data_dir::resolve_data_directory_headless;
+use std::sync::atomic::Ordering;
+
+/// 📊 Live Progress Inspector for the Frontend Viewport
+/// Returns a tuple containing the exact atomic task metrics: (completed_tasks, total_tasks)
+pub fn get_analysis_progress() -> (u32, u32) {
+    let completed = analysis::runner::COMPLETED_TASKS.load(Ordering::Relaxed);
+    let total = analysis::runner::TOTAL_TASKS.load(Ordering::Relaxed);
+    (completed, total)
+}
 
 /// ⚡ VALUATION MATRIX ANALYSIS DISPATCHER
 /// Triggers the parallel deterministic metrics engine and projection workflows natively.
@@ -26,7 +35,7 @@ pub fn trigger_core_analysis(
         None => resolve_data_directory_headless().to_string_lossy().to_string(),
     };
 
-    println!("🚀 [ANALYSIS ENGINE]: Invoked valuation matrix compilation for ticker [{}]", current_ticker);
+    println!("\x1b[33m[ANALYSIS] 🚀 [ANALYSIS ENGINE]: Invoked valuation matrix compilation for ticker [{}]\x1b[0m", current_ticker);
 
     // C. Execute the library pipeline orchestration sequence directly
     analysis::runner::run_global_analysis_pipeline(
@@ -37,15 +46,6 @@ pub fn trigger_core_analysis(
         &final_modules,
     );
 
-    Ok(format!(
-        "✨ VALUATION MATRIX ANALYSIS CONCLUDED SUCCESSFULLY FOR TICKER [{}]\n\
-         =================================================================================\n\
-         📈 Active Analytical Scope Targets: {}\n\
-         📐 Discounting Rate Context (WACC) : {:.2}%\n\
-         🔮 Long-Term Growth Rate (Term G) : {:.2}%\n\
-         📂 Target Output Directory Trace   : {}/{}/analysis\n\
-         =================================================================================\n\
-         All valuation matrices, DCF models, and Monte Carlo grids compiled to JSON frames.",
-        current_ticker, final_modules, final_wacc * 100.0, final_g * 100.0, final_dir, current_ticker
-    ))
+    // 🎯 FIXED: Lean confirmation token returned cleanly
+    Ok("Success".to_string())
 }
