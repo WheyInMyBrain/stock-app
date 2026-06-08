@@ -1,11 +1,19 @@
-use backend::commands::downloader::run_sidecar_downloader_native;
+use backend::commands::downloader::{initialize_exchange_clients, run_all};
 
-/// 🛰️ Purified Core Bootstrap: Triggers the main backend library initialization loop
 pub fn boot_daemon(_data_dir: String) {
-    backend::initialize_backend();
+    tokio::spawn(async {
+        let _ = initialize_exchange_clients().await;
+    });
 }
 
-/// ⚡ Purified Passthrough Wrapper: Dispatches download tasks down the pure library core channels
-pub async fn dispatch_download(extra_args: Vec<String>) -> Result<String, String> {
-    run_sidecar_downloader_native(extra_args).await
+pub async fn dispatch_download(ticker: String, nse_active: bool, bse_active: bool) -> Result<String, String> {
+    let mode = match (nse_active, bse_active) {
+        (true, true) => "both",
+        (true, false) => "nse",
+        (false, true) => "bse",
+        (false, false) => return Err("No exchange selected for download track".to_string()),
+    };
+
+    run_all(&ticker, mode).await?;
+    Ok("Success".to_string())
 }

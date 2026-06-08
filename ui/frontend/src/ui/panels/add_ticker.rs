@@ -1,15 +1,12 @@
-// stock-app/ui/frontend_native/src/ui/panels/add_ticker.rs
 use egui::Ui;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
-// 🎯 THREAD-SAFE GLOBAL WORKFLOW STATE MONITORS
 static OCR_IS_RUNNING: AtomicBool = AtomicBool::new(false);
 static PARSER_IS_RUNNING: AtomicBool = AtomicBool::new(false);
 static ANALYSIS_IS_RUNNING: AtomicBool = AtomicBool::new(false);
 static WORKFLOW_COMPLETE: AtomicBool = AtomicBool::new(false);
 
-// 🎯 HIGH-RESOLUTION METRIC TIMING CHANNELS (IN MILLISECONDS)
 static DOWNLOAD_DURATION_MS: AtomicU64 = AtomicU64::new(0);
 static OCR_DURATION_MS: AtomicU64 = AtomicU64::new(0);
 static PARSER_DURATION_MS: AtomicU64 = AtomicU64::new(0);
@@ -20,7 +17,6 @@ static OCR_START_TIME: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static PARSER_START_TIME: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static ANALYSIS_START_TIME: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
-// 🎯 WORKFLOW ENGINE PARAMETER SNAPSHOT TRACKERS
 static REQ_RUN_DOWNLOAD: AtomicBool = AtomicBool::new(false);
 static REQ_RUN_OCR: AtomicBool = AtomicBool::new(false);
 static REQ_RUN_PARSE: AtomicBool = AtomicBool::new(false);
@@ -28,7 +24,6 @@ static REQ_RUN_ANALYZE: AtomicBool = AtomicBool::new(false);
 
 static PIPELINE_TICKER: Mutex<String> = Mutex::new(String::new());
 
-/// ⚡ Metric Timing Formatter: Presents durations cleanly in milliseconds or decimal seconds
 fn format_ms(ms: u64) -> String {
     if ms < 1000 {
         format!("{}ms", ms)
@@ -37,20 +32,19 @@ fn format_ms(ms: u64) -> String {
     }
 }
 
-/// ⚡ Shared Layout Helper: Renders an ultra-clean solid Black track with a high-contrast solid White progress line and estimation text
 fn draw_minimal_progress_line_with_est(ui: &mut Ui, percentage: f32, est_text: &str) {
     ui.horizontal(|ui| {
         ui.add_space(40.0);
         let fraction = (percentage / 100.0).clamp(0.0, 1.0);
-        let bar_width = ui.available_width() - 110.0; // Allocates margin for estimate text alignment bounds
+        let bar_width = ui.available_width() - 110.0;
         
         let (rect, _) = ui.allocate_at_least(egui::vec2(bar_width, 5.0), egui::Sense::hover());
-        ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(25, 25, 25)); // Solid background track
+        ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(25, 25, 25));
         
         if fraction > 0.0 {
             let mut progress_rect = rect;
             progress_rect.set_width(rect.width() * fraction);
-            ui.painter().rect_filled(progress_rect, 0.0, egui::Color32::WHITE); // Solid foreground line fill
+            ui.painter().rect_filled(progress_rect, 0.0, egui::Color32::WHITE);
         }
 
         ui.label(egui::RichText::new(format!("{:.1}%", percentage)).small().weak());
@@ -62,7 +56,6 @@ fn draw_minimal_progress_line_with_est(ui: &mut Ui, percentage: f32, est_text: &
 }
 
 pub fn draw_add_ticker_panel(ui: &mut Ui) {
-    // A. Fetch current asynchronous workflow layer runtime snapshots from memory blocks
     let active_download_snapshot = {
         let guard = backend::commands::downloader::ACTIVE_INGESTION.lock().unwrap();
         guard.clone()
@@ -74,7 +67,6 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
     let is_parser_running = PARSER_IS_RUNNING.load(Ordering::Relaxed);
     let is_analysis_running = ANALYSIS_IS_RUNNING.load(Ordering::Relaxed);
 
-    // 🧠 CENTRAL ENGINE CHECKPOINTS EVALUATION
     let global_is_running = is_download_running || is_ocr_running || is_parser_running || is_analysis_running;
     let global_is_done = WORKFLOW_COMPLETE.load(Ordering::Relaxed);
 
@@ -84,15 +76,10 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
     let req_analyze = REQ_RUN_ANALYZE.load(Ordering::Relaxed);
 
     if global_is_running {
-        // ============================================================================
-        // ⚡ VIEW MODE 1: ACTIVE LIVE RUNNING METRICS WORKFLOW PIPELINE
-        // ============================================================================
         ui.vertical_centered(|ui| {
             ui.add_space(60.0);
             ui.allocate_ui(egui::vec2(480.0, 0.0), |ui| {
                 ui.vertical(|ui| {
-                    
-                    // Unified Header Banner
                     ui.horizontal(|ui| {
                         let ticker = if let Some(ref dl) = active_download_snapshot { dl.ticker.clone() } else { PIPELINE_TICKER.lock().unwrap().clone() };
                         ui.label(egui::RichText::new(format!("⚡ PROCESSING WORKFLOW: {}", ticker)).heading());
@@ -102,10 +89,8 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                     ui.label("WORKFLOW PIPELINE PROGRESS TIMELINE:");
                     ui.add_space(16.0);
 
-                    // 📦 STAGE 1 TIMELINE NODE: DOWNLOADS METRICS CHANNEL
                     if req_download {
                         if is_download_running {
-                            // ⏱️ Query live active timer tick
                             let elapsed_txt = if let Some(start) = *DOWNLOAD_START_TIME.lock().unwrap() {
                                 format!(" [{:.1}s]", start.elapsed().as_secs_f32())
                             } else {
@@ -116,12 +101,13 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                             ui.add_space(12.0);
 
                             if let Some(ref progress) = active_download_snapshot {
-                                // --- NSE PIPELINE INDICATORS ---
                                 if progress.nse_active {
                                     ui.horizontal(|ui| { ui.add_space(24.0); ui.label(egui::RichText::new("NSE Exchange Stream").small().weak()); });
                                     ui.add_space(4.0);
                                     
-                                    let mut nse_curr = 0; let mut nse_total = 0; let mut nse_file_pct = 100.0;
+                                    let mut nse_curr: usize = 0;
+                                    let mut nse_total: usize = 0;
+                                    let mut nse_file_pct = 100.0;
                                     for track in &progress.nse_downloads {
                                         if track.current_step > nse_curr { nse_curr = track.current_step; nse_total = track.total_steps; }
                                         if track.percentage < 100.0 { nse_file_pct = track.percentage; }
@@ -140,12 +126,13 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                                     ui.add_space(14.0);
                                 }
 
-                                // --- BSE PIPELINE INDICATORS ---
                                 if progress.bse_active {
                                     ui.horizontal(|ui| { ui.add_space(24.0); ui.label(egui::RichText::new("BSE Exchange Stream").small().weak()); });
                                     ui.add_space(4.0);
                                     
-                                    let mut bse_curr = 0; let mut bse_total = 0; let mut bse_file_pct = 100.0;
+                                    let mut bse_curr: usize = 0;
+                                    let mut bse_total: usize = 0;
+                                    let mut bse_file_pct = 100.0;
                                     for track in &progress.bse_downloads {
                                         if track.current_step > bse_curr { bse_curr = track.current_step; bse_total = track.total_steps; }
                                         if track.percentage < 100.0 { bse_file_pct = track.percentage; }
@@ -171,7 +158,6 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                         }
                     }
 
-                    // 📦 STAGE 2 TIMELINE NODE: DOCUMENT OCR EXTRACTION PIPELINE
                     if req_ocr {
                         if is_ocr_running {
                             let elapsed_txt = if let Some(start) = *OCR_START_TIME.lock().unwrap() {
@@ -195,7 +181,6 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                         }
                     }
 
-                    // 📦 STAGE 3 TIMELINE NODE: DATA INGESTION STRUCTURAL PARSER
                     if req_parse {
                         if is_parser_running {
                             let elapsed_txt = if let Some(start) = *PARSER_START_TIME.lock().unwrap() {
@@ -219,7 +204,6 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                         }
                     }
 
-                    // 📦 STAGE 4 TIMELINE NODE: MULTI-THREADED ANALYSIS MATRICES
                     if req_analyze {
                         if is_analysis_running {
                             let elapsed_txt = if let Some(start) = *ANALYSIS_START_TIME.lock().unwrap() {
@@ -249,14 +233,10 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                             ui.add_space(14.0);
                         }
                     }
-
                 });
             });
         });
     } else if global_is_done {
-        // ============================================================================
-        // 🎉 VIEW MODE 2: ACCURATE COMPLETION REPORT VIEWER & TIMING METRICS TABLE
-        // ============================================================================
         ui.vertical_centered(|ui| {
             ui.add_space(60.0);
             let ticker = PIPELINE_TICKER.lock().unwrap().clone();
@@ -332,9 +312,6 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
             }
         });
     } else {
-        // ============================================================================
-        // ➕ VIEW MODE 3: CONFIGURATION FORM COCKPIT (FORM ENTRY INTERFACE)
-        // ============================================================================
         ui.vertical_centered(|ui| {
             ui.add_space(60.0);
             ui.heading("➕ ADD NEW TICKER");
@@ -406,11 +383,6 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                     let nse_checked = ui.data_mut(|d| d.get_temp::<bool>(nse_id).unwrap_or(true));
                     let bse_checked = ui.data_mut(|d| d.get_temp::<bool>(bse_id).unwrap_or(true));
 
-                    let mut args = vec![ticker_symbol.clone()];
-                    if nse_checked && !bse_checked { args.push("--mode=nse".to_string()); } 
-                    else if bse_checked && !nse_checked { args.push("--mode=bse".to_string()); } 
-                    else { args.push("--mode=both".to_string()); }
-
                     REQ_RUN_DOWNLOAD.store(run_download, Ordering::Relaxed);
                     REQ_RUN_OCR.store(run_ocr, Ordering::Relaxed);
                     REQ_RUN_PARSE.store(run_parse, Ordering::Relaxed);
@@ -432,9 +404,8 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                     tokio::spawn(async move {
                         if run_download {
                             if let Ok(mut start) = DOWNLOAD_START_TIME.lock() { *start = Some(std::time::Instant::now()); }
-                            // 🎯 FIXED: Print to console on error
-                            if let Err(e) = crate::core::downloader::dispatch_download(args).await {
-                                println!("\x1b[96m[Go Downloader] ❌ IPC Instruction Refused: {}\x1b[0m", e);
+                            if let Err(e) = crate::core::downloader::dispatch_download(ticker_symbol.clone(), nse_checked, bse_checked).await {
+                                println!("\x1b[96m[Downloader] ❌ Ingestion Refused: {}\x1b[0m", e);
                             }
                             if let Ok(mut start) = DOWNLOAD_START_TIME.lock() {
                                 if let Some(t) = start.take() { DOWNLOAD_DURATION_MS.store(t.elapsed().as_millis() as u64, Ordering::Relaxed); }
@@ -446,7 +417,6 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                             if let Ok(mut start) = OCR_START_TIME.lock() { *start = Some(std::time::Instant::now()); }
                             
                             let ocr_config = crate::core::ocr::OcrConfig { ticker: ticker_symbol.clone(), data_dir_override: None };
-                            // 🎯 FIXED: Print to console on error instead of throwing away silently
                             if let Err(e) = crate::core::ocr::dispatch_ocr(ocr_config) {
                                 println!("\x1b[35m[OCR] ❌ Ingestion Subprocess Execution Refused: {}\x1b[0m", e);
                             }
@@ -462,7 +432,6 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                             if let Ok(mut start) = PARSER_START_TIME.lock() { *start = Some(std::time::Instant::now()); }
                             
                             let parse_config = crate::core::parser::ParserConfig { ticker: ticker_symbol.clone(), data_dir_override: None };
-                            // 🎯 FIXED: Print to console on error
                             if let Err(e) = crate::core::parser::dispatch_parse(parse_config) {
                                 println!("\x1b[93m[PARSER] ❌ Ingestion Process Execution Refused: {}\x1b[0m", e);
                             }
@@ -480,7 +449,6 @@ pub fn draw_add_ticker_panel(ui: &mut Ui) {
                             let analysis_config = crate::core::analysis::AnalysisConfig {
                                 ticker: ticker_symbol.clone(), wacc: None, terminal_g: None, data_dir_override: None, modules: None,
                             };
-                            // 🎯 FIXED: Print to console on error
                             if let Err(e) = crate::core::analysis::dispatch_analysis(analysis_config) {
                                 println!("\x1b[33m[ANALYSIS] ❌ Valuation Compilation Matrix Execution Refused: {}\x1b[0m", e);
                             }
