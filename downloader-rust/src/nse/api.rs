@@ -25,6 +25,7 @@ pub enum NseEndpoint {
     RealTimeChartSeed,
     RealTimeChartDelta(Option<i64>),
     IntegratedFilingResults,
+    IntegratedFinanceResults
 }
 
 // === Annual Reports Schemas ===
@@ -142,7 +143,6 @@ struct NseFilingRow {
     qe_date: Option<String>,
     #[serde(rename = "seq_Id")]
     seq_id: Option<String>,
-    ixbrl: Option<String>,
     xbrl: Option<String>,
 }
 
@@ -171,6 +171,7 @@ impl NseEndpoint {
             NseEndpoint::RealTimeChartSeed => "real-time-chart",
             NseEndpoint::RealTimeChartDelta(_) => "real-time-chart-delta",
             NseEndpoint::IntegratedFilingResults => "integrated-filing-results",
+            NseEndpoint::IntegratedFinanceResults => "integrated-finance-results",
         }
     }
 
@@ -278,6 +279,9 @@ impl NseEndpoint {
             }
             NseEndpoint::IntegratedFilingResults => {
                 format!("https://www.nseindia.com/api/integrated-filing-results?index=equities&symbol={}", symbol)
+            }
+            NseEndpoint::IntegratedFinanceResults => {
+                format!("https://www.nseindia.com/api/integrated-filing-results?index=equities&symbol={}&type=Integrated%20Filing-%20Financials", symbol)
             }
         }
     }
@@ -500,13 +504,27 @@ impl NseEndpoint {
                             
                             let seq = row.seq_id.unwrap_or_else(|| "0".to_string());
 
-                            if let Some(ixbrl_url) = row.ixbrl {
-                                let clean_ixbrl = ixbrl_url.trim();
-                                if !clean_ixbrl.is_empty() && !clean_ixbrl.ends_with("/null") {
-                                    let filename = format!("QE_{}_Seq_{}_iXBRLWeb", quarter_bound, seq);
-                                    results.push((filename, clean_ixbrl.to_string()));
+                            if let Some(xbrl_url) = row.xbrl {
+                                let clean_xbrl = xbrl_url.trim();
+                                if !clean_xbrl.is_empty() && !clean_xbrl.ends_with("/null") {
+                                    let filename = format!("QE_{}_Seq_{}_RawData", quarter_bound, seq);
+                                    results.push((filename, clean_xbrl.to_string()));
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            NseEndpoint::IntegratedFinanceResults => {
+                if let Ok(payload) = serde_json::from_slice::<NseFilingPayload>(raw_json_bytes) {
+                    if let Some(rows) = payload.data {
+                        for row in rows {
+                            let quarter_bound = row.qe_date
+                                .unwrap_or_else(|| "UnknownDate".to_string())
+                                .replace(' ', "_")
+                                .replace('-', "_");
+                            
+                            let seq = row.seq_id.unwrap_or_else(|| "0".to_string());
 
                             if let Some(xbrl_url) = row.xbrl {
                                 let clean_xbrl = xbrl_url.trim();

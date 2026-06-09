@@ -14,6 +14,10 @@ pub fn parse_bse_file(path: &Path, folder_name: &str) -> Result<Vec<BseRecord>, 
         "bse_shareholding-pattern-docs" => {
             crate::bse::shareholding::parse(path)
         }
+
+        "bse_integrated-finance-data" => {
+            crate::bse::integrated_finance::parse(path)
+        }
         
         _ => Err(format!("No custom parser registered for folder schema: '{}'", folder_name)),
     }

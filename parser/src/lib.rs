@@ -52,8 +52,6 @@ pub struct PipelineResult {
 }
 
 /// 🚀 THE HIGH-SPEED ENGINE ENTRY POINT: Fully asynchronous/thread-safe execution loop
-// stock-app/parser/src/lib.rs
-
 pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
     data_dir: P,
     ticker: &str,
@@ -69,32 +67,36 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
         total_elapsed_ms: 0,
     };
 
-    // 🎯 FIXED: Print initial start sequence in bright yellow color code with [PARSER] tag
     println!("\x1b[93m[PARSER] 🚀 Initiating parallel dataset parsing routines for ticker [{}]\x1b[0m", current_ticker);
 
     for folder in targets::TARGET_REPORT_FOLDERS {
         let group_start = Instant::now();
         let target_folder = base_path.join(&current_ticker).join(folder);
-        let file_extension = if folder.contains("ocr") { "*.md" } else { "*.xml" };
         
-        let target_glob = match target_folder.join(file_extension).to_str() {
-            Some(g) => g.to_string(),
-            None => continue,
+        // Dynamically compute target glob patterns depending on the folder schema type
+        let glob_patterns = if folder.contains("ocr") {
+            vec![target_folder.join("*.md")]
+        } else if folder.contains("integrated-finance") {
+            vec![target_folder.join("*.html"), target_folder.join("*.xhtml"), target_folder.join("*.xml")]
+        } else {
+            vec![target_folder.join("*.xml")]
         };
 
-        let processed_files = AtomicU32::new(0);
-        let skipped_files = AtomicU32::new(0);
-
-        let entries: Vec<_> = match glob::glob(&target_glob) {
-            Ok(paths) => paths.flatten().collect(),
-            Err(_) => {
-                continue;
+        let mut entries = Vec::new();
+        for pattern in glob_patterns {
+            if let Some(g_str) = pattern.to_str() {
+                if let Ok(paths) = glob::glob(g_str) {
+                    entries.extend(paths.flatten());
+                }
             }
-        };
+        }
 
         if entries.is_empty() {
             continue;
         }
+
+        let processed_files = AtomicU32::new(0);
+        let skipped_files = AtomicU32::new(0);
 
         // ============================================================================
         // 📑 ROUTE A: INGESTION FOR ANNUAL OCR DATA (MARKDOWN)
@@ -168,7 +170,6 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
                 elapsed_ms: group_start.elapsed().as_millis(),
             };
 
-            // 🎯 FIXED: Print completed sub-group matrix line immediately in bright yellow
             println!(
                 "\x1b[93m[PARSER] 📁 Group: {:<38} | Rows: {:<6} | Processed: {:<3} | Time: {}ms\x1b[0m",
                 metrics.folder_name, metrics.total_rows, metrics.processed_files, metrics.elapsed_ms
@@ -180,7 +181,7 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
         }
 
         // ============================================================================
-        // 📁 ROUTE B: INGESTION FOR STRUCTURAL REPORT CHUNKS (XML)
+        // 📁 ROUTE B: INGESTION FOR STRUCTURAL REPORT CHUNKS (XML / HTML Layouts)
         // ============================================================================
         let chunks_vector: Vec<Vec<UnifiedRecord>> = entries
             .into_par_iter()
@@ -269,7 +270,6 @@ pub fn run_ticker_parsing_pipeline<P: AsRef<Path>>(
                     elapsed_ms: group_start.elapsed().as_millis(),
                 };
 
-                // 🎯 FIXED: Print completed sub-group matrix line immediately in bright yellow
                 println!(
                     "\x1b[93m[PARSER] 📁 Group: {:<38} | Rows: {:<6} | Processed: {:<3} | Time: {}ms\x1b[0m",
                     metrics.folder_name, metrics.total_rows, metrics.processed_files, metrics.elapsed_ms

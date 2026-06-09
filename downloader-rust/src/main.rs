@@ -19,5 +19,5 @@ async fn main() {
     let symbol = "IMFA";
 
     // In your backend command: Just runs ONE isolated endpoint
-    execute_nse_strategy(&nse_client, symbol, "1", NseEndpoint::IntegratedFilingResults, &test_data_dir, false).await;
+    execute_nse_strategy(&nse_client, symbol, "1", NseEndpoint::IntegratedFinanceResults, &test_data_dir, false).await;
 }

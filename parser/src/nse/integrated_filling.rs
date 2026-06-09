@@ -3,9 +3,9 @@ use quick_xml::Reader;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use crate::bse::utils::BseRecord;
+use crate::nse::utils::NseRecord;
 
-pub fn parse(path: &Path) -> Result<Vec<BseRecord>, String> {
+pub fn parse(path: &Path) -> Result<Vec<NseRecord>, String> {
     let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
 
     let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
@@ -17,6 +17,7 @@ pub fn parse(path: &Path) -> Result<Vec<BseRecord>, String> {
     let mut raw_content = String::new();
     file.read_to_string(&mut raw_content).map_err(|e| e.to_string())?;
 
+    // Align with XML start header boundary cleanly
     let clean_xml = if let Some(start_idx) = raw_content.find('<') {
         &raw_content[start_idx..]
     } else {
@@ -36,18 +37,34 @@ pub fn parse(path: &Path) -> Result<Vec<BseRecord>, String> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
-                let local_name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
-                let mut found_context = String::new();
+                let full_tag_name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
                 
+                // Strip structural namespace prefix (e.g. "in-capmkt:NoOfInvestorComplaints" -> "NoOfInvestorComplaints")
+                let tag_local = if let Some(idx) = full_tag_name.find(':') {
+                    full_tag_name[(idx + 1)..].to_string()
+                } else {
+                    full_tag_name
+                };
+
+                let mut found_context = String::new();
+
+                // Extract contextRef attribute mapping
                 for attr in e.attributes().flatten() {
-                    if attr.key.local_name().as_ref() == b"contextRef" {
+                    let attr_key_raw = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
+                    let attr_key = if let Some(idx) = attr_key_raw.find(':') {
+                        &attr_key_raw[(idx + 1)..]
+                    } else {
+                        &attr_key_raw
+                    };
+
+                    if attr_key == "contextRef" {
                         found_context = String::from_utf8_lossy(&attr.value).into_owned();
                         break;
                     }
                 }
 
                 if !found_context.is_empty() {
-                    open_tag = local_name;
+                    open_tag = tag_local;
                     open_context = found_context;
                 } else {
                     open_tag.clear();
@@ -57,13 +74,22 @@ pub fn parse(path: &Path) -> Result<Vec<BseRecord>, String> {
             Ok(Event::Text(e)) => {
                 if !open_tag.is_empty() && !open_context.is_empty() {
                     let text_value = e.unescape().unwrap_or_default().into_owned();
-                    if !text_value.is_empty() {
-                        records.push(BseRecord {
+                    
+                    // Collapse spaces and newlines down into flat continuous row entries
+                    let clean_value = text_value
+                        .replace('\r', "")
+                        .replace('\n', " ")
+                        .split_whitespace()
+                        .collect::<Vec<&str>>()
+                        .join(" ");
+
+                    if !clean_value.is_empty() {
+                        records.push(NseRecord {
                             source_file: file_name.clone(),
                             tag_name: open_tag.clone(),
                             context_id: open_context.clone(),
                             date_bounds: String::new(),
-                            raw_value: text_value,
+                            raw_value: clean_value,
                         });
                     }
                 }

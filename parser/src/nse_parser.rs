@@ -20,6 +20,14 @@ pub fn parse_nse_file(path: &Path, folder_name: &str) -> Result<Vec<NseRecord>, 
             crate::nse::shareholding::parse(path)
         }
 
+        "nse_integrated-finance-results" => {
+            crate::nse::integrated_finance::parse(path)
+        }
+
+        "nse_integrated-filing-results" => {
+            crate::nse::integrated_filling::parse(path)
+        }
+
         _ => Err(format!("No custom NSE parser registered for folder schema: '{}'", folder_name)),
     }
 }
