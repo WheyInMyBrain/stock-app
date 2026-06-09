@@ -3,7 +3,15 @@ use quick_xml::Reader;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use rayon::prelude::*;
 use crate::bse::utils::BseRecord;
+
+// A simple tracking container to hold data gathered sequentially before multi-threaded cleaning
+struct RawElement {
+    tag_name: String,
+    context_id: String,
+    raw_text: String,
+}
 
 pub fn parse(path: &Path) -> Result<Vec<BseRecord>, String> {
     let file_name = path.file_name().unwrap().to_string_lossy().into_owned();
@@ -28,8 +36,8 @@ pub fn parse(path: &Path) -> Result<Vec<BseRecord>, String> {
     reader.config_mut().check_end_names = false;
 
     let mut buf = Vec::new();
-    let mut records = Vec::new();
     
+    let mut intermediate_elements = Vec::new();
     let mut open_tag = String::new();
     let mut open_context = String::new();
 
@@ -58,12 +66,10 @@ pub fn parse(path: &Path) -> Result<Vec<BseRecord>, String> {
                 if !open_tag.is_empty() && !open_context.is_empty() {
                     let text_value = e.unescape().unwrap_or_default().into_owned();
                     if !text_value.is_empty() {
-                        records.push(BseRecord {
-                            source_file: file_name.clone(),
+                        intermediate_elements.push(RawElement {
                             tag_name: open_tag.clone(),
                             context_id: open_context.clone(),
-                            date_bounds: String::new(),
-                            raw_value: text_value,
+                            raw_text: text_value,
                         });
                     }
                 }
@@ -77,6 +83,26 @@ pub fn parse(path: &Path) -> Result<Vec<BseRecord>, String> {
         }
         buf.clear();
     }
+
+    let records: Vec<BseRecord> = intermediate_elements
+        .into_par_iter()
+        .map(|elem| {
+            let clean_value = elem.raw_text
+                .replace('\r', "")
+                .replace('\n', " ")
+                .split_whitespace()
+                .collect::<Vec<&str>>()
+                .join(" ");
+
+            BseRecord {
+                source_file: file_name.clone(),
+                tag_name: elem.tag_name,
+                context_id: elem.context_id,
+                date_bounds: String::new(),
+                raw_value: clean_value,
+            }
+        })
+        .collect();
 
     Ok(records)
 }
