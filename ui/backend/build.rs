@@ -75,12 +75,12 @@ fn main() {
     };
 
     if must_rebuild_ocr {
-        println!("cargo:warning= 🔄 [BUILD SCRIPT]: Source changes detected. Synchronizing environment and freezing OCR binary...");
+        println!("cargo:warning= [BUILD SCRIPT]: Source changes detected. Synchronizing environment and freezing OCR binary...");
 
         let venv_dir = ocr_source_dir.join(".venv");
         
         if !venv_dir.exists() {
-            println!("cargo:warning= 📦 [BUILD SCRIPT]: .VENV missing. Spawning localized Python virtual environment...");
+            println!("cargo:warning= [BUILD SCRIPT]: .VENV missing. Spawning localized Python virtual environment...");
             #[cfg(target_os = "windows")]
             let mut py_cmd = Command::new("python");
             #[cfg(not(target_os = "windows"))]
@@ -90,10 +90,10 @@ fn main() {
                 .current_dir(&ocr_source_dir)
                 .args(&["-m", "venv", ".venv"])
                 .status()
-                .expect("🚨 [BUILD ERROR]: Failed to invoke Python runtime to create virtual environment.");
+                .expect(" [BUILD ERROR]: Failed to invoke Python runtime to create virtual environment.");
 
             if !venv_status.success() {
-                panic!("🚨 [BUILD FAULT]: Failed creating local Python virtual environment sandbox.");
+                panic!(" [BUILD FAULT]: Failed creating local Python virtual environment sandbox.");
             }
         }
 
@@ -107,7 +107,7 @@ fn main() {
         #[cfg(not(target_os = "windows"))]
         let pyinstaller_exe = venv_dir.join("bin/pyinstaller");
 
-        println!("cargo:warning= 📥 [BUILD SCRIPT]: Checking and updating virtual environment library alignments...");
+        println!("cargo:warning= [BUILD SCRIPT]: Checking and updating virtual environment library alignments...");
         let pip_status = Command::new(&pip_exe)
             .current_dir(&ocr_source_dir)
             .args(&["install", "--upgrade", "pip"])
@@ -126,7 +126,7 @@ fn main() {
             });
 
         if !pip_status.map_or(false, |s| s.success()) {
-            panic!("🚨 [BUILD FAULT]: Failed synchronizing required packages from requirements.txt down the venv track.");
+            panic!(" [BUILD FAULT]: Failed synchronizing required packages from requirements.txt down the venv track.");
         }
 
         let ocr_status = Command::new(&pyinstaller_exe)
@@ -146,13 +146,13 @@ fn main() {
 
         match ocr_status {
             Ok(status) if status.success() => {
-                println!("cargo:warning= ✅ [BUILD SCRIPT]: Python OCR engine successfully frozen -> {}", ocr_binary_name);
+                println!("cargo:warning= [BUILD SCRIPT]: Python OCR engine successfully frozen -> {}", ocr_binary_name);
             }
             _ => {
-                panic!("🚨 [BUILD FAULT]: PyInstaller freezing pass failed! Inspect script errors.");
+                panic!(" [BUILD FAULT]: PyInstaller freezing pass failed! Inspect script errors.");
             }
         }
     } else {
-        println!("cargo:warning= ✅ [BUILD SCRIPT]: Python OCR sidecar is completely up to date. Skipping freezing pass.");
+        println!("cargo:warning= [BUILD SCRIPT]: Python OCR sidecar is completely up to date. Skipping freezing pass.");
     }
 }
