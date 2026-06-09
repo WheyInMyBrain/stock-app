@@ -5,6 +5,7 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NseEndpoint {
     SymbolCoreData,
+    CorporateDetails,
     HistoricalChartData,
     CorporateActions,
     BulkBlockDeals,
@@ -134,6 +135,7 @@ impl NseEndpoint {
     pub fn name(&self) -> &'static str {
         match self {
             NseEndpoint::SymbolCoreData => "symbol-core-data",
+            NseEndpoint::CorporateDetails => "corporate-details",
             NseEndpoint::HistoricalChartData => "historical-chart-data",
             NseEndpoint::CorporateActions => "corporates-corporateActions",
             NseEndpoint::BulkBlockDeals => "bulk-block-deals",
@@ -160,6 +162,9 @@ impl NseEndpoint {
         match self {
             NseEndpoint::SymbolCoreData => {
                 format!("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getSymbolData&marketType=N&series=EQ&symbol={}", symbol)
+            }
+            NseEndpoint::CorporateDetails => {
+                format!("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=newCorpInfo&symbol={}", symbol)
             }
             NseEndpoint::HistoricalChartData => {
                 format!("https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getSymbolChartData&symbol={}EQN&days=30Y", symbol)

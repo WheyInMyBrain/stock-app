@@ -7,13 +7,10 @@ pub fn boot_daemon(_data_dir: String) {
 }
 
 pub async fn dispatch_download(ticker: String, nse_active: bool, bse_active: bool) -> Result<String, String> {
-    let mode = match (nse_active, bse_active) {
-        (true, true) => "both",
-        (true, false) => "nse",
-        (false, true) => "bse",
-        (false, false) => return Err("No exchange selected for download track".to_string()),
-    };
+    if !nse_active && !bse_active {
+        return Err("No exchange selected for download track".to_string());
+    }
 
-    run_all(&ticker, mode).await?;
+    run_all(&ticker, nse_active, bse_active).await?;
     Ok("Success".to_string())
 }

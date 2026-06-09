@@ -210,7 +210,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "downloader-rust"
+name = "downloader"
 version = "0.1.0"
 dependencies = [
  "chrono",

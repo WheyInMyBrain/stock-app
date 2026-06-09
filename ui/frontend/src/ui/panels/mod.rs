@@ -1,5 +1,5 @@
-// stock-app/ui/frontend_native/src/ui/panels/mod.rs
 pub mod add_ticker;
+pub mod overview;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceTab {
@@ -26,20 +26,7 @@ impl WorkspaceTab {
     pub fn render(&self, ui: &mut egui::Ui, active_ticker: &str) {
         match self {
             WorkspaceTab::Overview => {
-                // Employs your abstract responsive 3-zone canvas cleanly
-                crate::ui::layouts::canvas::draw_three_zone_canvas(
-                    ui,
-                    |ui| {
-                        ui.heading(format!("Main Content Sheet: {}", active_ticker));
-                        ui.weak("Responsive laptop aspect-ratio frame viewport canvas area.");
-                    },
-                    |ui| {
-                        ui.label("Bottom Panel Row Matrix Spreadsheet Area Placeholder");
-                    },
-                    |ui| {
-                        ui.label("Right Panel Slender Control Strip Cockpit");
-                    },
-                );
+                overview::draw_overview_panel(ui, active_ticker);
             }
         }
     }
