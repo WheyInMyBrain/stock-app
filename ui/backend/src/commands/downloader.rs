@@ -104,6 +104,7 @@ pub async fn run_all(symbol: &str, nse_run: bool, bse_run: bool) -> Result<(), S
         NseEndpoint::ChartSymbolMetadata,
         NseEndpoint::RealTimeChartSeed,
         NseEndpoint::RealTimeChartDelta(None),
+        NseEndpoint::IntegratedFilingResults,
     ];
 
     let bse_suite = vec![
@@ -125,6 +126,7 @@ pub async fn run_all(symbol: &str, nse_run: bool, bse_run: bool) -> Result<(), S
         BseEndpoint::ShareholdingPattern,
         BseEndpoint::CorporateGovernance,
         BseEndpoint::InvestorComplaints,
+        BseEndpoint::IntegratedFinanceData,
     ];
 
     {

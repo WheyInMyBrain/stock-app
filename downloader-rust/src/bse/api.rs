@@ -21,6 +21,7 @@ pub enum BseEndpoint {
     ShareholdingPattern,
     CorporateGovernance,
     InvestorComplaints,
+    IntegratedFinanceData,
 }
 
 impl BseEndpoint {
@@ -44,6 +45,7 @@ impl BseEndpoint {
             BseEndpoint::ShareholdingPattern => "shareholding-pattern-docs",
             BseEndpoint::CorporateGovernance => "corporate-governance-docs",
             BseEndpoint::InvestorComplaints => "investor-complaints-docs",
+            BseEndpoint::IntegratedFinanceData => "integrated-finance-data",
         }
     }
 
@@ -111,6 +113,9 @@ impl BseEndpoint {
             }
             BseEndpoint::InvestorComplaints => {
                 format!("https://api.bseindia.com/BseIndiaAPI/api/XbrlInvestorComplaint/w?scripcode={}", bse_code)
+            }
+            BseEndpoint::IntegratedFinanceData => {
+                format!("https://api.bseindia.com/BseIndiaAPI/api/Integratedfinancedata/w?scripcode={}", bse_code)
             }
         }
     }
@@ -368,6 +373,46 @@ impl BseEndpoint {
                                         let local_token = format!("Complaints_{}_{}_ID_{}_{}", clean_qtr, clean_yr, qtr_id_str, status);
                                         results.push((local_token, format!("https://www.bseindia.com{}", clean_path)));
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            BseEndpoint::IntegratedFinanceData => {
+                #[derive(serde::Deserialize)]
+                struct BseFinancePayload {
+                    #[serde(rename = "Table")]
+                    table: Option<Vec<BseFinanceRow>>,
+                }
+                #[derive(serde::Deserialize)]
+                struct BseFinanceRow {
+                    #[serde(rename = "Yr")]
+                    yr: Option<serde_json::Value>,
+                    #[serde(rename = "Quarter_Name")]
+                    quarter_name: Option<String>,
+                    #[serde(rename = "xbrlurl")]
+                    xbrlurl: Option<String>,
+                }
+
+                if let Ok(payload) = serde_json::from_slice::<BseFinancePayload>(raw_json_bytes) {
+                    if let Some(rows) = payload.table {
+                        for row in rows {
+                            if let Some(url_path) = row.xbrlurl {
+                                let clean_path = url_path.trim();
+                                if !clean_path.is_empty() {
+                                    let year_str = match row.yr {
+                                        Some(serde_json::Value::Number(n)) => n.to_string(),
+                                        Some(serde_json::Value::String(s)) => s,
+                                        _ => "0".to_string(),
+                                    };
+                                    let q_name = row.quarter_name
+                                        .unwrap_or_else(|| "Statement".to_string())
+                                        .replace(' ', "_");
+
+                                    let filename = format!("Year_{}_{}_XBRLDoc", year_str, q_name);
+                                    let download_url = format!("https://www.bseindia.com{}", clean_path);
+                                    results.push((filename, download_url));
                                 }
                             }
                         }

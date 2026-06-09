@@ -24,6 +24,7 @@ pub enum NseEndpoint {
     ChartSymbolMetadata,
     RealTimeChartSeed,
     RealTimeChartDelta(Option<i64>),
+    IntegratedFilingResults,
 }
 
 // === Annual Reports Schemas ===
@@ -130,6 +131,21 @@ struct NseQuarterResponse {
     value: Option<String>,
 }
 
+// === Integrated Filing Results Schemas ===
+#[derive(serde::Deserialize)]
+struct NseFilingPayload {
+    data: Option<Vec<NseFilingRow>>,
+}
+#[derive(serde::Deserialize)]
+struct NseFilingRow {
+    #[serde(rename = "qe_Date")]
+    qe_date: Option<String>,
+    #[serde(rename = "seq_Id")]
+    seq_id: Option<String>,
+    ixbrl: Option<String>,
+    xbrl: Option<String>,
+}
+
 impl NseEndpoint {
     /// Returns the naming string token used for dynamic directory folder tree maps
     pub fn name(&self) -> &'static str {
@@ -154,6 +170,7 @@ impl NseEndpoint {
             NseEndpoint::ChartSymbolMetadata => "chart-symbol-metadata",
             NseEndpoint::RealTimeChartSeed => "real-time-chart",
             NseEndpoint::RealTimeChartDelta(_) => "real-time-chart-delta",
+            NseEndpoint::IntegratedFilingResults => "integrated-filing-results",
         }
     }
 
@@ -258,6 +275,9 @@ impl NseEndpoint {
                     "https://charting.nseindia.com/v1/charts/symbolHistoricalData?fromDate={}&toDate={}&symbol={}-EQ&token={}&symbolType=Equity&chartType=I&timeInterval=1",
                     from_ts, now_ts, symbol, nse_code
                 )
+            }
+            NseEndpoint::IntegratedFilingResults => {
+                format!("https://www.nseindia.com/api/integrated-filing-results?index=equities&symbol={}", symbol)
             }
         }
     }
@@ -465,6 +485,36 @@ impl NseEndpoint {
                                 symbol, q, escaped_index
                             );
                             results.push((format!("Index_{}_{}", clean_index_name, q), idx_url));
+                        }
+                    }
+                }
+            }
+            NseEndpoint::IntegratedFilingResults => {
+                if let Ok(payload) = serde_json::from_slice::<NseFilingPayload>(raw_json_bytes) {
+                    if let Some(rows) = payload.data {
+                        for row in rows {
+                            let quarter_bound = row.qe_date
+                                .unwrap_or_else(|| "UnknownDate".to_string())
+                                .replace(' ', "_")
+                                .replace('-', "_");
+                            
+                            let seq = row.seq_id.unwrap_or_else(|| "0".to_string());
+
+                            if let Some(ixbrl_url) = row.ixbrl {
+                                let clean_ixbrl = ixbrl_url.trim();
+                                if !clean_ixbrl.is_empty() && !clean_ixbrl.ends_with("/null") {
+                                    let filename = format!("QE_{}_Seq_{}_iXBRLWeb", quarter_bound, seq);
+                                    results.push((filename, clean_ixbrl.to_string()));
+                                }
+                            }
+
+                            if let Some(xbrl_url) = row.xbrl {
+                                let clean_xbrl = xbrl_url.trim();
+                                if !clean_xbrl.is_empty() && !clean_xbrl.ends_with("/null") {
+                                    let filename = format!("QE_{}_Seq_{}_RawData", quarter_bound, seq);
+                                    results.push((filename, clean_xbrl.to_string()));
+                                }
+                            }
                         }
                     }
                 }
