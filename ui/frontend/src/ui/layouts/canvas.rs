@@ -1,5 +1,11 @@
-// stock-app/ui/frontend_native/src/ui/layouts/canvas.rs
 use egui::{Ui, Color32, Frame, Margin, Stroke};
+
+pub trait OverviewSubTab {
+    fn id(&self) -> usize;
+    fn label(&self) -> &'static str;
+    fn render_main(&self, ui: &mut Ui, meta: &backend::database::overview::OverviewMetadata);
+    fn render_bottom(&self, _ui: &mut Ui, _meta: &backend::database::overview::OverviewMetadata) {}
+}
 
 pub fn draw_three_zone_canvas<M, B, S>(
     ui: &mut Ui,
@@ -66,4 +72,51 @@ pub fn draw_three_zone_canvas<M, B, S>(
             });
         });
     });
+}
+
+pub fn draw_nav_canvas_orchestrator(ui: &mut Ui, active_ticker: &str, tabs: &[&dyn OverviewSubTab]) {
+    if tabs.is_empty() { return; }
+    
+    let active_sub_tab_id = egui::Id::new("overview_active_sub_tab_index");
+    let current_tab_id = ui.data_mut(|d| d.get_temp::<usize>(active_sub_tab_id).unwrap_or(tabs[0].id()));
+
+    let active_tab = tabs.iter().find(|t| t.id() == current_tab_id).unwrap_or(&tabs[0]);
+
+    let table_found = backend::commands::memory_pool::with_active_table::<backend::database::overview::OverviewMetadata, _, _>("overview_metadata", |meta| {
+        draw_three_zone_canvas(
+            ui,
+            |ui| {
+                ui.heading(format!("OVERVIEW: {}", active_ticker.to_uppercase()));
+                ui.add_space(15.0);
+                active_tab.render_main(ui, meta);
+            },
+            |ui| {
+                active_tab.render_bottom(ui, meta);
+            },
+            |ui| {
+                ui.vertical(|ui| {
+                    let button_width = ui.available_width();
+                    for tab in tabs {
+                        if ui.add_sized(egui::vec2(button_width, 28.0), egui::Button::new(tab.label()).selected(current_tab_id == tab.id())).clicked() {
+                            ui.data_mut(|d| d.insert_temp(active_sub_tab_id, tab.id()));
+                        }
+                        ui.add_space(4.0);
+                    }
+                });
+            },
+        );
+    });
+
+    if table_found.is_none() {
+        draw_three_zone_canvas(
+            ui,
+            |ui| {
+                ui.heading(format!("OVERVIEW: {}", active_ticker.to_uppercase()));
+                ui.add_space(15.0);
+                ui.weak("Loading data attributes into cache slot...");
+            },
+            |_ui| {},
+            |_ui| {},
+        );
+    }
 }

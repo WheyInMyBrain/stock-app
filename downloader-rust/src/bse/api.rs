@@ -5,6 +5,7 @@ use chrono::Datelike;
 pub enum BseEndpoint {
     ChartSymbolMetadata,
     CorporateDetailsHeader,
+    CorporateDetails,
     ScripPricingHeader,
     LiveTradingTurnover,
     PeerValuationMatrix,
@@ -27,6 +28,7 @@ impl BseEndpoint {
         match self {
             BseEndpoint::ChartSymbolMetadata => "chart-symbol-metadata",
             BseEndpoint::CorporateDetailsHeader => "corporate-details-header",
+            BseEndpoint::CorporateDetails => "corporate-details",
             BseEndpoint::ScripPricingHeader => "scrip-pricing-header",
             BseEndpoint::LiveTradingTurnover => "live-trading-turnover",
             BseEndpoint::PeerValuationMatrix => "peer-valuation-matrix",
@@ -52,6 +54,9 @@ impl BseEndpoint {
             }
             BseEndpoint::CorporateDetailsHeader => {
                 format!("https://api.bseindia.com/BseIndiaAPI/api/ComHeadernew/w?quotetype=&scripcode={}&seriesid=", bse_code)
+            }
+            BseEndpoint::CorporateDetails => {
+                format!("https://api.bseindia.com/BseIndiaAPI/api/StockTrading/w?flag=&quotetype=EQ&scripcode={}", bse_code)
             }
             BseEndpoint::ScripPricingHeader => {
                 format!("https://api.bseindia.com/BseIndiaAPI/api/getScripHeaderData/w?Debtflag=&scripcode={}&seriesid=", bse_code)

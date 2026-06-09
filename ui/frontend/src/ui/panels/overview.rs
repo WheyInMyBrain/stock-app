@@ -1,52 +1,59 @@
 use egui::Ui;
 use crate::core::data_manager::DataManager;
+use crate::ui::layouts::canvas::{OverviewSubTab, draw_nav_canvas_orchestrator};
+use backend::database::overview::OverviewMetadata;
+
+struct DetailsSubTab;
+impl OverviewSubTab for DetailsSubTab {
+    fn id(&self) -> usize { 2 }
+    fn label(&self) -> &'static str { "Details" }
+    fn render_main(&self, ui: &mut Ui, meta: &OverviewMetadata) {
+        ui.label(format!("ISIN: {}", meta.isin));
+        ui.label(format!("NSE Code: {}", meta.nse_code));
+        ui.label(format!("BSE Code: {}", meta.bse_code));
+        ui.label(format!("Face Value: {}", meta.face_value));
+        if !meta.nse_listing_date.is_empty() { ui.label(format!("NSE Listed Date: {}", meta.nse_listing_date)); }
+        if !meta.bse_listing_date.is_empty() { ui.label(format!("BSE Listed Date: {}", meta.bse_listing_date)); }
+        ui.add_space(10.0);
+        ui.label(format!("Macro Category: {}", meta.macro_category));
+        ui.label(format!("Sector: {}", meta.sector));
+        ui.label(format!("Industry: {}", meta.industry));
+        ui.add_space(10.0);
+        if !meta.indexes.is_empty() {
+            ui.label(egui::RichText::new("Tracked Market Indexes:").strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(meta.indexes.join(", "));
+            });
+            ui.add_space(10.0);
+        }
+        if !meta.address.is_empty() { ui.label(format!("Address: {}", meta.address)); }
+        if !meta.telephone.is_empty() { ui.label(format!("Telephone: {}", meta.telephone)); }
+        if !meta.fax.is_empty() { ui.label(format!("Fax: {}", meta.fax)); }
+        if !meta.email.is_empty() { ui.label(format!("Email: {}", meta.email)); }
+        if !meta.website.is_empty() { ui.label(format!("Website: {}", meta.website)); }
+    }
+}
+
+struct BoardSubTab;
+impl OverviewSubTab for BoardSubTab {
+    fn id(&self) -> usize { 1 }
+    fn label(&self) -> &'static str { "Board of Directors" }
+    fn render_main(&self, ui: &mut Ui, meta: &OverviewMetadata) {
+        ui.label(egui::RichText::new("BOARD OF DIRECTORS").strong());
+        ui.add_space(10.0);
+        for dir in &meta.directors {
+            ui.label(format!("• {} ({})", dir.name, dir.designation));
+        }
+    }
+}
 
 pub fn draw_overview_panel(ui: &mut Ui, active_ticker: &str) {
     DataManager::ensure_overview_data(active_ticker);
 
-    let show_details_id = egui::Id::new("overview_details_toggle");
-    let show_details = ui.data_mut(|d| d.get_temp::<bool>(show_details_id).unwrap_or(false));
+    let tabs: &[&dyn OverviewSubTab] = &[
+        &DetailsSubTab,
+        &BoardSubTab,
+    ];
 
-    crate::ui::layouts::canvas::draw_three_zone_canvas(
-        ui,
-        |ui| {
-            ui.heading(format!("OVERVIEW: {}", active_ticker.to_uppercase()));
-            ui.add_space(15.0);
-
-            if show_details {
-                let mut error_msg = None;
-                let _ = backend::commands::memory_pool::with_active_table::<String, _, _>("overview_metadata__error", |err| {
-                    if !err.is_empty() {
-                        error_msg = Some(err.clone());
-                    }
-                });
-
-                if let Some(err) = error_msg {
-                    ui.colored_label(egui::Color32::LIGHT_RED, format!("❌ Error: {}", err));
-                } else {
-                    let table_found = backend::commands::memory_pool::with_active_table::<backend::database::overview::OverviewMetadata, _, _>("overview_metadata", |meta| {
-                        ui.vertical(|ui| {
-                            ui.label(format!("Macro Category: {}", meta.macro_category));
-                            ui.label(format!("Sector: {}", meta.sector));
-                            ui.label(format!("Industry: {}", meta.industry));
-                        });
-                    });
-
-                    if table_found.is_none() {
-                        ui.weak("Loading data attributes into cache slot...");
-                    }
-                }
-            }
-        },
-        |_ui| {},
-        |ui| {
-            ui.vertical(|ui| {
-                let button_width = ui.available_width();
-                
-                if ui.add_sized(egui::vec2(button_width, 28.0), egui::Button::new("Details").selected(show_details)).clicked() {
-                    ui.data_mut(|d| d.insert_temp(show_details_id, !show_details));
-                }
-            });
-        },
-    );
+    draw_nav_canvas_orchestrator(ui, active_ticker, tabs);
 }
