@@ -1,3 +1,4 @@
+use std::cmp;
 use regex::Regex;
 use lazy_static::lazy_static;
 use crate::ocr::utils::{OcrStatementExtractor, UnifiedOcrOutput};
@@ -43,7 +44,12 @@ impl OcrStatementExtractor for RevenueStatementExtractor {
                 continue;
             }
 
-            let mut cells: Vec<String> = line_clean.split('|').map(|c| c.trim().to_string()).collect();
+            let delimiter = if line_clean.contains('┆') { '┆' } else { '|' };
+            if !line_clean.contains(delimiter) {
+                continue; // Cleanly pass over footnotes or text under the table structure
+            }
+
+            let mut cells: Vec<String> = line_clean.split(delimiter).map(|c| c.trim().to_string()).collect();
             if !cells.is_empty() && cells[0].is_empty() { cells.remove(0); }
             if !cells.is_empty() && cells[cells.len() - 1].is_empty() { cells.pop(); }
 
@@ -66,7 +72,7 @@ impl OcrStatementExtractor for RevenueStatementExtractor {
             return Vec::new();
         }
 
-        // 🎯 STEP 2: STAGE-1 EXPLICIT HEADER TRACKING FOR NOTES
+        // 🎯 EXPLICIT HEADER TRACKING FOR NOTES
         let mut detected_notes_idx: Option<usize> = None;
         for idx in 1..(num_cols.saturating_sub(1)) {
             if idx < header_row.len() && HEADER_NOTES_PATTERN.is_match(&header_row[idx]) {
@@ -75,7 +81,7 @@ impl OcrStatementExtractor for RevenueStatementExtractor {
             }
         }
 
-        // STAGE-2 FALLBACK CONTENT PATTERN MATCHING (50% Threshold)
+        // FALLBACK CONTENT PATTERN MATCHING (50% Threshold)
         if detected_notes_idx.is_none() && num_cols > 2 {
             let mut highest_notes_score = 0;
             for idx in 1..(num_cols.saturating_sub(1)) {
@@ -101,7 +107,7 @@ impl OcrStatementExtractor for RevenueStatementExtractor {
             }
         }
 
-        // 🎯 STEP 3: DETERMINE STRUCTURAL TEXT MERGING BARRIER INDEX
+        // 🎯 DETERMINE STRUCTURAL TEXT MERGING BARRIER INDEX
         let barrier_idx = match detected_notes_idx {
             Some(idx) => idx,
             None => {
@@ -122,11 +128,11 @@ impl OcrStatementExtractor for RevenueStatementExtractor {
                         break;
                     }
                 }
-                detected_barrier.unwrap_or(std::cmp::min(3, num_cols.saturating_sub(1)))
+                detected_barrier.unwrap_or(cmp::min(3, num_cols.saturating_sub(1)))
             }
         };
 
-        // 🎯 STEP 4: PROCESS LEFT-SIDE MERGE WITH STRING DE-DUPLICATION
+        // 🎯 PROCESS LEFT-SIDE MERGE WITH STRING DE-DUPLICATION
         let mut repaired_rows = Vec::with_capacity(raw_grid.len());
         for row in raw_grid {
             let mut cells = row;
@@ -145,7 +151,6 @@ impl OcrStatementExtractor for RevenueStatementExtractor {
                 if deduplicated_tokens.is_empty() {
                     deduplicated_tokens.push(token);
                 } else {
-                    // 🛑 ANTI-CO-MINGLING STRIPPER LOOP
                     let prev_token = deduplicated_tokens.last().unwrap().to_lowercase();
                     let current_token = token.to_lowercase();
 
@@ -177,7 +182,7 @@ impl OcrStatementExtractor for RevenueStatementExtractor {
             repaired_rows.push((particulars, notes_val, remaining_data));
         }
 
-        // 🎯 STEP 5: VALUE SHIFT PROCESSING (NUMERICS RIGHT OF THE NOTES BARRIER)
+        // 🎯 VALUE SHIFT PROCESSING (NUMERICS RIGHT OF THE NOTES BARRIER)
         let mut final_processed_rows = Vec::with_capacity(repaired_rows.len());
         for (particulars, notes_val, right_side_data) in repaired_rows {
             let active_candidates: Vec<String> = right_side_data
@@ -207,15 +212,14 @@ impl OcrStatementExtractor for RevenueStatementExtractor {
             });
         }
 
-        // 🎯 STEP 6: FILTER REMNANT HEADERS & LOWER THRESHOLD SHIELD
-        // Rejects artifact tables with less than 10 lines of operations data
+        // 🎯 FILTER REMNANT HEADERS & LOWER THRESHOLD SHIELD
         if final_processed_rows.len() < 10 {
             return Vec::new();
         }
 
         let mut slice_start_idx = 0;
         let mut check_header_str = String::new();
-        for i in 0..std::cmp::min(3, final_processed_rows.len()) {
+        for i in 0..cmp::min(3, final_processed_rows.len()) {
             check_header_str.push_str(&final_processed_rows[i].particulars);
         }
         
