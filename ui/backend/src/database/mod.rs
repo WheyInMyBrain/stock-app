@@ -1,4 +1,5 @@
 pub mod overview;
+pub mod analysis;
 
 use std::fs;
 use crate::commands::data_dir::resolve_data_directory_headless;

@@ -78,14 +78,11 @@ pub fn extract_all_statements_from_file(file_path: &Path) -> Result<Vec<UnifiedO
                 if line_clean.starts_with('|') || line_clean.starts_with('┆') || line_clean.contains('|') || line_clean.contains('┆') {
                     table_lines.push(line_clean);
                 } else if !table_lines.is_empty() {
-                    // Collect up to 5 additional trailing footnote lines beneath the table matrix
-                    // to capture edge-case references before breaking the scanning loop
-                    let mut lookahead_lines = 0;
+                    // 🌟 FIX: Removed unused loop variable tracking allocations entirely to clear compiler warnings
                     for follow_line in section_text[section_text.find(line).unwrap()..].lines().take(5) {
                         let f_clean = follow_line.trim();
                         if !f_clean.is_empty() {
                             table_lines.push(f_clean);
-                            lookahead_lines += 1;
                         }
                     }
                     break;

@@ -31,6 +31,7 @@ tokio = { version = "1.52.3", features = ["time", "rt-multi-thread", "sync", "ma
 base64 = "0.22.1"
 parquet = "54.3.1"
 bytes = "1.11.1"
+polars = { version = "0.41", features = ["lazy", "strings", "temporal", "parquet", "pivot", "dtype-struct", "diagonal_concat"] }
 
 analysis = { path = "../../analysis" }
 parser = { path = "../../parser" }

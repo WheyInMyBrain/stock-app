@@ -1,6 +1,7 @@
 use backend::commands::history::get_history_tickers_headless;
 use backend::commands::memory_pool::CENTRAL_ACTIVE_SLOT;
 use backend::database::overview::hydrate_overview_metadata;
+use backend::database::analysis::hydrate_analysis_metadata;
 
 pub struct DataManager;
 
@@ -21,6 +22,22 @@ impl DataManager {
         if needs_hydration {
             if let Err(e) = hydrate_overview_metadata(ticker) {
                 println!("\x1b[96m[downloader] ❌ Ingestion hydration failed for '{}': {}\x1b[0m", ticker, e);
+            }
+        }
+    }
+
+    pub fn ensure_analysis_data(ticker: &str) {
+        let needs_hydration = if let Ok(slot_guard) = CENTRAL_ACTIVE_SLOT.read() {
+            slot_guard.as_ref().map_or(true, |slot| {
+                slot.ticker != ticker.to_uppercase() || !slot.parsed_tables.contains_key("analysis_metadata")
+            })
+        } else {
+            false
+        };
+
+        if needs_hydration {
+            if let Err(e) = hydrate_analysis_metadata(ticker) {
+                println!("\x1b[91m[analysis] ❌ Ingestion hydration failed for '{}': {}\x1b[0m", ticker, e);
             }
         }
     }

@@ -5058,6 +5058,7 @@ dependencies = [
  "log",
  "parquet",
  "parser",
+ "polars",
  "serde",
  "serde_json",
  "tauri",

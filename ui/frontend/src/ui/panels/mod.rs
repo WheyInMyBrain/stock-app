@@ -1,14 +1,17 @@
 pub mod add_ticker;
 pub mod overview;
+pub mod analysis;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceTab {
     Overview,
+    Analysis,
 }
 
 impl WorkspaceTab {
     pub const ALL: &'static [WorkspaceTab] = &[
         WorkspaceTab::Overview,
+        WorkspaceTab::Analysis,
     ];
 
     pub fn label(&self) -> String {
@@ -27,6 +30,9 @@ impl WorkspaceTab {
         match self {
             WorkspaceTab::Overview => {
                 overview::draw_overview_panel(ui, active_ticker);
+            }
+            WorkspaceTab::Analysis => {
+                analysis::draw_analysis_panel(ui, active_ticker);
             }
         }
     }
