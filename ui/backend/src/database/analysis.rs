@@ -16,6 +16,11 @@ pub struct AnalysisMetadataRow {
     pub net_capex: i64,
     pub free_cash_flow: i64,
     pub outstanding_shares: i64,
+    pub profit_before_tax: i64,
+    pub finance_interest_expense: i64,
+    pub effective_tax_rate: f64,
+    pub nse_beta: f64,
+    pub bse_beta: f64
 }
 
 // =========================================================================
@@ -49,9 +54,18 @@ struct IsFileRules {
     h_c: f64, h_p: f64,
     prof_rank: i32,
     prof_c: f64, prof_p: f64,
+    pbt_c: f64, pbt_p: f64,
+    pbt_found: bool,
 }
 
-fn process_ocr_income_statement(bytes: Vec<u8>) -> Result<(HashMap<i32, f64>, HashMap<i32, f64>, BTreeSet<i32>), PolarsError> {
+fn process_ocr_income_statement(bytes: Vec<u8>) -> Result<(
+    HashMap<i32, f64>, // eps_ledger
+    HashMap<i32, f64>, // prof_ledger (After Tax)
+    HashMap<i32, f64>, // pbt_ledger (Before Tax)
+    HashMap<i32, f64>, // tax_ledger (Computed Tax Expense)
+    HashMap<i32, f64>, // tax_rate_ledger (Effective Tax Rate)
+    BTreeSet<i32>      // years timeline
+), PolarsError> {
     let df = ParquetReader::new(std::io::Cursor::new(bytes)).finish()?;
     let mut file_map: HashMap<String, IsFileRules> = HashMap::new();
     let mut years = BTreeSet::new();
@@ -75,13 +89,34 @@ fn process_ocr_income_statement(bytes: Vec<u8>) -> Result<(HashMap<i32, f64>, Ha
             ..Default::default()
         });
 
+        // -----------------------------------------------------------------
+        // TRACK A: SHARE EARNINGS EXTRACTION (EPS)
+        // -----------------------------------------------------------------
         let is_basic = part.trim().starts_with("basic") || part.contains("basic and diluted");
         let is_eps = part.contains("earnings per") && part.contains("share");
         if is_basic { rule.b_c = c_num; rule.b_p = p_num; }
         if is_eps { rule.h_c = c_num; rule.h_p = p_num; }
 
-        let is_excluded = part.contains("before tax") || part.contains("operating") || part.contains("before exceptional") || part.contains("comprising") || part.contains("comprehensive");
-        if !is_excluded && (c_num != 0.0 || p_num != 0.0) {
+        // -----------------------------------------------------------------
+        // TRACK B: PROFIT BEFORE TAX (PBT) EXTRACTION
+        // -----------------------------------------------------------------
+        let is_pbt = part.contains("profit") && part.contains("before") && part.contains("tax");
+        let is_pbt_excluded = part.contains("operating") || part.contains("exceptional");
+        
+        if is_pbt && !is_pbt_excluded && !rule.pbt_found && (c_num != 0.0 || p_num != 0.0) {
+            rule.pbt_c = c_num;
+            rule.pbt_p = p_num;
+            rule.pbt_found = true;
+        }
+
+        // -----------------------------------------------------------------
+        // TRACK C: NET PROFIT AFTER TAX (PAT) HIERARCHICAL RANKING
+        // -----------------------------------------------------------------
+        let is_pat_excluded = part.contains("before tax") || part.contains("operating") || 
+                              part.contains("before exceptional") || part.contains("comprising") || 
+                              part.contains("comprehensive");
+                              
+        if !is_pat_excluded && (c_num != 0.0 || p_num != 0.0) {
             let is_r1 = part.contains("owner") || part.contains("parent") || part.contains("holding");
             let is_r2 = (part.contains("profit") && part.contains("after") && part.contains("tax")) ||
                         (part.contains("profit") && part.contains("for") && part.contains("the") && part.contains("year")) ||
@@ -96,24 +131,54 @@ fn process_ocr_income_statement(bytes: Vec<u8>) -> Result<(HashMap<i32, f64>, Ha
         }
     }
 
-    let mut eps_ledger: HashMap<i32, f64> = HashMap::new();
-    let mut prof_ledger: HashMap<i32, f64> = HashMap::new();
+    let mut eps_ledger = HashMap::new();
+    let mut prof_ledger = HashMap::new();
+    let mut pbt_ledger = HashMap::new();
+    let mut tax_ledger = HashMap::new();
+    let mut tax_rate_ledger = HashMap::new();
 
     let mut sorted_rules: Vec<_> = file_map.into_values().filter(|r| r.file_year != 0).collect();
     sorted_rules.sort_by_key(|r| r.file_year);
 
+    // Unroll data for Current Years
     for r in &sorted_rules {
         let eps_curr = if r.b_c == 0.0 && r.b_p == 0.0 { r.h_c } else { r.b_c };
         if eps_curr != 0.0 { eps_ledger.insert(r.file_year, eps_curr); years.insert(r.file_year); }
         if r.prof_c != 0.0 { prof_ledger.insert(r.file_year, r.prof_c); years.insert(r.file_year); }
+        
+        if r.pbt_c != 0.0 {
+            pbt_ledger.insert(r.file_year, r.pbt_c);
+            years.insert(r.file_year);
+
+            // Mathematically derive tax values on the fly
+            let computed_tax = r.pbt_c - r.prof_c;
+            tax_ledger.insert(r.file_year, computed_tax);
+
+            let rate = if r.pbt_c > 0.0 { computed_tax / r.pbt_c } else { 0.0 };
+            tax_rate_ledger.insert(r.file_year, rate);
+        }
     }
+    
+    // Unroll data for Previous Years (Chronological fallback offsets)
     for r in &sorted_rules {
+        let prev_yr = r.file_year - 1;
         let eps_prev = if r.b_c == 0.0 && r.b_p == 0.0 { r.h_p } else { r.b_p };
-        if eps_prev != 0.0 { eps_ledger.insert(r.file_year - 1, eps_prev); years.insert(r.file_year - 1); }
-        if r.prof_p != 0.0 { prof_ledger.insert(r.file_year - 1, r.prof_p); years.insert(r.file_year - 1); }
+        if eps_prev != 0.0 { eps_ledger.insert(prev_yr, eps_prev); years.insert(prev_yr); }
+        if r.prof_p != 0.0 { prof_ledger.insert(prev_yr, r.prof_p); years.insert(prev_yr); }
+        
+        if r.pbt_p != 0.0 {
+            pbt_ledger.insert(prev_yr, r.pbt_p);
+            years.insert(prev_yr);
+
+            let computed_tax = r.pbt_p - r.prof_p;
+            tax_ledger.insert(prev_yr, computed_tax);
+
+            let rate = if r.pbt_p > 0.0 { computed_tax / r.pbt_p } else { 0.0 };
+            tax_rate_ledger.insert(prev_yr, rate);
+        }
     }
 
-    Ok((eps_ledger, prof_ledger, years))
+    Ok((eps_ledger, prof_ledger, pbt_ledger, tax_ledger, tax_rate_ledger, years))
 }
 
 // =========================================================================
@@ -343,6 +408,9 @@ fn process_ocr_balance_sheet(bytes: Vec<u8>) -> Result<(HashMap<i32, f64>, HashM
 // 5. XBRL EXCHANGE EXTRACTION ENGINE (WITH DCF CASH VECTORS EXTENSION)
 // =========================================================================
 
+// =========================================================================
+// STRUCT RULES STRUCT EXTENSION
+// =========================================================================
 #[derive(Default, Debug, Clone)]
 struct XmlFileRules {
     year: i32,
@@ -353,6 +421,9 @@ struct XmlFileRules {
     capex_outflow: f64,
     capex_inflow: f64,
     total_debt: f64,
+    // Add tracking layers for WACC parameters
+    pbt: f64,
+    finance_costs: f64,
 }
 
 fn process_exchange_xbrl(
@@ -364,7 +435,10 @@ fn process_exchange_xbrl(
     ocf_ledg: &mut HashMap<i32, f64>,
     out_ledg: &mut HashMap<i32, f64>,
     in_ledg: &mut HashMap<i32, f64>,
-    debt_ledg: &mut HashMap<i32, f64>, // Added target ledger capture anchor
+    debt_ledg: &mut HashMap<i32, f64>,
+    pbt_ledg: &mut HashMap<i32, f64>,
+    interest_ledg: &mut HashMap<i32, f64>,
+    tax_rate_ledg: &mut HashMap<i32, f64>,
     years: &mut BTreeSet<i32>,
 ) -> Result<(), PolarsError> {
     let bytes = match bytes_opt {
@@ -412,7 +486,11 @@ fn process_exchange_xbrl(
         if !consolidated_files.contains(&file) || !file_map.contains_key(&file) || file_map[&file].year == 0 { continue; }
         
         let tag = tag_ca.get(i).unwrap_or("");
-        let val = val_ca.get(i).unwrap_or("0").trim().parse::<f64>().unwrap_or(0.0);
+        
+        // Clean comma/bracket string formatting safely on the fly before parsing f64
+        let raw_val_str = val_ca.get(i).unwrap_or("0").trim().to_string();
+        let cleaned_val_str = raw_val_str.replace(",", "").replace("(", "").replace(")", "");
+        let val = cleaned_val_str.parse::<f64>().unwrap_or(0.0);
 
         let rule = file_map.get_mut(&file).unwrap();
         match tag {
@@ -426,8 +504,10 @@ fn process_exchange_xbrl(
             "DividendsPaidClassifiedAsFinancingActivities" => rule.div = val.abs(),
             "CashFlowsFromUsedInOperatingActivities" => rule.operating_cash_flow = val,
             
-            // Core Debt Tag Group Accumulators
             "BorrowingsNoncurrent" | "BorrowingsCurrent" => rule.total_debt += val,
+
+            "ProfitLossBeforeTax" => rule.pbt = val,
+            "FinanceCosts" => rule.finance_costs = val,
 
             "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities" |
             "PurchaseOfInvestmentPropertyClassifiedAsInvestingActivities" |
@@ -448,6 +528,9 @@ fn process_exchange_xbrl(
         }
     }
 
+    // =========================================================================
+    // UNROLL DATA STREAMS & COMPUTE DYNAMIC CALCULATED TAX
+    // =========================================================================
     for (_, r) in file_map {
         if r.year == 0 { continue; }
         let basic_eps = if r.eps_total != 0.0 { r.eps_total } else { r.eps_cont + r.eps_disc };
@@ -462,6 +545,21 @@ fn process_exchange_xbrl(
         if r.operating_cash_flow != 0.0 { ocf_ledg.insert(r.year, r.operating_cash_flow); years.insert(r.year); }
         if r.capex_outflow != 0.0 { out_ledg.insert(r.year, r.capex_outflow * -1.0); years.insert(r.year); }
         if r.capex_inflow != 0.0 { in_ledg.insert(r.year, r.capex_inflow); years.insert(r.year); }
+
+        // Unroll WACC Parameters
+        if r.pbt != 0.0 { pbt_ledg.insert(r.year, r.pbt); years.insert(r.year); }
+        if r.finance_costs != 0.0 { interest_ledg.insert(r.year, r.finance_costs); years.insert(r.year); }
+
+        // Execute your PBT - PAT Total Tax calculation shortcut on the fly
+        if r.pbt > 0.0 {
+            let total_tax_expense = r.pbt - net_profit;
+            let eff_rate = total_tax_expense / r.pbt;
+            // Prevent skewed negative tax rate records due to anomalies/credits
+            let protected_rate = if eff_rate < 0.0 { 0.0 } else { eff_rate };
+            
+            tax_rate_ledg.insert(r.year, protected_rate);
+            years.insert(r.year);
+        }
     }
 
     Ok(())
@@ -635,6 +733,159 @@ fn format_epoch_ms_to_date(mut ms: i64) -> Option<String> {
     Some(format!("{:04}-{:02}-{:02}", year, month, day))
 }
 
+fn calculate_empirical_betas(
+    chart_rows: &[HistoricalChartRow],
+    nifty_value: Option<serde_json::Value>,
+    sensex_raw_str: Option<String>,
+) -> (f64, f64) {
+    let mut final_nse_beta = 1.0;
+    let mut final_bse_beta = 1.0;
+
+    // -----------------------------------------------------------------
+    // PHASE A: PARSE NIFTY 50 TIMELINE
+    // -----------------------------------------------------------------
+    let mut nifty_map: BTreeMap<String, f64> = BTreeMap::new();
+    if let Some(parsed_json) = nifty_value {
+        if let Some(datapoints) = parsed_json.get("data").and_then(|d| d.get("grapthData")).and_then(|v| v.as_array()) {
+            for item in datapoints {
+                if let (Some(ts_val), Some(close_val)) = (item.get(0), item.get(1)) {
+                    let ms_epoch = ts_val.as_i64().unwrap_or(0);
+                    let price = close_val.as_f64().unwrap_or(0.0);
+                    if let Some(date_str) = format_epoch_ms_to_date(ms_epoch) {
+                        nifty_map.insert(date_str, price);
+                    }
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // PHASE B: REPAIR SENSEX DATA LOG VIA NATIVE STRING SPLITTING
+    // -----------------------------------------------------------------
+    let mut sensex_map: BTreeMap<String, f64> = BTreeMap::new();
+    if let Some(raw_text) = sensex_raw_str {
+        if let Some(historical_block) = raw_text.split("#@#").nth(1) {
+            let normalized_block = historical_block.replace("\\\"", "\"");
+            
+            let month_map = std::collections::HashMap::from([
+                ("Jan", "01"), ("Feb", "02"), ("Mar", "03"), ("Apr", "04"), ("May", "05"), ("Jun", "06"),
+                ("Jul", "07"), ("Aug", "08"), ("Sep", "09"), ("Oct", "10"), ("Nov", "11"), ("Dec", "12")
+            ]);
+
+            // Split string entries using the terminating curly brace token
+            for chunk in normalized_block.split('}') {
+                if !chunk.contains("\"date\"") || !chunk.contains("\"value\"") {
+                    continue;
+                }
+                
+                // Native slice split parsing to extract field keys
+                let mut date_extracted = String::new();
+                let mut value_extracted = 0.0;
+
+                for part in chunk.split(',') {
+                    if part.contains("\"date\"") {
+                        if let Some(d_val) = part.split(':').nth(1) {
+                            date_extracted = d_val.replace('"', "").trim().to_string();
+                        }
+                    }
+                    if part.contains("\"value\"") {
+                        if let Some(v_val) = part.split(':').nth(1) {
+                            value_extracted = v_val.replace('"', "").trim().parse::<f64>().unwrap_or(0.0);
+                        }
+                    }
+                }
+
+                // Normalizing date formats out of string fragments
+                let date_parts: Vec<&str> = date_extracted.split_whitespace().collect();
+                if date_parts.len() >= 4 {
+                    let month_abbr = date_parts[1];
+                    let day_str = date_parts[2];
+                    let year_str = date_parts[3];
+                    
+                    if let Some(month_num) = month_map.get(month_abbr) {
+                        let parsed_day = day_str.parse::<i32>().unwrap_or(1);
+                        let formatted_date = format!("{}-{}-{:02}", year_str, month_num, parsed_day);
+                        sensex_map.insert(formatted_date, value_extracted);
+                    }
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // PHASE C: STATISTICAL MATH MATRIX UTILITIES
+    // -----------------------------------------------------------------
+    let calculate_beta = |stock_returns: &[f64], index_returns: &[f64]| -> f64 {
+        if stock_returns.len() < 2 { return 1.0; }
+        let len = stock_returns.len() as f64;
+        
+        let mean_stock = stock_returns.iter().sum::<f64>() / len;
+        let mean_index = index_returns.iter().sum::<f64>() / len;
+        
+        let mut covariance = 0.0;
+        let mut variance = 0.0;
+        
+        for i in 0..stock_returns.len() {
+            let diff_stock = stock_returns[i] - mean_stock;
+            let diff_index = index_returns[i] - mean_index;
+            covariance += diff_stock * diff_index;
+            variance += diff_index * diff_index;
+        }
+        
+        if variance == 0.0 { 1.0 } else { covariance / variance }
+    };
+
+    // -----------------------------------------------------------------
+    // PHASE D: RUN STATS FOR NSE (IMFA NSE vs NIFTY 50)
+    // -----------------------------------------------------------------
+    let mut nse_stock_returns = Vec::new();
+    let mut nifty_returns = Vec::new();
+    let mut prev_stock_nse: Option<f64> = None;
+    let mut prev_idx_nifty: Option<f64> = None;
+
+    for row in chart_rows {
+        if let (Some(stock_p), Some(&idx_p)) = (row.nse_close, nifty_map.get(&row.date)) {
+            if let (Some(p_stock), Some(p_idx)) = (prev_stock_nse, prev_idx_nifty) {
+                if p_stock > 0.0 && p_idx > 0.0 {
+                    nse_stock_returns.push((stock_p - p_stock) / p_stock);
+                    nifty_returns.push((idx_p - p_idx) / p_idx);
+                }
+            }
+            prev_stock_nse = Some(stock_p);
+            prev_idx_nifty = Some(idx_p);
+        }
+    }
+    if !nse_stock_returns.is_empty() {
+        final_nse_beta = calculate_beta(&nse_stock_returns, &nifty_returns);
+    }
+
+    // -----------------------------------------------------------------
+    // PHASE E: RUN STATS FOR BSE (IMFA BSE vs SENSEX)
+    // -----------------------------------------------------------------
+    let mut bse_stock_returns = Vec::new();
+    let mut sensex_returns = Vec::new();
+    let mut prev_stock_bse: Option<f64> = None;
+    let mut prev_idx_sensex: Option<f64> = None;
+
+    for row in chart_rows {
+        if let (Some(stock_p), Some(&idx_p)) = (row.bse_close, sensex_map.get(&row.date)) {
+            if let (Some(p_stock), Some(p_idx)) = (prev_stock_bse, prev_idx_sensex) {
+                if p_stock > 0.0 && p_idx > 0.0 {
+                    bse_stock_returns.push((stock_p - p_stock) / p_stock);
+                    sensex_returns.push((idx_p - p_idx) / p_idx);
+                }
+            }
+            prev_stock_bse = Some(stock_p);
+            prev_idx_sensex = Some(idx_p);
+        }
+    }
+    if !bse_stock_returns.is_empty() {
+        final_bse_beta = calculate_beta(&bse_stock_returns, &sensex_returns);
+    }
+
+    (final_nse_beta, final_bse_beta)
+}
+
 // =========================================================================
 // 6. MAIN ORCHESTRATION PIPELINE
 // =========================================================================
@@ -660,11 +911,24 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
     let nse_chart_value = loader.load_json_struct::<serde_json::Value>("nse_historical-chart-data/endpoint-metadata.json").ok();
     let bse_chart_value = loader.load_json_struct::<serde_json::Value>("bse_historical-chart-data/10Y.json").ok();
 
+    let nifty_chart_value = loader.load_json_struct::<serde_json::Value>("nse_historical-index-chart-data/NIFTY_50.json").ok();
+    
+    // Sensex is raw text payload due to custom #@# delimiters
+    let sensex_chart_string = loader.load_raw_bytes("bse_sensex-historical-data/endpoint-metadata.json")
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+
     // -----------------------------------------------------------------
     // STEP A: PROCESSING HISTORICAL CHART DAILY DATA MATRIX
     // -----------------------------------------------------------------
     let chart_rows = process_historical_chart_matrix(nse_chart_value, bse_chart_value);
-    store_parsed_table("historical_chart_data", chart_rows);
+    store_parsed_table("historical_chart_data", chart_rows.clone());
+
+    let (calculated_nse_beta, calculated_bse_beta) = calculate_empirical_betas(
+        &chart_rows,
+        nifty_chart_value,
+        sensex_chart_string
+    );
 
     // -----------------------------------------------------------------
     // STEP B: RUN EXTRACTS ACROSS INTERACTIVE STATEMENT LEDGERS
@@ -673,12 +937,19 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
     let mut ocr_prof_ledger = HashMap::new(); let mut ocr_eq_ledger = HashMap::new();
     let mut ocr_ocf_ledger = HashMap::new(); let mut ocr_out_ledger = HashMap::new();
     let mut ocr_in_ledger = HashMap::new(); let mut ocr_debt_ledger = HashMap::new();
+    let mut ocr_pbt_ledger = HashMap::new(); let mut ocr_interest_ledger = HashMap::new();
+    let mut ocr_tax_rate_ledger = HashMap::new();
 
     let mut global_years = BTreeSet::new();
 
     if let Some(bytes) = income_statement_bytes {
-        if let Ok((eps, prof, yrs)) = process_ocr_income_statement(bytes) {
-            ocr_eps_ledger = eps; ocr_prof_ledger = prof; global_years.extend(yrs);
+        if let Ok((eps, prof, pbt, interest, tax_rate, yrs)) = process_ocr_income_statement(bytes) {
+            ocr_eps_ledger = eps; 
+            ocr_prof_ledger = prof; 
+            ocr_pbt_ledger = pbt;
+            ocr_interest_ledger = interest;
+            ocr_tax_rate_ledger = tax_rate;
+            global_years.extend(yrs);
         }
     }
     if let Some(bytes) = cash_flow_bytes {
@@ -695,16 +966,54 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
 
     let mut nse_div = HashMap::new(); let mut nse_eps = HashMap::new(); let mut nse_prof = HashMap::new(); let mut nse_eq = HashMap::new();
     let mut nse_ocf = HashMap::new(); let mut nse_out = HashMap::new(); let mut nse_in = HashMap::new(); let mut nse_debt = HashMap::new();
+    let mut nse_pbt = HashMap::new(); let mut nse_interest = HashMap::new(); let mut nse_tax_rate = HashMap::new();
 
     let mut bse_div = HashMap::new(); let mut bse_eps = HashMap::new(); let mut bse_prof = HashMap::new(); let mut bse_eq = HashMap::new();
     let mut bse_ocf = HashMap::new(); let mut bse_out = HashMap::new(); let mut bse_in = HashMap::new(); let mut bse_debt = HashMap::new();
+    let mut bse_pbt = HashMap::new(); let mut bse_interest = HashMap::new(); let mut bse_tax_rate = HashMap::new();
 
-    let _ = process_exchange_xbrl(nse_int_bytes, &mut nse_div, &mut nse_eps, &mut nse_prof, &mut nse_eq, &mut nse_ocf, &mut nse_out, &mut nse_in, &mut nse_debt, &mut global_years);
-    let _ = process_exchange_xbrl(nse_corp_bytes, &mut nse_div, &mut nse_eps, &mut nse_prof, &mut nse_eq, &mut nse_ocf, &mut nse_out, &mut nse_in, &mut nse_debt, &mut global_years);
-    let _ = process_exchange_xbrl(bse_fin_bytes, &mut bse_div, &mut bse_eps, &mut bse_prof, &mut bse_eq, &mut bse_ocf, &mut bse_out, &mut bse_in, &mut bse_debt, &mut global_years);
-    let _ = process_exchange_xbrl(bse_int_bytes, &mut bse_div, &mut bse_eps, &mut bse_prof, &mut bse_eq, &mut bse_ocf, &mut bse_out, &mut bse_in, &mut bse_debt, &mut global_years);
+    let _ = process_exchange_xbrl(nse_int_bytes, &mut nse_div, &mut nse_eps, &mut nse_prof, &mut nse_eq, &mut nse_ocf, &mut nse_out, &mut nse_in, &mut nse_debt, &mut nse_pbt, &mut nse_interest, &mut nse_tax_rate, &mut global_years);
+    let _ = process_exchange_xbrl(nse_corp_bytes, &mut nse_div, &mut nse_eps, &mut nse_prof, &mut nse_eq, &mut nse_ocf, &mut nse_out, &mut nse_in, &mut nse_debt, &mut nse_pbt, &mut nse_interest, &mut nse_tax_rate, &mut global_years);
+    let _ = process_exchange_xbrl(bse_fin_bytes, &mut bse_div, &mut bse_eps, &mut bse_prof, &mut bse_eq, &mut bse_ocf, &mut bse_out, &mut bse_in, &mut bse_debt, &mut bse_pbt, &mut bse_interest, &mut bse_tax_rate, &mut global_years);
+    let _ = process_exchange_xbrl(bse_int_bytes, &mut bse_div, &mut bse_eps, &mut bse_prof, &mut bse_eq, &mut bse_ocf, &mut bse_out, &mut bse_in, &mut bse_debt, &mut bse_pbt, &mut bse_interest, &mut bse_tax_rate, &mut global_years);
 
-    let stitched_shares_timeline = process_shareholding_patterns(bse_sh_bytes, nse_sh_bytes, &mut global_years);
+    let mut stitched_shares_timeline = process_shareholding_patterns(bse_sh_bytes, nse_sh_bytes, &mut global_years);
+
+    // -----------------------------------------------------------------
+    // STEP C: TWO-WAY (BACKWARD & FORWARD) TIMELINE BOUNDARY PADDING ENGINE
+    // -----------------------------------------------------------------
+    let valid_share_years: BTreeSet<i32> = stitched_shares_timeline
+        .iter()
+        .filter(|&(_, &v)| v > 0)
+        .map(|(&yr, _)| yr)
+        .collect();
+
+    if !valid_share_years.is_empty() {
+        let min_share_yr = *valid_share_years.first().unwrap();
+        let max_share_yr = *valid_share_years.last().unwrap();
+        
+        let first_available_shares = *stitched_shares_timeline.get(&min_share_yr).unwrap();
+        let last_available_shares = *stitched_shares_timeline.get(&max_share_yr).unwrap();
+        for &target_year in &global_years {
+            let existing_val = stitched_shares_timeline.get(&target_year).copied().unwrap_or(0);
+            
+            if existing_val == 0 {
+                if target_year < min_share_yr {
+                    stitched_shares_timeline.insert(target_year, first_available_shares);
+                } else if target_year > max_share_yr {
+                    stitched_shares_timeline.insert(target_year, last_available_shares);
+                } else {
+                    let mut lower_bound_yr = min_share_yr;
+                    for &valid_yr in &valid_share_years {
+                        if valid_yr < target_year { lower_bound_yr = valid_yr; }
+                        else { break; }
+                    }
+                    let interpolation_proxy = *stitched_shares_timeline.get(&lower_bound_yr).unwrap();
+                    stitched_shares_timeline.insert(target_year, interpolation_proxy);
+                }
+            }
+        }
+    }
 
     // -----------------------------------------------------------------
     // STEP D: COALESCE EVERYTHING INTO UNIFIED HORIZONTAL ROWS MATRIX
@@ -749,6 +1058,18 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
 
         let outstanding_shares = stitched_shares_timeline.get(&year).copied().unwrap_or(0);
 
+        let profit_before_tax = nse_pbt.get(&year).copied().filter(|&v| v != 0.0)
+            .or_else(|| bse_pbt.get(&year).copied().filter(|&v| v != 0.0))
+            .or_else(|| ocr_pbt_ledger.get(&year).copied()).unwrap_or(0.0) as i64;
+
+        let finance_interest_expense = nse_interest.get(&year).copied().filter(|&v| v != 0.0)
+            .or_else(|| bse_interest.get(&year).copied().filter(|&v| v != 0.0))
+            .or_else(|| ocr_interest_ledger.get(&year).copied()).unwrap_or(0.0) as i64;
+
+        let effective_tax_rate = nse_tax_rate.get(&year).copied().filter(|&v| v != 0.0)
+            .or_else(|| bse_tax_rate.get(&year).copied().filter(|&v| v != 0.0))
+            .or_else(|| ocr_tax_rate_ledger.get(&year).copied()).unwrap_or(0.0);
+
         meta_analysis.push(AnalysisMetadataRow {
             year,
             dividend_paid,
@@ -762,6 +1083,11 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
             net_capex: net_capex as i64,
             free_cash_flow: free_cash_flow as i64,
             outstanding_shares,
+            profit_before_tax,
+            finance_interest_expense,
+            effective_tax_rate,
+            nse_beta: calculated_nse_beta,
+            bse_beta: calculated_bse_beta,
         });
     }
 

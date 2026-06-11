@@ -1,14 +1,14 @@
 // downloader-rust/src/main.rs
 use std::path::PathBuf;
-use downloader::client::NseClient;
-use downloader::nse::{execute_nse_strategy, api::NseEndpoint};
+use downloader::client::BseClient;
+use downloader::bse::{execute_bse_strategy, api::BseEndpoint};
 
 #[tokio::main]
 async fn main() {
     println!("--- RUNNING NATIVE RUST SCRAPER INITIALIZATION TESTS ---");
     let test_data_dir = PathBuf::from("./data");
 
-    let nse_client = match NseClient::new().await {
+    let bse_client = match BseClient::new().await {
         Ok(client) => client,
         Err(e) => {
             println!("❌ NSE CLIENT INIT FAILED: {}", e);
@@ -19,5 +19,5 @@ async fn main() {
     let symbol = "IMFA";
 
     // In your backend command: Just runs ONE isolated endpoint
-    execute_nse_strategy(&nse_client, symbol, "1", NseEndpoint::IntegratedFinanceResults, &test_data_dir, false).await;
+    execute_bse_strategy(&bse_client, symbol, "1", BseEndpoint::SensexHistoricalData, &test_data_dir, false).await;
 }

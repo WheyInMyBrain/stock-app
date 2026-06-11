@@ -25,7 +25,8 @@ pub enum NseEndpoint {
     RealTimeChartSeed,
     RealTimeChartDelta(Option<i64>),
     IntegratedFilingResults,
-    IntegratedFinanceResults
+    IntegratedFinanceResults,
+    HistoricalIndexChartData,
 }
 
 // === Annual Reports Schemas ===
@@ -172,6 +173,7 @@ impl NseEndpoint {
             NseEndpoint::RealTimeChartDelta(_) => "real-time-chart-delta",
             NseEndpoint::IntegratedFilingResults => "integrated-filing-results",
             NseEndpoint::IntegratedFinanceResults => "integrated-finance-results",
+            NseEndpoint::HistoricalIndexChartData => "historical-index-chart-data",
         }
     }
 
@@ -283,6 +285,9 @@ impl NseEndpoint {
             NseEndpoint::IntegratedFinanceResults => {
                 format!("https://www.nseindia.com/api/integrated-filing-results?index=equities&symbol={}&type=Integrated%20Filing-%20Financials", symbol)
             }
+            NseEndpoint::HistoricalIndexChartData => {
+            format!("https://www.nseindia.com/api/NextApi/apiClient/historicalGraph?functionName=getIndexChart&&index=NIFTY%2050&flag=30Y")
+        }
         }
     }
 
@@ -537,6 +542,37 @@ impl NseEndpoint {
                     }
                 }
             }
+            NseEndpoint::HistoricalIndexChartData => {
+            let indices_path = global_data_dir
+                .join(symbol)
+                .join("nse_peer-indices")
+                .join("endpoint-metadata.json");
+
+            let mut indices: Vec<String> = if let Ok(content) = std::fs::read_to_string(&indices_path) {
+                serde_json::from_str(&content).unwrap_or_else(|_| vec!["NIFTY TOTAL MARKET".to_string()])
+            } else {
+                vec!["NIFTY TOTAL MARKET".to_string()]
+            };
+
+            if !indices.iter().any(|idx| idx.to_uppercase() == "NIFTY 50") {
+                indices.push("NIFTY 50".to_string());
+            }
+
+            for idx in indices {
+                if idx.trim().is_empty() {
+                    continue;
+                }
+                let escaped_index = idx.replace(" ", "%20");
+                let file_friendly_name = idx.replace(" ", "_");
+
+                let url = format!(
+                    "https://www.nseindia.com/api/NextApi/apiClient/historicalGraph?functionName=getIndexChart&index={}&flag=30Y&ext=.json",
+                    escaped_index
+                );
+
+                results.push((file_friendly_name, url));
+            }
+        }
             _ => {}
         }
         

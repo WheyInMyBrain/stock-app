@@ -22,6 +22,7 @@ pub enum BseEndpoint {
     CorporateGovernance,
     InvestorComplaints,
     IntegratedFinanceData,
+    SensexHistoricalData,
 }
 
 impl BseEndpoint {
@@ -46,6 +47,7 @@ impl BseEndpoint {
             BseEndpoint::CorporateGovernance => "corporate-governance-docs",
             BseEndpoint::InvestorComplaints => "investor-complaints-docs",
             BseEndpoint::IntegratedFinanceData => "integrated-finance-data",
+            BseEndpoint::SensexHistoricalData => "sensex-historical-data",
         }
     }
 
@@ -117,6 +119,15 @@ impl BseEndpoint {
             BseEndpoint::IntegratedFinanceData => {
                 format!("https://api.bseindia.com/BseIndiaAPI/api/Integratedfinancedata/w?scripcode={}", bse_code)
             }
+            BseEndpoint::SensexHistoricalData => {
+            let now = chrono::Local::now();
+            let from_date_str = format!("{}0101", now.year() - 10);
+            let to_date_str = now.format("%Y%m%d").to_string();
+            format!(
+                "https://api.bseindia.com/BseIndiaAPI/api/SensexGraphData/w?index=98&flag=1&sector=&seriesid=DT&frd={}&tod={}&ext=.json",
+                from_date_str, to_date_str
+            )
+        }
         }
     }
 
