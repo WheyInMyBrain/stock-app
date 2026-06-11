@@ -11,6 +11,16 @@ pub struct AnalysisMetadataRow {
     pub total_equity: i64,
 }
 
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CashFlowMetadataRow {
+    pub year: i32,
+    pub operating_cash_flow: i64,
+    pub capex_outflow: i64,
+    pub capex_inflow: i64,
+    pub net_capex: i64,
+    pub free_cash_flow: i64,
+}
+
 // =========================================================================
 // 1. UTILITY PARSING HELPERS
 // =========================================================================
@@ -115,12 +125,22 @@ fn process_ocr_income_statement(bytes: Vec<u8>) -> Result<(HashMap<i32, f64>, Ha
 }
 
 // =========================================================================
-// 3. OCR TRACK B: CASH FLOW (DIVIDENDS MAX)
+// 3. OCR TRACK B: CASH FLOW (DIVIDENDS, OPERATING CASH FLOW & CAPEX EXTRACTION)
 // =========================================================================
 
-fn process_ocr_cash_flow(bytes: Vec<u8>) -> Result<(HashMap<i32, f64>, BTreeSet<i32>), PolarsError> {
+#[derive(Default, Debug, Clone)]
+struct OcrCfYearSummary {
+    curr_outflow: f64, curr_inflow: f64,
+    prev_outflow: f64, prev_inflow: f64,
+}
+
+fn process_ocr_cash_flow(
+    bytes: Vec<u8>
+) -> Result<(HashMap<i32, f64>, HashMap<i32, f64>, HashMap<i32, f64>, HashMap<i32, f64>, BTreeSet<i32>), PolarsError> {
     let df = ParquetReader::new(std::io::Cursor::new(bytes)).finish()?;
-    let mut div_ledger: HashMap<i32, f64> = HashMap::new();
+    let mut div_ledger = HashMap::new();
+    let mut ocf_ops_parsed = HashMap::new();
+    let mut capex_summary_map: HashMap<i32, OcrCfYearSummary> = HashMap::new();
     let mut years = BTreeSet::new();
 
     let p_ca = df.column("particulars")?.str()?;
@@ -129,36 +149,98 @@ fn process_ocr_cash_flow(bytes: Vec<u8>) -> Result<(HashMap<i32, f64>, BTreeSet<
     let curr_ca = df.column("curr_year")?.str()?;
     let prev_ca = df.column("prev_year")?.str()?;
 
-    let mut file_map: HashMap<String, (i32, f64, f64)> = HashMap::new();
+    let mut div_file_map = HashMap::new();
+    let mut ocf_file_map = HashMap::new();
+    let mut boundaries_map: HashMap<i32, (i64, i64)> = HashMap::new();
 
+    // Pass 1: Identify bounds indices and parse structured rows per file year group
     for i in 0..df.height() {
         if ctx_ca.get(i).unwrap_or("").to_lowercase() != "consolidated" { continue; }
         let file_name = match f_ca.get(i) { Some(f) => f.to_string(), None => continue };
+        let yr = match extract_year_from_filename(&file_name) { Some(y) => y, None => continue };
         let part = p_ca.get(i).unwrap_or("").to_lowercase();
-        
+        let idx = i as i64;
+
+        let bounds = boundaries_map.entry(yr).or_insert((i64::MAX, i64::MAX));
+        if part.contains("cash flow") && part.contains("investing") && bounds.0 == i64::MAX { bounds.0 = idx; }
+        if part.contains("cash flow") && part.contains("financ") && bounds.1 == i64::MAX { bounds.1 = idx; }
+
+        let c_raw = curr_ca.get(i).unwrap_or("");
+        let p_raw = prev_ca.get(i).unwrap_or("");
+        let c_num = clean_to_float(c_raw);
+        let p_num = clean_to_float(p_raw);
+
+        // Parse Dividend Allocations (.last() emulation)
         if (part.contains("dividend") && part.contains("paid")) || (part.contains("paid") && part.contains("dividend")) {
-            let c_num = clean_to_float(curr_ca.get(i).unwrap_or("0")).abs();
-            let p_num = clean_to_float(prev_ca.get(i).unwrap_or("0")).abs();
-            let yr = extract_year_from_filename(&file_name).unwrap_or(0);
-            file_map.insert(file_name, (yr, c_num, p_num));
+            div_file_map.insert(file_name.clone(), (yr, c_num.abs(), p_num.abs()));
+        }
+
+        // Parse Operating Cash Flow (.last() emulation)
+        if part.contains("net") && part.contains("cash") && part.contains("operating") ||
+           part.contains("cash") && part.contains("generated") && part.contains("operations") ||
+           part.contains("net") && part.contains("cash") && part.contains("flow") && part.contains("operating") {
+            ocf_file_map.insert(file_name.clone(), (yr, c_num, p_num));
         }
     }
 
-    for (_, (yr, c_num, p_num)) in file_map {
-        if yr == 0 { continue; }
-        if c_num > 0.0 {
-            let e = div_ledger.entry(yr).or_insert(c_num);
-            if c_num > *e { *e = c_num; }
-            years.insert(yr);
-        }
-        if p_num > 0.0 {
-            let e = div_ledger.entry(yr - 1).or_insert(p_num);
-            if p_num > *e { *e = p_num; }
-            years.insert(yr - 1);
+    // Unroll Dividend Paid Mappings
+    for (_, (yr, c_val, p_val)) in div_file_map {
+        if c_val > 0.0 { div_ledger.insert(yr, c_val); years.insert(yr); }
+        if p_val > 0.0 { div_ledger.insert(yr - 1, p_val); years.insert(yr - 1); }
+    }
+
+    // Unroll Operating Cash Flow Mappings
+    for (_, (yr, c_val, p_val)) in ocf_file_map {
+        if c_val != 0.0 { ocf_ops_parsed.insert(yr, c_val); years.insert(yr); }
+        if p_val != 0.0 { ocf_ops_parsed.insert(yr - 1, p_val); years.insert(yr - 1); }
+    }
+
+    // Pass 2: Sandwich Data Extraction for Capex Rules Execution
+    for i in 0..df.height() {
+        if ctx_ca.get(i).unwrap_or("").to_lowercase() != "consolidated" { continue; }
+        let file_name = match f_ca.get(i) { Some(f) => f, None => continue };
+        let yr = match extract_year_from_filename(&file_name) { Some(y) => y, None => continue };
+        let part = p_ca.get(i).unwrap_or("");
+        if part.trim().is_empty() { continue; }
+        let part_lower = part.to_lowercase();
+
+        let bounds = match boundaries_map.get(&yr) { Some(&b) => b, None => continue };
+        let start_idx = bounds.0;
+        let end_idx = if bounds.1 == i64::MAX { start_idx + 15 } else { bounds.1 };
+        let idx = i as i64;
+
+        if idx >= start_idx && idx < end_idx {
+            let exclusion = part_lower.contains("investment") || part_lower.contains("deposit") || 
+                            part_lower.contains("bank balance") || part_lower.contains("interest received") || 
+                            part_lower.contains("dividend") || part_lower.contains("net cash") || part_lower.contains("total");
+            if !exclusion {
+                let curr_val = clean_to_float(curr_ca.get(i).unwrap_or("0"));
+                let prev_val = clean_to_float(prev_ca.get(i).unwrap_or("0"));
+
+                let summary = capex_summary_map.entry(yr).or_default();
+                if curr_val < 0.0 { summary.curr_outflow += curr_val; } else { summary.curr_inflow += curr_val; }
+                if prev_val < 0.0 { summary.prev_outflow += prev_val; } else { summary.prev_inflow += prev_val; }
+            }
         }
     }
 
-    Ok((div_ledger, years))
+    // Unroll Capex Timelines
+    let mut capex_outflow_ledger = HashMap::new();
+    let mut capex_inflow_ledger = HashMap::new();
+
+    for (yr, summary) in capex_summary_map {
+        // Current Year Timeline
+        capex_outflow_ledger.insert(yr, summary.curr_outflow);
+        capex_inflow_ledger.insert(yr, summary.curr_inflow);
+        years.insert(yr);
+
+        // Previous Year Timeline
+        capex_outflow_ledger.insert(yr - 1, summary.prev_outflow);
+        capex_inflow_ledger.insert(yr - 1, summary.prev_inflow);
+        years.insert(yr - 1);
+    }
+
+    Ok((div_ledger, ocf_ops_parsed, capex_outflow_ledger, capex_inflow_ledger, years))
 }
 
 // =========================================================================
@@ -236,7 +318,7 @@ fn process_ocr_balance_sheet(bytes: Vec<u8>) -> Result<(HashMap<i32, f64>, BTree
 }
 
 // =========================================================================
-// 5. XBRL EXCHANGE EXTRACTION ENGINE (WITH MANDATORY CONSOLIDATED CHECKS)
+// 5. XBRL EXCHANGE EXTRACTION ENGINE (WITH DCF CASH VECTORS EXTENSION)
 // =========================================================================
 
 #[derive(Default, Debug, Clone)]
@@ -245,6 +327,10 @@ struct XmlFileRules {
     eps_total: f64, eps_cont: f64, eps_disc: f64,
     prof_owner: f64, prof_period: f64, prof_comp: f64,
     equity: f64, div: f64,
+    // New DCF Matrix extensions
+    operating_cash_flow: f64,
+    capex_outflow: f64,
+    capex_inflow: f64,
 }
 
 fn process_exchange_xbrl(
@@ -253,6 +339,10 @@ fn process_exchange_xbrl(
     eps_ledg: &mut HashMap<i32, f64>,
     prof_ledg: &mut HashMap<i32, f64>,
     eq_ledg: &mut HashMap<i32, f64>,
+    // Extended target output map anchors
+    ocf_ledg: &mut HashMap<i32, f64>,
+    out_ledg: &mut HashMap<i32, f64>,
+    in_ledg: &mut HashMap<i32, f64>,
     years: &mut BTreeSet<i32>,
 ) -> Result<(), PolarsError> {
     let bytes = match bytes_opt {
@@ -269,8 +359,6 @@ fn process_exchange_xbrl(
     let mut file_map: HashMap<String, XmlFileRules> = HashMap::new();
     let mut consolidated_files: HashSet<String> = HashSet::new();
 
-    // Replicate Track A structural filter requirement from your Python script:
-    // Only files declaring 'consolidated' under NatureOfReport are permitted
     for i in 0..df.height() {
         if let Some(tag) = tag_ca.get(i) {
             if tag == "NatureOfReportStandaloneConsolidated" {
@@ -297,6 +385,7 @@ fn process_exchange_xbrl(
 
     for i in 0..df.height() {
         let ctx = ctx_ca.get(i).unwrap_or("").to_lowercase();
+        // Fallback context validation routing matches OneD logic checks
         if ctx != "oned" && ctx != "fourd" && ctx != "onei" { continue; }
         let file = match src_ca.get(i) { Some(f) => f.to_string(), None => continue };
         if !consolidated_files.contains(&file) || !file_map.contains_key(&file) || file_map[&file].year == 0 { continue; }
@@ -314,6 +403,23 @@ fn process_exchange_xbrl(
             "ComprehensiveIncomeForThePeriodAttributableToOwnersOfParent" => rule.prof_comp = val,
             "EquityAttributableToOwnersOfParent" => rule.equity = val,
             "DividendsPaidClassifiedAsFinancingActivities" => rule.div = val.abs(),
+            // DCF Core Tag Identifiers Map
+            "CashFlowsFromUsedInOperatingActivities" => rule.operating_cash_flow = val,
+            "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities" |
+            "PurchaseOfInvestmentPropertyClassifiedAsInvestingActivities" |
+            "PurchaseOfIntangibleAssetsUnderDevelopment" |
+            "PurchaseOfGoodwillClassifiedAsInvestingActivities" |
+            "PurchaseOfIntangibleAssetsClassifiedAsInvestingActivities" |
+            "PurchaseOfBiologicalAssetsOtherThanBearerPlantsClassifiedAsInvestingActivities" |
+            "PurchaseOfOtherLongTermAssetsClassifiedAsInvestingActivities" => rule.capex_outflow += val,
+            
+            "ProceedsFromSalesOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities" |
+            "ProceedsFromSalesOfInvestmentPropertyClassifiedAsInvestingActivities" |
+            "ProceedsFromSalesOfIntangibleAssetsUnderDevelopment" |
+            "ProceedsFromSalesOfGoodwillClassifiedAsInvestingActivities" |
+            "ProceedsFromSalesOfIntangibleAssetsClassifiedAsInvestingActivities" |
+            "ProceedsFromBiologicalAssetsOtherThanBearerPlantsClassifiedAsInvestingActivities" |
+            "ProceedsFromSalesOfOtherLongTermAssetsClassifiedAsInvestingActivities" => rule.capex_inflow += val,
             _ => {}
         }
     }
@@ -327,6 +433,11 @@ fn process_exchange_xbrl(
         if basic_eps != 0.0 { eps_ledg.insert(r.year, basic_eps); years.insert(r.year); }
         if net_profit != 0.0 { prof_ledg.insert(r.year, net_profit); years.insert(r.year); }
         if r.equity != 0.0 { eq_ledg.insert(r.year, r.equity); years.insert(r.year); }
+
+        // Unroll custom vertical horizontal capex outflows
+        if r.operating_cash_flow != 0.0 { ocf_ledg.insert(r.year, r.operating_cash_flow); years.insert(r.year); }
+        if r.capex_outflow != 0.0 { out_ledg.insert(r.year, r.capex_outflow * -1.0); years.insert(r.year); }
+        if r.capex_inflow != 0.0 { in_ledg.insert(r.year, r.capex_inflow); years.insert(r.year); }
     }
 
     Ok(())
@@ -350,6 +461,9 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
 
     let mut ocr_div_ledger = HashMap::new(); let mut ocr_eps_ledger = HashMap::new();
     let mut ocr_prof_ledger = HashMap::new(); let mut ocr_eq_ledger = HashMap::new();
+    let mut ocr_ocf_ledger = HashMap::new(); let mut ocr_out_ledger = HashMap::new();
+    let mut ocr_in_ledger = HashMap::new();
+
     let mut global_years = BTreeSet::new();
 
     if let Some(bytes) = income_statement_bytes {
@@ -358,8 +472,9 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
         }
     }
     if let Some(bytes) = cash_flow_bytes {
-        if let Ok((div, yrs)) = process_ocr_cash_flow(bytes) {
-            ocr_div_ledger = div; global_years.extend(yrs);
+        if let Ok((div, ocf, out, r_in, yrs)) = process_ocr_cash_flow(bytes) {
+            ocr_div_ledger = div; ocr_ocf_ledger = ocf; ocr_out_ledger = out; ocr_in_ledger = r_in;
+            global_years.extend(yrs);
         }
     }
     if let Some(bytes) = balance_sheet_bytes {
@@ -369,51 +484,71 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
     }
 
     let mut nse_div = HashMap::new(); let mut nse_eps = HashMap::new(); let mut nse_prof = HashMap::new(); let mut nse_eq = HashMap::new();
+    let mut nse_ocf = HashMap::new(); let mut nse_out = HashMap::new(); let mut nse_in = HashMap::new();
+
     let mut bse_div = HashMap::new(); let mut bse_eps = HashMap::new(); let mut bse_prof = HashMap::new(); let mut bse_eq = HashMap::new();
+    let mut bse_ocf = HashMap::new(); let mut bse_out = HashMap::new(); let mut bse_in = HashMap::new();
 
-    let _ = process_exchange_xbrl(nse_int_bytes, &mut nse_div, &mut nse_eps, &mut nse_prof, &mut nse_eq, &mut global_years);
-    let _ = process_exchange_xbrl(nse_corp_bytes, &mut nse_div, &mut nse_eps, &mut nse_prof, &mut nse_eq, &mut global_years);
-    let _ = process_exchange_xbrl(bse_fin_bytes, &mut bse_div, &mut bse_eps, &mut bse_prof, &mut bse_eq, &mut global_years);
-    let _ = process_exchange_xbrl(bse_int_bytes, &mut bse_div, &mut bse_eps, &mut bse_prof, &mut bse_eq, &mut global_years);
+    let _ = process_exchange_xbrl(nse_int_bytes, &mut nse_div, &mut nse_eps, &mut nse_prof, &mut nse_eq, &mut nse_ocf, &mut nse_out, &mut nse_in, &mut global_years);
+    let _ = process_exchange_xbrl(nse_corp_bytes, &mut nse_div, &mut nse_eps, &mut nse_prof, &mut nse_eq, &mut nse_ocf, &mut nse_out, &mut nse_in, &mut global_years);
+    let _ = process_exchange_xbrl(bse_fin_bytes, &mut bse_div, &mut bse_eps, &mut bse_prof, &mut bse_eq, &mut bse_ocf, &mut bse_out, &mut bse_in, &mut global_years);
+    let _ = process_exchange_xbrl(bse_int_bytes, &mut bse_div, &mut bse_eps, &mut bse_prof, &mut bse_eq, &mut bse_ocf, &mut bse_out, &mut bse_in, &mut global_years);
 
     // =========================================================================
-    // ATOMIC CROSS-EXCHANGE + OCR fallback LOOP (METRIC-BY-METRIC SELECTION)
+    // COALESCE AMALGAMATION PIPELINE (METRIC-BY-METRIC SCAN)
     // =========================================================================
-    let mut meta = Vec::with_capacity(global_years.len());
+    let mut meta_analysis = Vec::with_capacity(global_years.len());
+    let mut meta_cashflow = Vec::with_capacity(global_years.len());
+
     for year in global_years {
-        // Dividend Paid Resolution
+        // DDM Metrics Allocation Group
         let dividend_paid = nse_div.get(&year).copied().filter(|&v| v != 0.0)
             .or_else(|| bse_div.get(&year).copied().filter(|&v| v != 0.0))
-            .or_else(|| ocr_div_ledger.get(&year).copied())
-            .unwrap_or(0.0) as i64;
+            .or_else(|| ocr_div_ledger.get(&year).copied()).unwrap_or(0.0) as i64;
 
-        // Basic EPS Resolution
         let basic_eps = nse_eps.get(&year).copied().filter(|&v| v != 0.0)
             .or_else(|| bse_eps.get(&year).copied().filter(|&v| v != 0.0))
-            .or_else(|| ocr_eps_ledger.get(&year).copied())
-            .unwrap_or(0.0);
+            .or_else(|| ocr_eps_ledger.get(&year).copied()).unwrap_or(0.0);
 
-        // Net Profit Resolution
         let net_profit_after_tax = nse_prof.get(&year).copied().filter(|&v| v != 0.0)
             .or_else(|| bse_prof.get(&year).copied().filter(|&v| v != 0.0))
-            .or_else(|| ocr_prof_ledger.get(&year).copied())
-            .unwrap_or(0.0) as i64;
+            .or_else(|| ocr_prof_ledger.get(&year).copied()).unwrap_or(0.0) as i64;
 
-        // Total Equity Resolution
         let total_equity = nse_eq.get(&year).copied().filter(|&v| v != 0.0)
             .or_else(|| bse_eq.get(&year).copied().filter(|&v| v != 0.0))
-            .or_else(|| ocr_eq_ledger.get(&year).copied())
-            .unwrap_or(0.0) as i64;
+            .or_else(|| ocr_eq_ledger.get(&year).copied()).unwrap_or(0.0) as i64;
 
-        meta.push(AnalysisMetadataRow {
+        // DCF Metrics Allocation Group
+        let operating_cash_flow = nse_ocf.get(&year).copied().filter(|&v| v != 0.0)
+            .or_else(|| bse_ocf.get(&year).copied().filter(|&v| v != 0.0))
+            .or_else(|| ocr_ocf_ledger.get(&year).copied()).unwrap_or(0.0);
+
+        let capex_outflow = nse_out.get(&year).copied().filter(|&v| v != 0.0)
+            .or_else(|| bse_out.get(&year).copied().filter(|&v| v != 0.0))
+            .or_else(|| ocr_out_ledger.get(&year).copied()).unwrap_or(0.0);
+
+        let capex_inflow = nse_in.get(&year).copied().filter(|&v| v != 0.0)
+            .or_else(|| bse_in.get(&year).copied().filter(|&v| v != 0.0))
+            .or_else(|| ocr_in_ledger.get(&year).copied()).unwrap_or(0.0);
+
+        let net_capex = capex_outflow + capex_inflow;
+        let free_cash_flow = operating_cash_flow + net_capex;
+
+        meta_analysis.push(AnalysisMetadataRow {
+            year, dividend_paid, basic_eps, net_profit_after_tax, total_equity
+        });
+
+        meta_cashflow.push(CashFlowMetadataRow {
             year,
-            dividend_paid,
-            basic_eps,
-            net_profit_after_tax,
-            total_equity,
+            operating_cash_flow: operating_cash_flow as i64,
+            capex_outflow: capex_outflow as i64,
+            capex_inflow: capex_inflow as i64,
+            net_capex: net_capex as i64,
+            free_cash_flow: free_cash_flow as i64,
         });
     }
 
-    store_parsed_table("analysis_metadata", meta);
+    store_parsed_table("analysis_metadata", meta_analysis);
+    store_parsed_table("cashflow_metadata", meta_cashflow);
     Ok(())
 }
