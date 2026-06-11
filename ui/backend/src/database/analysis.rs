@@ -25,11 +25,6 @@ pub struct CashFlowMetadataRow {
 // 1. UTILITY PARSING HELPERS
 // =========================================================================
 
-fn clean_to_float(s: &str) -> f64 {
-    let clean = s.trim().replace(',', "").replace('(', "").replace(')', "");
-    clean.parse::<f64>().unwrap_or(0.0)
-}
-
 fn extract_year_from_filename(file_name: &str) -> Option<i32> {
     let parts: Vec<&str> = file_name.split('-').collect();
     if let Some(last) = parts.last() {
@@ -74,8 +69,8 @@ fn process_ocr_income_statement(bytes: Vec<u8>) -> Result<(HashMap<i32, f64>, Ha
         if ctx_ca.get(i).unwrap_or("").to_lowercase() != "consolidated" { continue; }
         let file_name = match f_ca.get(i) { Some(f) => f.to_string(), None => continue };
         let part = p_ca.get(i).unwrap_or("").to_lowercase();
-        let c_num = clean_to_float(curr_ca.get(i).unwrap_or("0"));
-        let p_num = clean_to_float(prev_ca.get(i).unwrap_or("0"));
+        let c_num = curr_ca.get(i).unwrap_or("0").trim().parse::<f64>().unwrap_or(0.0);
+        let p_num = prev_ca.get(i).unwrap_or("0").trim().parse::<f64>().unwrap_or(0.0);
 
         let rule = file_map.entry(file_name.clone()).or_insert_with(|| IsFileRules {
             file_year: extract_year_from_filename(&file_name).unwrap_or(0),
@@ -165,10 +160,10 @@ fn process_ocr_cash_flow(
         if part.contains("cash flow") && part.contains("investing") && bounds.0 == i64::MAX { bounds.0 = idx; }
         if part.contains("cash flow") && part.contains("financ") && bounds.1 == i64::MAX { bounds.1 = idx; }
 
-        let c_raw = curr_ca.get(i).unwrap_or("");
-        let p_raw = prev_ca.get(i).unwrap_or("");
-        let c_num = clean_to_float(c_raw);
-        let p_num = clean_to_float(p_raw);
+        let c_raw = curr_ca.get(i).unwrap_or("0").trim();
+        let p_raw = prev_ca.get(i).unwrap_or("0").trim();
+        let c_num = c_raw.parse::<f64>().unwrap_or(0.0);
+        let p_num = p_raw.parse::<f64>().unwrap_or(0.0);
 
         // Parse Dividend Allocations (.last() emulation)
         if (part.contains("dividend") && part.contains("paid")) || (part.contains("paid") && part.contains("dividend")) {
@@ -198,7 +193,7 @@ fn process_ocr_cash_flow(
     // Pass 2: Sandwich Data Extraction for Capex Rules Execution
     for i in 0..df.height() {
         if ctx_ca.get(i).unwrap_or("").to_lowercase() != "consolidated" { continue; }
-        let file_name = match f_ca.get(i) { Some(f) => f, None => continue };
+        let file_name = match f_ca.get(i) { Some(f) => f.to_string(), None => continue };
         let yr = match extract_year_from_filename(&file_name) { Some(y) => y, None => continue };
         let part = p_ca.get(i).unwrap_or("");
         if part.trim().is_empty() { continue; }
@@ -214,8 +209,8 @@ fn process_ocr_cash_flow(
                             part_lower.contains("bank balance") || part_lower.contains("interest received") || 
                             part_lower.contains("dividend") || part_lower.contains("net cash") || part_lower.contains("total");
             if !exclusion {
-                let curr_val = clean_to_float(curr_ca.get(i).unwrap_or("0"));
-                let prev_val = clean_to_float(prev_ca.get(i).unwrap_or("0"));
+                let curr_val = curr_ca.get(i).unwrap_or("0").trim().parse::<f64>().unwrap_or(0.0);
+                let prev_val = prev_ca.get(i).unwrap_or("0").trim().parse::<f64>().unwrap_or(0.0);
 
                 let summary = capex_summary_map.entry(yr).or_default();
                 if curr_val < 0.0 { summary.curr_outflow += curr_val; } else { summary.curr_inflow += curr_val; }
@@ -275,8 +270,8 @@ fn process_ocr_balance_sheet(bytes: Vec<u8>) -> Result<(HashMap<i32, f64>, BTree
         let part = p_ca.get(i).unwrap_or("").to_lowercase();
         if part.contains("liabilities") || part.contains("minority") { continue; }
         let file_name = match f_ca.get(i) { Some(f) => f.to_string(), None => continue };
-        let c_num = clean_to_float(curr_ca.get(i).unwrap_or("0"));
-        let p_num = clean_to_float(prev_ca.get(i).unwrap_or("0"));
+        let c_num = curr_ca.get(i).unwrap_or("0").trim().parse::<f64>().unwrap_or(0.0);
+        let p_num = prev_ca.get(i).unwrap_or("0").trim().parse::<f64>().unwrap_or(0.0);
 
         let rule = file_map.entry(file_name.clone()).or_insert_with(|| BsFileRules {
             file_year: extract_year_from_filename(&file_name).unwrap_or(0),
@@ -391,7 +386,7 @@ fn process_exchange_xbrl(
         if !consolidated_files.contains(&file) || !file_map.contains_key(&file) || file_map[&file].year == 0 { continue; }
         
         let tag = tag_ca.get(i).unwrap_or("");
-        let val = clean_to_float(val_ca.get(i).unwrap_or("0"));
+        let val = val_ca.get(i).unwrap_or("0").trim().parse::<f64>().unwrap_or(0.0);
 
         let rule = file_map.get_mut(&file).unwrap();
         match tag {
