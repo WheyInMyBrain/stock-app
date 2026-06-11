@@ -2,18 +2,15 @@ use crate::commands::memory_pool::store_parsed_table;
 use polars::prelude::*;
 use std::collections::{HashMap, BTreeSet, HashSet};
 
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, Clone)]
 pub struct AnalysisMetadataRow {
     pub year: i32,
+    // DDM + Residual Income Metrics
     pub dividend_paid: i64,
     pub basic_eps: f64,
     pub net_profit_after_tax: i64,
     pub total_equity: i64,
-}
-
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub struct CashFlowMetadataRow {
-    pub year: i32,
+    // DCF Metrics Group
     pub operating_cash_flow: i64,
     pub capex_outflow: i64,
     pub capex_inflow: i64,
@@ -489,14 +486,9 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
     let _ = process_exchange_xbrl(bse_fin_bytes, &mut bse_div, &mut bse_eps, &mut bse_prof, &mut bse_eq, &mut bse_ocf, &mut bse_out, &mut bse_in, &mut global_years);
     let _ = process_exchange_xbrl(bse_int_bytes, &mut bse_div, &mut bse_eps, &mut bse_prof, &mut bse_eq, &mut bse_ocf, &mut bse_out, &mut bse_in, &mut global_years);
 
-    // =========================================================================
-    // COALESCE AMALGAMATION PIPELINE (METRIC-BY-METRIC SCAN)
-    // =========================================================================
     let mut meta_analysis = Vec::with_capacity(global_years.len());
-    let mut meta_cashflow = Vec::with_capacity(global_years.len());
 
     for year in global_years {
-        // DDM Metrics Allocation Group
         let dividend_paid = nse_div.get(&year).copied().filter(|&v| v != 0.0)
             .or_else(|| bse_div.get(&year).copied().filter(|&v| v != 0.0))
             .or_else(|| ocr_div_ledger.get(&year).copied()).unwrap_or(0.0) as i64;
@@ -513,7 +505,6 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
             .or_else(|| bse_eq.get(&year).copied().filter(|&v| v != 0.0))
             .or_else(|| ocr_eq_ledger.get(&year).copied()).unwrap_or(0.0) as i64;
 
-        // DCF Metrics Allocation Group
         let operating_cash_flow = nse_ocf.get(&year).copied().filter(|&v| v != 0.0)
             .or_else(|| bse_ocf.get(&year).copied().filter(|&v| v != 0.0))
             .or_else(|| ocr_ocf_ledger.get(&year).copied()).unwrap_or(0.0);
@@ -530,11 +521,11 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
         let free_cash_flow = operating_cash_flow + net_capex;
 
         meta_analysis.push(AnalysisMetadataRow {
-            year, dividend_paid, basic_eps, net_profit_after_tax, total_equity
-        });
-
-        meta_cashflow.push(CashFlowMetadataRow {
             year,
+            dividend_paid,
+            basic_eps,
+            net_profit_after_tax,
+            total_equity,
             operating_cash_flow: operating_cash_flow as i64,
             capex_outflow: capex_outflow as i64,
             capex_inflow: capex_inflow as i64,
@@ -544,6 +535,5 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
     }
 
     store_parsed_table("analysis_metadata", meta_analysis);
-    store_parsed_table("cashflow_metadata", meta_cashflow);
     Ok(())
 }

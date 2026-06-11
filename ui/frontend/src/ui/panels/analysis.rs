@@ -1,10 +1,9 @@
 use egui::Ui;
-use std::cell::RefCell; // <-- Brought in explicitly to satisfy compiler macro expansions
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
-use backend::commands::memory_pool::CENTRAL_ACTIVE_SLOT;
 use crate::core::data_manager::DataManager;
 use crate::ui::layouts::canvas::{OverviewSubTab, draw_nav_canvas_orchestrator};
-use backend::database::analysis::{AnalysisMetadataRow, CashFlowMetadataRow};
+use backend::database::analysis::AnalysisMetadataRow;
 use backend::database::overview::OverviewMetadata;
 
 // =========================================================================
@@ -12,7 +11,6 @@ use backend::database::overview::OverviewMetadata;
 // =========================================================================
 #[derive(Clone)]
 struct DynamicCellCache {
-    // Key format: (Year, Row_Metric_Identifier_String) -> Value_String
     inputs: HashMap<(i32, String), String>,
 }
 
@@ -59,45 +57,65 @@ fn check_column_filled(year: i32, metrics: &[&str]) -> bool {
 }
 
 // =========================================================================
-// DATA PIPELINE HYDRATOR & INFINITE TIMELINE EXTENDER
+// BACKEND SLOTS INTEGRATION WRITER (SAVES MERGED SIMULATION STATE VECTOR)
 // =========================================================================
-fn get_valuation_maps(tab_metrics: &[&str]) -> (Vec<i32>, HashMap<i32, AnalysisMetadataRow>, HashMap<i32, CashFlowMetadataRow>) {
-    let mut income_rows = Vec::new();
-    let mut cash_rows = Vec::new();
-    let mut unique_years = BTreeSet::new();
-    
+pub fn push_interactive_state_to_pool(years: &[i32]) {
+    let mut master_rows = Vec::with_capacity(years.len());
+
+    for &year in years {
+        let basic_eps = access_cell_state(year, "eps", "0".to_string()).parse::<f64>().unwrap_or(0.0);
+        let net_profit_after_tax = access_cell_state(year, "pat", "0".to_string()).parse::<i64>().unwrap_or(0);
+        let dividend_paid = access_cell_state(year, "div", "0".to_string()).parse::<i64>().unwrap_or(0);
+        let total_equity = access_cell_state(year, "eq", "0".to_string()).parse::<i64>().unwrap_or(0);
+
+        let operating_cash_flow = access_cell_state(year, "ocf", "0".to_string()).parse::<i64>().unwrap_or(0);
+        let capex_outflow = access_cell_state(year, "capex_out", "0".to_string()).parse::<i64>().unwrap_or(0);
+        let capex_inflow = access_cell_state(year, "capex_in", "0".to_string()).parse::<i64>().unwrap_or(0);
+        
+        let net_capex = capex_outflow + capex_inflow;
+        let free_cash_flow = operating_cash_flow + net_capex;
+
+        master_rows.push(AnalysisMetadataRow {
+            year,
+            dividend_paid,
+            basic_eps,
+            net_profit_after_tax,
+            total_equity,
+            operating_cash_flow,
+            capex_outflow,
+            capex_inflow,
+            net_capex,
+            free_cash_flow,
+        });
+    }
+
+    // Split-clone allocations into individual model targets requested
+    backend::commands::memory_pool::store_parsed_table("analysis_metadata", master_rows.clone());
+    backend::commands::memory_pool::store_parsed_table("dcf_metadata", master_rows.clone());
+    backend::commands::memory_pool::store_parsed_table("ddm_metadata", master_rows.clone());
+    backend::commands::memory_pool::store_parsed_table("rem_metadata", master_rows);
+}
+
+// =========================================================================
+// PIPELINE HYDRATION DELEGATE
+// =========================================================================
+fn get_valuation_maps(tab_metrics: &[&str]) -> (Vec<i32>, HashMap<i32, AnalysisMetadataRow>) {
     let active_ticker = ACTIVE_PANEL_TICKER.with(|ticker| ticker.borrow().clone());
     if active_ticker.is_empty() {
-        return (Vec::new(), HashMap::new(), HashMap::new());
+        return (Vec::new(), HashMap::new());
     }
 
-    if let Ok(slot_guard) = CENTRAL_ACTIVE_SLOT.read() {
-        if let Some(slot) = slot_guard.as_ref() {
-            if slot.ticker == active_ticker.to_uppercase() {
-                if let Some(any_ptr) = slot.parsed_tables.get("analysis_metadata") {
-                    if let Some(timeline) = any_ptr.downcast_ref::<Vec<AnalysisMetadataRow>>() {
-                        income_rows = timeline.clone();
-                    }
-                }
-                if let Some(any_ptr) = slot.parsed_tables.get("cashflow_metadata") {
-                    if let Some(timeline) = any_ptr.downcast_ref::<Vec<CashFlowMetadataRow>>() {
-                        cash_rows = timeline.clone();
-                    }
-                }
-            }
-        }
-    }
+    let mut analysis_rows: Vec<AnalysisMetadataRow> = Vec::new();
+    let mut unique_years = BTreeSet::new();
 
-    let mut income_map = HashMap::new();
-    for row in income_rows {
+    backend::commands::memory_pool::with_active_table::<Vec<AnalysisMetadataRow>, _, _>("analysis_metadata", |table| {
+        analysis_rows = table.clone();
+    });
+
+    let mut analysis_map = HashMap::new();
+    for row in analysis_rows {
         unique_years.insert(row.year);
-        income_map.insert(row.year, row);
-    }
-
-    let mut cash_map = HashMap::new();
-    for row in cash_rows {
-        unique_years.insert(row.year);
-        cash_map.insert(row.year, row);
+        analysis_map.insert(row.year, row);
     }
 
     let mut years_vector: Vec<i32> = unique_years.into_iter().collect();
@@ -118,7 +136,19 @@ fn get_valuation_maps(tab_metrics: &[&str]) -> (Vec<i32>, HashMap<i32, AnalysisM
         years_vector = (absolute_start..=absolute_end).collect();
     }
 
-    (years_vector, income_map, cash_map)
+    (years_vector, analysis_map)
+}
+
+fn sync_frontend_to_backend(years: &[i32]) {
+    push_interactive_state_to_pool(years);
+}
+
+fn render_horizontal_grid_header(ui: &mut Ui, years: &[i32], title: &str) {
+    ui.label(egui::RichText::new(title).strong());
+    for year in years {
+        ui.label(egui::RichText::new(format!("{}", year)).strong());
+    }
+    ui.end_row();
 }
 
 // =========================================================================
@@ -132,7 +162,7 @@ impl OverviewSubTab for DcfTab {
     
     fn render_bottom(&self, ui: &mut Ui, _meta: &OverviewMetadata) {
         let metrics = vec!["ocf", "capex_out", "capex_in"];
-        let (years, _, cash_map) = get_valuation_maps(&metrics);
+        let (years, analysis_map) = get_valuation_maps(&metrics);
         if years.is_empty() { return; }
 
         egui::ScrollArea::horizontal().id_source("dcf_bottom_scroll").show(ui, |ui| {
@@ -144,42 +174,37 @@ impl OverviewSubTab for DcfTab {
                         .min_col_width(110.0)
                         .spacing(egui::vec2(16.0, 10.0))
                         .show(ui, |ui| {
-                            // Render Timeline Header Row
-                            ui.label(egui::RichText::new("METRICS / YEARS").strong());
-                            for yr in &years {
-                                ui.label(egui::RichText::new(format!("{}", yr)).strong());
-                            }
-                            ui.end_row();
+                            render_horizontal_grid_header(ui, &years, "METRICS / YEARS");
 
-                            // Row 1: Operating Cash Flow
                             ui.label("Operating Cash Flow");
                             for &yr in &years {
-                                let fallback = cash_map.get(&yr).map(|r| r.operating_cash_flow.to_string()).unwrap_or_else(|| "0".to_string());
+                                let fallback = analysis_map.get(&yr).map(|r| r.operating_cash_flow.to_string()).unwrap_or_else(|| "0".to_string());
                                 let mut val_str = access_cell_state(yr, "ocf", fallback);
                                 if ui.text_edit_singleline(&mut val_str).changed() {
                                     update_cell_state(yr, "ocf", val_str);
+                                    sync_frontend_to_backend(&years);
                                 }
                             }
                             ui.end_row();
 
-                            // Row 2: Capex Outflow
                             ui.label("Capex Outflow");
                             for &yr in &years {
-                                let fallback = cash_map.get(&yr).map(|r| r.capex_outflow.to_string()).unwrap_or_else(|| "0".to_string());
+                                let fallback = analysis_map.get(&yr).map(|r| r.capex_outflow.to_string()).unwrap_or_else(|| "0".to_string());
                                 let mut val_str = access_cell_state(yr, "capex_out", fallback);
                                 if ui.text_edit_singleline(&mut val_str).changed() {
                                     update_cell_state(yr, "capex_out", val_str);
+                                    sync_frontend_to_backend(&years);
                                 }
                             }
                             ui.end_row();
 
-                            // Row 3: Capex Inflow
                             ui.label("Capex Inflow");
                             for &yr in &years {
-                                let fallback = cash_map.get(&yr).map(|r| r.capex_inflow.to_string()).unwrap_or_else(|| "0".to_string());
+                                let fallback = analysis_map.get(&yr).map(|r| r.capex_inflow.to_string()).unwrap_or_else(|| "0".to_string());
                                 let mut val_str = access_cell_state(yr, "capex_in", fallback);
                                 if ui.text_edit_singleline(&mut val_str).changed() {
                                     update_cell_state(yr, "capex_in", val_str);
+                                    sync_frontend_to_backend(&years);
                                 }
                             }
                             ui.end_row();
@@ -200,7 +225,7 @@ impl OverviewSubTab for DdmTab {
 
     fn render_bottom(&self, ui: &mut Ui, _meta: &OverviewMetadata) {
         let metrics = vec!["eps", "pat", "div"];
-        let (years, income_map, _) = get_valuation_maps(&metrics);
+        let (years, analysis_map) = get_valuation_maps(&metrics);
         if years.is_empty() { return; }
 
         egui::ScrollArea::horizontal().id_source("ddm_bottom_scroll").show(ui, |ui| {
@@ -212,41 +237,37 @@ impl OverviewSubTab for DdmTab {
                         .min_col_width(110.0)
                         .spacing(egui::vec2(16.0, 10.0))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("METRICS / YEARS").strong());
-                            for yr in &years {
-                                ui.label(egui::RichText::new(format!("{}", yr)).strong());
-                            }
-                            ui.end_row();
+                            render_horizontal_grid_header(ui, &years, "METRICS / YEARS");
 
-                            // Row 1: Basic EPS
                             ui.label("Basic EPS");
                             for &yr in &years {
-                                let fallback = income_map.get(&yr).map(|r| format!("{:.2}", r.basic_eps)).unwrap_or_else(|| "0.00".to_string());
+                                let fallback = analysis_map.get(&yr).map(|r| format!("{:.2}", r.basic_eps)).unwrap_or_else(|| "0.00".to_string());
                                 let mut val_str = access_cell_state(yr, "eps", fallback);
                                 if ui.text_edit_singleline(&mut val_str).changed() {
                                     update_cell_state(yr, "eps", val_str);
+                                    sync_frontend_to_backend(&years);
                                 }
                             }
                             ui.end_row();
 
-                            // Row 2: Net Profit (AT)
                             ui.label("Net Profit (AT)");
                             for &yr in &years {
-                                let fallback = income_map.get(&yr).map(|r| r.net_profit_after_tax.to_string()).unwrap_or_else(|| "0".to_string());
+                                let fallback = analysis_map.get(&yr).map(|r| r.net_profit_after_tax.to_string()).unwrap_or_else(|| "0".to_string());
                                 let mut val_str = access_cell_state(yr, "pat", fallback);
                                 if ui.text_edit_singleline(&mut val_str).changed() {
                                     update_cell_state(yr, "pat", val_str);
+                                    sync_frontend_to_backend(&years);
                                 }
                             }
                             ui.end_row();
 
-                            // Row 3: Dividend Paid
                             ui.label("Dividend Paid");
                             for &yr in &years {
-                                let fallback = income_map.get(&yr).map(|r| r.dividend_paid.to_string()).unwrap_or_else(|| "0".to_string());
+                                let fallback = analysis_map.get(&yr).map(|r| r.dividend_paid.to_string()).unwrap_or_else(|| "0".to_string());
                                 let mut val_str = access_cell_state(yr, "div", fallback);
                                 if ui.text_edit_singleline(&mut val_str).changed() {
                                     update_cell_state(yr, "div", val_str);
+                                    sync_frontend_to_backend(&years);
                                 }
                             }
                             ui.end_row();
@@ -267,7 +288,7 @@ impl OverviewSubTab for ResidualIncomeTab {
 
     fn render_bottom(&self, ui: &mut Ui, _meta: &OverviewMetadata) {
         let metrics = vec!["eq", "pat"];
-        let (years, income_map, _) = get_valuation_maps(&metrics);
+        let (years, analysis_map) = get_valuation_maps(&metrics);
         if years.is_empty() { return; }
 
         egui::ScrollArea::horizontal().id_source("ri_bottom_scroll").show(ui, |ui| {
@@ -279,30 +300,26 @@ impl OverviewSubTab for ResidualIncomeTab {
                         .min_col_width(110.0)
                         .spacing(egui::vec2(16.0, 10.0))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("METRICS / YEARS").strong());
-                            for yr in &years {
-                                ui.label(egui::RichText::new(format!("{}", yr)).strong());
-                            }
-                            ui.end_row();
+                            render_horizontal_grid_header(ui, &years, "METRICS / YEARS");
 
-                            // Row 1: Total Equity
                             ui.label("Total Equity");
                             for &yr in &years {
-                                let fallback = income_map.get(&yr).map(|r| r.total_equity.to_string()).unwrap_or_else(|| "0".to_string());
+                                let fallback = analysis_map.get(&yr).map(|r| r.total_equity.to_string()).unwrap_or_else(|| "0".to_string());
                                 let mut val_str = access_cell_state(yr, "eq", fallback);
                                 if ui.text_edit_singleline(&mut val_str).changed() {
                                     update_cell_state(yr, "eq", val_str);
+                                    sync_frontend_to_backend(&years);
                                 }
                             }
                             ui.end_row();
 
-                            // Row 2: Net Profit After Tax
                             ui.label("Net Profit After Tax");
                             for &yr in &years {
-                                let fallback = income_map.get(&yr).map(|r| r.net_profit_after_tax.to_string()).unwrap_or_else(|| "0".to_string());
+                                let fallback = analysis_map.get(&yr).map(|r| r.net_profit_after_tax.to_string()).unwrap_or_else(|| "0".to_string());
                                 let mut val_str = access_cell_state(yr, "pat", fallback);
                                 if ui.text_edit_singleline(&mut val_str).changed() {
                                     update_cell_state(yr, "pat", val_str);
+                                    sync_frontend_to_backend(&years);
                                 }
                             }
                             ui.end_row();

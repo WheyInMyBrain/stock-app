@@ -1,7 +1,7 @@
 use backend::commands::history::get_history_tickers_headless;
-use backend::commands::memory_pool::CENTRAL_ACTIVE_SLOT;
+use backend::commands::memory_pool::{CENTRAL_ACTIVE_SLOT};
 use backend::database::overview::hydrate_overview_metadata;
-use backend::database::analysis::hydrate_analysis_metadata;
+use backend::database::analysis::{hydrate_analysis_metadata};
 
 pub struct DataManager;
 
