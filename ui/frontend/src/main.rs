@@ -1,6 +1,7 @@
 // stock-app/ui/frontend_native/src/main.rs
 use eframe::egui;
-use std::time::{Instant, Duration};
+use std::time::Duration;
+use tokio::sync::mpsc;
 
 mod ui;
 mod core; 
@@ -12,11 +13,14 @@ struct TerminalApplicationCore {
     data_dir_input: String,
     available_tickers: Vec<String>,
     daemon_spawned: bool,
-    last_sync_time: Instant,
+    ticker_update_rx: mpsc::Receiver<Vec<String>>,
 }
 
-impl Default for TerminalApplicationCore {
-    fn default() -> Self {
+impl TerminalApplicationCore {
+    pub fn new(cc: &eframe::CreationContext<'_>, ticker_update_rx: mpsc::Receiver<Vec<String>>) -> Self {
+        // Enforce reactive UI context theme modifications immediately on initialization
+        ui::theme::apply_high_contrast_theme(&cc.egui_ctx);
+
         let mut data_dir = None;
         let mut available_tickers = Vec::new();
         let mut daemon_spawned = false;
@@ -34,21 +38,19 @@ impl Default for TerminalApplicationCore {
             data_dir_input: String::new(),
             available_tickers,
             daemon_spawned,
-            last_sync_time: Instant::now(), // Initialize timer active
+            ticker_update_rx,
         }
     }
 }
 
 impl eframe::App for TerminalApplicationCore {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ui::theme::apply_high_contrast_theme(ctx);
-
-        // 🎯 LIVE SYNC INTERCEPTOR:
-        // Periodically scans the data folder every 2 seconds in the background.
-        // As soon as the Go downloader finishes writing files, the stock pops up instantly!
-        if self.data_dir.is_some() && self.last_sync_time.elapsed() >= Duration::from_secs(2) {
-            self.available_tickers = core::data_manager::DataManager::load_active_tickers();
-            self.last_sync_time = Instant::now();
+        // 1. ASYNC UPDATE RECEIVER REACTION GATES
+        if let Ok(fresh_tickers) = self.ticker_update_rx.try_recv() {
+            if self.available_tickers != fresh_tickers {
+                self.available_tickers = fresh_tickers;
+                ctx.request_repaint();
+            }
         }
 
         if self.data_dir.is_none() {
@@ -83,14 +85,34 @@ impl eframe::App for TerminalApplicationCore {
                 );
             });
         }
-
-        ctx.request_repaint();
     }
 }
 
 fn main() -> eframe::Result<()> {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let _guard = runtime.enter();
+
+    // Setup an asynchronous multi-producer single-consumer thread communication channel
+    let (tx, rx) = mpsc::channel::<Vec<String>>(4);
+    let egui_ctx_framer = egui::Context::default();
+    let thread_ctx = egui_ctx_framer.clone();
+
+    // =========================================================================
+    // HIGH-PERFORMANCE BACKGROUND SCHEDULER (NON-BLOCKING IO WORKER)
+    // =========================================================================
+    runtime.spawn(async move {
+        let mut loop_timer = tokio::time::interval(Duration::from_secs(2));
+        loop {
+            loop_timer.tick().await;
+            
+            let fresh_tickers = core::data_manager::DataManager::load_active_tickers();
+            
+            if tx.send(fresh_tickers).await.is_err() {
+                break; 
+            }
+            thread_ctx.request_repaint();
+        }
+    });
 
     let mut native_options = eframe::NativeOptions::default();
     native_options.viewport = egui::ViewportBuilder::default()
@@ -100,6 +122,9 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "NativeTradingTerminal",
         native_options,
-        Box::new(|_cc| Box::new(TerminalApplicationCore::default())),
+        Box::new(move |cc| {
+            let app_context = TerminalApplicationCore::new(cc, rx);
+            Box::new(app_context)
+        }),
     )
 }

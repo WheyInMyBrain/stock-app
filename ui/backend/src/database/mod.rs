@@ -20,22 +20,17 @@ impl WorkspaceDataLoader {
                 parsed_tables: std::collections::HashMap::new(),
                 raw_endpoints: std::collections::HashMap::new(),
             });
+        } else if let Some(ref mut current_data) = *slot {
+            // FIX: If switching tickers or reloading, dump the heavy uncompressed binary cache immediately
+            current_data.raw_endpoints.clear();
         }
 
         Self { ticker: ticker_upper }
     }
 
     pub fn load_raw_bytes(&self, target_path: &str) -> Result<Vec<u8>, String> {
-        {
-            let slot = CENTRAL_ACTIVE_SLOT.read().unwrap();
-            if let Some(ref data) = *slot {
-                if data.ticker == self.ticker {
-                    if let Some(cached_bytes) = data.raw_endpoints.get(target_path) {
-                        return Ok(cached_bytes.clone());
-                    }
-                }
-            }
-        }
+        // FIX: Removed the read-lock loop that hoards raw bytes in memory.
+        // We want this utility to act as a stateless operational window stream.
 
         let parts: Vec<&str> = target_path.split('/').filter(|s| !s.is_empty()).collect();
         if parts.is_empty() {
@@ -90,14 +85,8 @@ impl WorkspaceDataLoader {
             None => return Err(format!("Filing nodes missing. Scanned variants: [{}]", tried_paths.join(", "))),
         };
 
+        // Standard operational system direct IO stream read (Extremely efficient)
         let bytes = fs::read(&valid_path).map_err(|e| format!("IO failure on {}: {}", valid_path.display(), e))?;
-
-        let mut slot = CENTRAL_ACTIVE_SLOT.write().unwrap();
-        if let Some(ref mut current_data) = *slot {
-            if current_data.ticker == self.ticker {
-                current_data.raw_endpoints.insert(target_path.to_string(), bytes.clone());
-            }
-        }
 
         Ok(bytes)
     }

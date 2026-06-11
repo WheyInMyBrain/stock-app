@@ -11,35 +11,44 @@ impl DataManager {
     }
 
     pub fn ensure_overview_data(ticker: &str) {
+        let ticker_upper = ticker.to_uppercase();
         let needs_hydration = if let Ok(slot_guard) = CENTRAL_ACTIVE_SLOT.read() {
             slot_guard.as_ref().map_or(true, |slot| {
-                slot.ticker != ticker.to_uppercase() || !slot.parsed_tables.contains_key("overview_metadata")
+                slot.ticker != ticker_upper || !slot.parsed_tables.contains_key("overview_metadata")
             })
         } else {
-            false
+            true
         };
 
         if needs_hydration {
             if let Err(e) = hydrate_overview_metadata(ticker) {
-                println!("\x1b[96m[downloader] ❌ Ingestion hydration failed for '{}': {}\x1b[0m", ticker, e);
+                println!("[downloader] ❌ Ingestion hydration failed for '{}': {}", ticker, e);
             }
         }
     }
 
     pub fn ensure_analysis_data(ticker: &str) {
+        let ticker_upper = ticker.to_uppercase();
         let needs_hydration = if let Ok(slot_guard) = CENTRAL_ACTIVE_SLOT.read() {
-            slot_guard.as_ref().map_or(true, |slot| {
-                slot.ticker != ticker.to_uppercase() 
-                    || !slot.parsed_tables.contains_key("analysis_metadata")
-                    || !slot.parsed_tables.contains_key("historical_chart_data")
-            })
+            if let Some(ref slot) = *slot_guard {
+                if slot.ticker == ticker_upper 
+                    && slot.parsed_tables.contains_key("analysis_metadata") 
+                    && slot.parsed_tables.contains_key("historical_chart_data") 
+                {
+                    false 
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
         } else {
-            false
+            true
         };
 
         if needs_hydration {
             if let Err(e) = hydrate_analysis_metadata(ticker) {
-                println!("\x1b[91m[analysis] ❌ Ingestion hydration failed for '{}': {}\x1b[0m", ticker, e);
+                println!("[analysis] ❌ Ingestion hydration failed for '{}': {}", ticker, e);
             }
         }
     }
