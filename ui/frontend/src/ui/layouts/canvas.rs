@@ -1,10 +1,10 @@
 use egui::{Ui, Color32, Frame, Margin, Stroke};
 
-pub trait OverviewSubTab {
+pub trait AbstractSubTab<T> {
     fn id(&self) -> usize;
     fn label(&self) -> &'static str;
-    fn render_main(&self, ui: &mut Ui, meta: &backend::database::overview::OverviewMetadata);
-    fn render_bottom(&self, _ui: &mut Ui, _meta: &backend::database::overview::OverviewMetadata) {}
+    fn render_main(&self, ui: &mut Ui, data: &T);
+    fn render_bottom(&self, _ui: &mut Ui, _data: &T) {}
 }
 
 pub fn draw_three_zone_canvas<M, B, S>(
@@ -74,24 +74,36 @@ pub fn draw_three_zone_canvas<M, B, S>(
     });
 }
 
-pub fn draw_nav_canvas_orchestrator(ui: &mut Ui, active_ticker: &str, tabs: &[&dyn OverviewSubTab]) {
+pub fn draw_nav_canvas_orchestrator<T>(
+    ui: &mut Ui, 
+    active_ticker: &str, 
+    table_key: &str,          // "overview_metadata", "analysis_metadata", etc.
+    heading_prefix: &str,     // "OVERVIEW", "VALUATION ENGINE", etc.
+    id_source_key: &str,      // Unique string token for temporary UI state storage
+    tabs: &[&dyn AbstractSubTab<T>]
+) 
+where 
+    T: std::any::Any + Send + Sync, // Requirements to match backend memory slot contracts
+{
     if tabs.is_empty() { return; }
     
-    let active_sub_tab_id = egui::Id::new("overview_active_sub_tab_index");
+    // Generate a uniquely distinct state ID token based on the caller context string
+    let active_sub_tab_id = egui::Id::new(id_source_key);
     let current_tab_id = ui.data_mut(|d| d.get_temp::<usize>(active_sub_tab_id).unwrap_or(tabs[0].id()));
 
     let active_tab = tabs.iter().find(|t| t.id() == current_tab_id).unwrap_or(&tabs[0]);
 
-    let table_found = backend::commands::memory_pool::with_active_table::<backend::database::overview::OverviewMetadata, _, _>("overview_metadata", |meta| {
+    // Pull from the memory pool utilizing the exact concrete string key passed by the caller
+    let table_found = backend::commands::memory_pool::with_active_table::<T, _, _>(table_key, |data| {
         draw_three_zone_canvas(
             ui,
             |ui| {
-                ui.heading(format!("OVERVIEW: {}", active_ticker.to_uppercase()));
+                ui.heading(format!("{}: {}", heading_prefix.to_uppercase(), active_ticker.to_uppercase()));
                 ui.add_space(15.0);
-                active_tab.render_main(ui, meta);
+                active_tab.render_main(ui, data);
             },
             |ui| {
-                active_tab.render_bottom(ui, meta);
+                active_tab.render_bottom(ui, data);
             },
             |ui| {
                 ui.vertical(|ui| {
@@ -107,11 +119,12 @@ pub fn draw_nav_canvas_orchestrator(ui: &mut Ui, active_ticker: &str, tabs: &[&d
         );
     });
 
+    // Uniform clean loading layout card fallback boundary execution
     if table_found.is_none() {
         draw_three_zone_canvas(
             ui,
             |ui| {
-                ui.heading(format!("OVERVIEW: {}", active_ticker.to_uppercase()));
+                ui.heading(format!("{}: {}", heading_prefix.to_uppercase(), active_ticker.to_uppercase()));
                 ui.add_space(15.0);
                 ui.weak("Loading data attributes into cache slot...");
             },

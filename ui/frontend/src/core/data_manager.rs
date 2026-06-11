@@ -29,7 +29,9 @@ impl DataManager {
     pub fn ensure_analysis_data(ticker: &str) {
         let needs_hydration = if let Ok(slot_guard) = CENTRAL_ACTIVE_SLOT.read() {
             slot_guard.as_ref().map_or(true, |slot| {
-                slot.ticker != ticker.to_uppercase() || !slot.parsed_tables.contains_key("analysis_metadata")
+                slot.ticker != ticker.to_uppercase() 
+                    || !slot.parsed_tables.contains_key("analysis_metadata")
+                    || !slot.parsed_tables.contains_key("historical_chart_data")
             })
         } else {
             false

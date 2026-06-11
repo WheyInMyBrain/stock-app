@@ -1,12 +1,13 @@
 use egui::Ui;
 use crate::core::data_manager::DataManager;
-use crate::ui::layouts::canvas::{OverviewSubTab, draw_nav_canvas_orchestrator};
+use crate::ui::layouts::canvas::{AbstractSubTab, draw_nav_canvas_orchestrator};
 use backend::database::overview::OverviewMetadata;
 
 struct DetailsSubTab;
-impl OverviewSubTab for DetailsSubTab {
+impl AbstractSubTab<OverviewMetadata> for DetailsSubTab {
     fn id(&self) -> usize { 2 }
     fn label(&self) -> &'static str { "Details" }
+    
     fn render_main(&self, ui: &mut Ui, meta: &OverviewMetadata) {
         ui.label(format!("ISIN: {}", meta.isin));
         ui.label(format!("NSE Code: {}", meta.nse_code));
@@ -35,9 +36,10 @@ impl OverviewSubTab for DetailsSubTab {
 }
 
 struct BoardSubTab;
-impl OverviewSubTab for BoardSubTab {
+impl AbstractSubTab<OverviewMetadata> for BoardSubTab {
     fn id(&self) -> usize { 1 }
     fn label(&self) -> &'static str { "Board of Directors" }
+    
     fn render_main(&self, ui: &mut Ui, meta: &OverviewMetadata) {
         ui.label(egui::RichText::new("BOARD OF DIRECTORS").strong());
         ui.add_space(10.0);
@@ -50,10 +52,18 @@ impl OverviewSubTab for BoardSubTab {
 pub fn draw_overview_panel(ui: &mut Ui, active_ticker: &str) {
     DataManager::ensure_overview_data(active_ticker);
 
-    let tabs: &[&dyn OverviewSubTab] = &[
+    let tabs: &[&dyn AbstractSubTab<OverviewMetadata>] = &[
         &DetailsSubTab,
         &BoardSubTab,
     ];
 
-    draw_nav_canvas_orchestrator(ui, active_ticker, tabs);
+    // Passes our concrete type data parameters out into the abstract layout framework
+    draw_nav_canvas_orchestrator(
+        ui,
+        active_ticker,
+        "overview_metadata",        // Target memory pool lookup table key
+        "OVERVIEW",                 // Title heading contextual identifier 
+        "overview_active_sub_tab",  // Unique token string driving temporary frame view state storage keys
+        tabs,
+    );
 }
