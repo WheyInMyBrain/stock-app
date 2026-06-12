@@ -120,14 +120,14 @@ impl BseEndpoint {
                 format!("https://api.bseindia.com/BseIndiaAPI/api/Integratedfinancedata/w?scripcode={}", bse_code)
             }
             BseEndpoint::SensexHistoricalData => {
-            let now = chrono::Local::now();
-            let from_date_str = format!("{}0101", now.year() - 10);
-            let to_date_str = now.format("%Y%m%d").to_string();
-            format!(
-                "https://api.bseindia.com/BseIndiaAPI/api/SensexGraphData/w?index=98&flag=1&sector=&seriesid=DT&frd={}&tod={}&ext=.json",
-                from_date_str, to_date_str
-            )
-        }
+                let now = chrono::Local::now();
+                let from_date_str = format!("{}0101", now.year() - 10);
+                let to_date_str = now.format("%Y%m%d").to_string();
+                format!(
+                    "https://api.bseindia.com/BseIndiaAPI/api/SensexGraphData/w?index=98&flag=1&sector=&seriesid=DT&frd={}&tod={}&ext=.json",
+                    from_date_str, to_date_str
+                )
+            }
         }
     }
 
