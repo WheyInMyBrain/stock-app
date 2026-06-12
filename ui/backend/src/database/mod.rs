@@ -1,3 +1,5 @@
+// stock-app/ui/backend/src/database/mod.rs
+
 pub mod overview;
 pub mod analysis;
 
@@ -18,27 +20,23 @@ impl WorkspaceDataLoader {
             *slot = Some(ActiveTickerData {
                 ticker: ticker_upper.clone(),
                 parsed_tables: std::collections::HashMap::new(),
-                raw_endpoints: std::collections::HashMap::new(),
+                raw_endpoints: std::collections::HashMap::new(), 
             });
-        } else if let Some(ref mut current_data) = *slot {
-            // FIX: If switching tickers or reloading, dump the heavy uncompressed binary cache immediately
-            current_data.raw_endpoints.clear();
         }
 
         Self { ticker: ticker_upper }
     }
 
     pub fn load_raw_bytes(&self, target_path: &str) -> Result<Vec<u8>, String> {
-        // FIX: Removed the read-lock loop that hoards raw bytes in memory.
-        // We want this utility to act as a stateless operational window stream.
+        let ticker_upper = self.ticker.to_uppercase();
 
+        // 🎯 STEP 1 AND 3 CACHE LOGIC REMOVED
         let parts: Vec<&str> = target_path.split('/').filter(|s| !s.is_empty()).collect();
         if parts.is_empty() {
             return Err("Empty target file path selector".to_string());
         }
 
         let data_root = resolve_data_directory_headless();
-        let ticker_upper = self.ticker.to_uppercase();
         let filename = parts.last().unwrap_or(&"");
 
         let mut folder_variants = vec![parts[0].to_string()];
@@ -85,10 +83,8 @@ impl WorkspaceDataLoader {
             None => return Err(format!("Filing nodes missing. Scanned variants: [{}]", tried_paths.join(", "))),
         };
 
-        // Standard operational system direct IO stream read (Extremely efficient)
-        let bytes = fs::read(&valid_path).map_err(|e| format!("IO failure on {}: {}", valid_path.display(), e))?;
-
-        Ok(bytes)
+        // 🎯 OS FILE READ (Stateless)
+        fs::read(&valid_path).map_err(|e| format!("IO failure on {}: {}", valid_path.display(), e))
     }
 
     pub fn load_json_struct<T: serde::de::DeserializeOwned>(&self, target_path: &str) -> Result<T, String> {

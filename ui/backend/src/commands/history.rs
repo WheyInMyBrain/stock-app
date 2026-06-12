@@ -29,8 +29,3 @@ pub fn get_history_tickers_headless() -> Vec<String> {
     tickers.sort();
     tickers
 }
-
-#[tauri::command]
-pub fn get_history_tickers() -> Result<Vec<String>, String> {
-    Ok(get_history_tickers_headless())
-}

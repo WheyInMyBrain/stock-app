@@ -264,17 +264,3 @@ pub async fn bse_endpoint_run(symbol: &str, endpoint: BseEndpoint) -> Result<(),
 
     execute_bse_strategy(&clients.bse, symbol, &meta.bse_code, endpoint, &data_dir, false).await
 }
-
-pub fn initialize_go_daemon() {}
-
-pub async fn run_sidecar_downloader(
-    _data_dir_override: Option<String>,
-    extra_args: Option<Vec<String>>, 
-) -> Result<String, String> {
-    let flags = extra_args.ok_or_else(|| "Missing execution flags".to_string())?;
-    run_sidecar_downloader_native(flags).await
-}
-
-pub async fn run_sidecar_downloader_native(_extra_args: Vec<String>) -> Result<String, String> {
-    Ok("Signal received".to_string())
-}

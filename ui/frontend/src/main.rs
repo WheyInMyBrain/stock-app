@@ -102,15 +102,21 @@ fn main() -> eframe::Result<()> {
     // =========================================================================
     runtime.spawn(async move {
         let mut loop_timer = tokio::time::interval(Duration::from_secs(2));
+        
+        let mut last_known_tickers: Vec<String> = Vec::new();
+        
         loop {
             loop_timer.tick().await;
             
             let fresh_tickers = core::data_manager::DataManager::load_active_tickers();
             
-            if tx.send(fresh_tickers).await.is_err() {
-                break; 
+            if fresh_tickers != last_known_tickers {
+                last_known_tickers = fresh_tickers.clone();
+                if tx.send(fresh_tickers).await.is_err() {
+                    break; 
+                }
+                thread_ctx.request_repaint();
             }
-            thread_ctx.request_repaint();
         }
     });
 
@@ -118,6 +124,8 @@ fn main() -> eframe::Result<()> {
     native_options.viewport = egui::ViewportBuilder::default()
         .with_title("Stock App")
         .with_inner_size([1100.0, 700.0]);
+
+    native_options.renderer = eframe::Renderer::Wgpu;
 
     eframe::run_native(
         "NativeTradingTerminal",
