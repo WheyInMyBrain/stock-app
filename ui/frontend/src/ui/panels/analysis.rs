@@ -70,32 +70,48 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
     let mut master_rows = Vec::with_capacity(years.len());
     let mut extracted_values = Vec::with_capacity(years.len());
     
-    // Prefix determines which tab-isolated assumptions to fetch
     let prefix = match storage_slot_key {
         "dcf_metadata" => "dcf",
         "ddm_metadata" => "ddm",
         _ => "rem",
     };
+
+    let mut base_rows: Vec<AnalysisMetadataRow> = Vec::new();
+    backend::commands::memory_pool::with_active_table::<Vec<AnalysisMetadataRow>, _, _>("analysis_metadata", |table| {
+        base_rows = table.clone();
+    });
+    let base_map: HashMap<i32, AnalysisMetadataRow> = base_rows.into_iter().map(|r| (r.year, r)).collect();
     
     {
         for &year in years {
-            // Wait until every box in this column has a value (even if the value is 0)
             if !check_column_filled(year, tab_metrics) {
                 continue;
             }
 
-            // CRITICAL FIX: Explicitly send localized assumptions to backend engine memory pool
-            let rf = access_cell_state(year, &format!("{}_rf", prefix), "7.0".to_string());
-            let rm = access_cell_state(year, &format!("{}_rm", prefix), "12.0".to_string());
-            let g  = access_cell_state(year, &format!("{}_g", prefix), "10.0".to_string());
-            let gn = access_cell_state(year, &format!("{}_gn", prefix), "4.5".to_string());
+            // Extract the baseline assumptions directly from the backend row
+            let baseline_rf = base_map.get(&year).map(|r| r.dynamic_rf.to_string()).unwrap_or_else(|| "7.0".to_string());
+            let baseline_rm = base_map.get(&year).map(|r| r.dynamic_rm.to_string()).unwrap_or_else(|| "12.0".to_string());
+            let baseline_gn = base_map.get(&year).map(|r| r.dcf_gn.to_string()).unwrap_or_else(|| "4.5".to_string());
+            
+            // Route the correct growth metric based on the active tab
+            let baseline_g = base_map.get(&year).map(|r| {
+                match prefix {
+                    "dcf" => r.dcf_g.to_string(),
+                    "ddm" => r.ddm_g.to_string(),
+                    _ => r.rem_g.to_string(),
+                }
+            }).unwrap_or_else(|| "10.0".to_string());
 
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rf", storage_slot_key, year), vec![rf]);
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rm", storage_slot_key, year), vec![rm]);
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_g", storage_slot_key, year), vec![g]);
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_gn", storage_slot_key, year), vec![gn]);
+            let rf = access_cell_state(year, &format!("{}_rf", prefix), baseline_rf);
+            let rm = access_cell_state(year, &format!("{}_rm", prefix), baseline_rm);
+            let g  = access_cell_state(year, &format!("{}_g", prefix), baseline_g);
+            let gn = access_cell_state(year, &format!("{}_gn", prefix), baseline_gn);
 
-            // Base firm fundamentals remain global
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rf", storage_slot_key, year), vec![rf.clone()]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rm", storage_slot_key, year), vec![rm.clone()]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_g", storage_slot_key, year), vec![g.clone()]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_gn", storage_slot_key, year), vec![gn.clone()]);
+
             extracted_values.push((
                 year,
                 access_cell_state(year, "eps", "".to_string()),
@@ -111,11 +127,13 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
                 access_cell_state(year, "interest", "".to_string()),
                 access_cell_state(year, "tax_rate", "0.25".to_string()),
                 access_cell_state(year, "beta", "1.0".to_string()),
+                rf, rm, g, gn,
             ));
         }
     }
 
-    for (year, eps, pat, div, eq, debt, ocf, capex_out, capex_in, shares, pbt, interest, tax, beta) in extracted_values {
+    for (year, eps, pat, div, eq, debt, ocf, capex_out, capex_in, shares, pbt, interest, tax, beta, rf, rm, g, gn) in extracted_values {
+        // Parse numericals safely
         let basic_eps = eps.parse::<f64>().unwrap_or(0.0);
         let net_profit_after_tax = pat.parse::<i64>().unwrap_or(0);
         let dividend_paid = div.parse::<i64>().unwrap_or(0);
@@ -133,11 +151,22 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
         let net_capex = capex_outflow + capex_inflow;
         let free_cash_flow = operating_cash_flow + net_capex;
 
+        // Reconstruct the row maintaining all original and dynamic data
+        let base_row = base_map.get(&year);
+        
         master_rows.push(AnalysisMetadataRow {
             year, dividend_paid, basic_eps, net_profit_after_tax, total_equity, total_debt,
             operating_cash_flow, capex_outflow, capex_inflow, net_capex, free_cash_flow,
             outstanding_shares, profit_before_tax, finance_interest_expense, effective_tax_rate,
-            nse_beta: user_beta, bse_beta: user_beta,
+            nse_beta: user_beta, bse_beta: user_beta, 
+            
+            average_beta: base_row.map(|r| r.average_beta).unwrap_or(1.0),
+            dynamic_rf: rf.parse::<f64>().unwrap_or(7.0),
+            dynamic_rm: rm.parse::<f64>().unwrap_or(12.0),
+            dcf_g: if prefix == "dcf" { g.parse::<f64>().unwrap_or(10.0) } else { base_row.map(|r| r.dcf_g).unwrap_or(10.0) },
+            ddm_g: if prefix == "ddm" { g.parse::<f64>().unwrap_or(5.0) } else { base_row.map(|r| r.ddm_g).unwrap_or(5.0) },
+            rem_g: if prefix == "rem" { g.parse::<f64>().unwrap_or(8.0) } else { base_row.map(|r| r.rem_g).unwrap_or(8.0) },
+            dcf_gn: gn.parse::<f64>().unwrap_or(4.5),
         });
     }
     backend::commands::memory_pool::store_parsed_table(storage_slot_key, master_rows);
@@ -267,7 +296,7 @@ fn render_valuation_matrix_subtab(
     results_slot: &'static str,
     price_row_label: &'static str,
     metrics: Vec<(&'static str, &'static str, Box<dyn Fn(&AnalysisMetadataRow) -> String>)>,
-    assumptions: Vec<(&'static str, &'static str, &'static str)>,
+    assumptions: Vec<(&'static str, &'static str, Box<dyn Fn(&AnalysisMetadataRow) -> String>)>,
 ) {
     let tab_metrics: Vec<&str> = metrics.iter().map(|m| m.1).chain(assumptions.iter().map(|a| a.1)).collect();
     let (years, analysis_map) = get_valuation_maps(&tab_metrics, metadata_slot);
@@ -291,9 +320,10 @@ fn render_valuation_matrix_subtab(
                 }
 
                 ui.separator(); for _ in &years { ui.separator(); } ui.end_row();
+                
                 render_horizontal_grid_header(ui, &years, "USER FORECAST ASSUMPTIONS");
-                for (label, id, default_val) in &assumptions {
-                    render_editable_row(ui, &years, label, id, metadata_slot, |_| default_val.to_string(), &analysis_map);
+                for (label, id, fallback_extractor) in &assumptions {
+                    render_editable_row(ui, &years, label, id, metadata_slot, fallback_extractor, &analysis_map);
                 }
 
                 ui.separator(); for _ in &years { ui.separator(); } ui.end_row();
@@ -337,11 +367,10 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DcfTab {
                 ("Finance Interest Expenses", "interest", Box::new(|r| r.finance_interest_expense.to_string())),
             ],
             vec![
-                // CRITICAL FIX: Prefix models so DCF growth doesn't override DDM growth
-                ("Risk Free Rate (Rf)", "dcf_rf", "7.0"),
-                ("Expected Market Return (Rm)", "dcf_rm", "12.0"),
-                ("Stage 1 Forecast Growth (g)", "dcf_g", "10.0"),
-                ("Terminal Perpetuity Growth (gn)", "dcf_gn", "4.5"),
+                ("Risk Free Rate (Rf)", "dcf_rf", Box::new(|r| r.dynamic_rf.to_string())),
+                ("Expected Market Return (Rm)", "dcf_rm", Box::new(|r| r.dynamic_rm.to_string())),
+                ("Stage 1 Forecast Growth (g)", "dcf_g", Box::new(|r| r.dcf_g.to_string())),
+                ("Terminal Perpetuity Growth (gn)", "dcf_gn", Box::new(|r| r.dcf_gn.to_string())),
             ]
         );
     }
@@ -360,9 +389,9 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DdmTab {
                 ("Outstanding Shares", "shares", Box::new(|r| r.outstanding_shares.to_string())),
             ],
             vec![
-                ("Risk Free Rate (Rf)", "ddm_rf", "7.0"),
-                ("Market Premium (Rm)", "ddm_rm", "12.0"),
-                ("Dividend Growth Rate (g)", "ddm_g", "5.0"),
+                ("Risk Free Rate (Rf)", "ddm_rf", Box::new(|r| r.dynamic_rf.to_string())),
+                ("Market Premium (Rm)", "ddm_rm", Box::new(|r| r.dynamic_rm.to_string())),
+                ("Dividend Growth Rate (g)", "ddm_g", Box::new(|r| r.ddm_g.to_string())),
             ]
         );
     }
@@ -382,9 +411,9 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for ResidualIncomeTab {
                 ("Outstanding Shares", "shares", Box::new(|r| r.outstanding_shares.to_string())),
             ],
             vec![
-                ("Risk Free Rate (Rf)", "rem_rf", "7.0"),
-                ("Market Return (Rm)", "rem_rm", "12.0"),
-                ("Income Growth Forecast (g)", "rem_g", "8.0"),
+                ("Risk Free Rate (Rf)", "rem_rf", Box::new(|r| r.dynamic_rf.to_string())),
+                ("Market Return (Rm)", "rem_rm", Box::new(|r| r.dynamic_rm.to_string())),
+                ("Income Growth Forecast (g)", "rem_g", Box::new(|r| r.rem_g.to_string())),
             ]
         );
     }

@@ -20,7 +20,14 @@ pub struct AnalysisMetadataRow {
     pub finance_interest_expense: i64,
     pub effective_tax_rate: f64,
     pub nse_beta: f64,
-    pub bse_beta: f64
+    pub bse_beta: f64,
+    pub dynamic_rf: f64,
+    pub average_beta: f64,
+    pub dynamic_rm: f64,
+    pub dcf_g: f64,
+    pub dcf_gn: f64,
+    pub ddm_g: f64,
+    pub rem_g: f64,
 }
 
 #[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
@@ -900,6 +907,112 @@ fn calculate_empirical_betas(
     (final_nse_beta, final_bse_beta)
 }
 
+fn parse_march_rf_timeline(rf_json: &serde_json::Value) -> HashMap<i32, f64> {
+    let mut rf_timeline = HashMap::new();
+
+    if let Some(data_array) = rf_json.get("data").and_then(|d| d.as_array()) {
+        for entry in data_array {
+            // Read the date field to check if it's March
+            if let Some(date_str) = entry.get("rowDate").and_then(|s| s.as_str()) {
+                if date_str.starts_with("Mar") {
+                    // Extract the year directly from the text string or timestamp
+                    if let Some(year_str) = date_str.split_whitespace().nth(1) {
+                        if let Ok(year) = year_str.parse::<i32>() {
+                            if let Some(close_str) = entry.get("last_close").and_then(|v| v.as_str()) {
+                                if let Ok(close_val) = close_str.parse::<f64>() {
+                                    rf_timeline.insert(year, close_val);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    rf_timeline
+}
+
+// =========================================================================
+// ISOLATED MACRO GDP PARSER
+// =========================================================================
+fn extract_historical_avg_gdp(loader: &crate::database::WorkspaceDataLoader) -> f64 {
+    let raw_json: serde_json::Value = match loader.load_json_struct("misc_gdp-data/endpoint-metadata.json") {
+        Ok(json) => json,
+        Err(_) => return 5.5, // Fallback historical average if file is missing
+    };
+
+    let mut recent_gdp_values = Vec::new();
+
+    if let Some(values_obj) = raw_json
+        .pointer("/indicators/NGDP_RPCH/values/IND")
+        .and_then(|v| v.as_object()) 
+    {
+        for (_year_str, val) in values_obj {
+            if let Some(gdp_num) = val.as_f64() {
+                recent_gdp_values.push(gdp_num);
+            }
+        }
+    }
+
+    if recent_gdp_values.is_empty() {
+        return 5.5;
+    }
+
+    // Sort to get the most recent years (assuming keys are chronological or we just take the last 10)
+    // A simple average of the whole dataset or the last decade works. We'll average everything found.
+    let sum: f64 = recent_gdp_values.iter().sum();
+    let count = recent_gdp_values.len() as f64;
+    
+    sum / count
+}
+
+// =========================================================================
+// ISOLATED BACKEND ASSUMPTIONS ENGINE
+// =========================================================================
+fn compute_dynamic_assumptions(
+    nse_beta: f64, 
+    bse_beta: f64,
+    dynamic_rf: f64,
+    historical_gdp: f64,
+    net_profit: i64,
+    total_equity: i64,
+    dividend_paid: i64,
+) -> (f64, f64, f64, f64, f64, f64) {
+    let average_beta = if nse_beta > 0.0 && bse_beta > 0.0 {
+        (nse_beta + bse_beta) / 2.0
+    } else if nse_beta > 0.0 {
+        nse_beta
+    } else if bse_beta > 0.0 {
+        bse_beta
+    } else {
+        1.0
+    };
+
+    let dynamic_rm = dynamic_rf + 5.5;
+
+    // EXACT RULE IMPLEMENTED: Minimum(Historical Real GDP, Dynamic Rf - 1.0%)
+    // Clamped at a floor of 2.0% to prevent negative perpetual growth in severe recessions
+    let dynamic_rf_spread = dynamic_rf - 1.0;
+    let dcf_gn = dynamic_rf_spread.min(historical_gdp).max(2.0);
+
+    let mut sustainable_g = 10.0; 
+    
+    if total_equity > 0 && net_profit > 0 {
+        let roe = (net_profit as f64) / (total_equity as f64);
+        let payout_ratio = ((dividend_paid as f64) / (net_profit as f64)).clamp(0.0, 1.0);
+        let retention_ratio = 1.0 - payout_ratio;
+        
+        let calculated_g = roe * retention_ratio * 100.0;
+        sustainable_g = calculated_g.clamp(2.0, 20.0);
+    }
+
+    let dcf_g = sustainable_g;
+    let ddm_g = sustainable_g;
+    let rem_g = sustainable_g;
+
+    (average_beta, dynamic_rm, dcf_g, dcf_gn, ddm_g, rem_g)
+}
+
 // =========================================================================
 // 6. MAIN ORCHESTRATION PIPELINE
 // =========================================================================
@@ -927,10 +1040,11 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
 
     let nifty_chart_value = loader.load_json_struct::<serde_json::Value>("nse_historical-index-chart-data/NIFTY_50.json").ok();
     
-    // Sensex is raw text payload due to custom #@# delimiters
     let sensex_chart_string = loader.load_raw_bytes("bse_sensex-historical-data/endpoint-metadata.json")
         .ok()
         .and_then(|bytes| String::from_utf8(bytes).ok());
+
+    let rf_macro_json = loader.load_json_struct::<serde_json::Value>("misc_investing-historical-monthly/endpoint-metadata.json").ok();
 
     // -----------------------------------------------------------------
     // STEP A: PROCESSING HISTORICAL CHART DAILY DATA MATRIX
@@ -943,6 +1057,14 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
         nifty_chart_value,
         sensex_chart_string
     );
+
+    let rf_timeline_map = if let Some(ref json_payload) = rf_macro_json {
+        parse_march_rf_timeline(json_payload)
+    } else {
+        HashMap::new()
+    };
+
+    let macro_historical_gdp = extract_historical_avg_gdp(&loader);
 
     // -----------------------------------------------------------------
     // STEP B: RUN EXTRACTS ACROSS INTERACTIVE STATEMENT LEDGERS
@@ -1083,6 +1205,18 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
         let effective_tax_rate = nse_tax_rate.get(&year).copied().filter(|&v| v != 0.0)
             .or_else(|| bse_tax_rate.get(&year).copied().filter(|&v| v != 0.0))
             .or_else(|| ocr_tax_rate_ledger.get(&year).copied()).unwrap_or(0.0);
+        
+        let dynamic_rf = rf_timeline_map.get(&year).copied().unwrap_or(7.0);
+
+        let (average_beta, dynamic_rm, dcf_g, dcf_gn, ddm_g, rem_g) = compute_dynamic_assumptions(
+            calculated_nse_beta, 
+            calculated_bse_beta,
+            dynamic_rf,
+            macro_historical_gdp,
+            net_profit_after_tax as i64,
+            total_equity as i64,
+            dividend_paid as i64,
+        );
 
         meta_analysis.push(AnalysisMetadataRow {
             year,
@@ -1102,6 +1236,13 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
             effective_tax_rate,
             nse_beta: calculated_nse_beta,
             bse_beta: calculated_bse_beta,
+            dynamic_rf,
+            average_beta,
+            dynamic_rm,
+            dcf_g,
+            dcf_gn,
+            ddm_g,
+            rem_g,
         });
     }
 

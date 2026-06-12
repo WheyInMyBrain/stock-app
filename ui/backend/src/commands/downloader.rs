@@ -3,6 +3,7 @@ use tokio::sync::OnceCell;
 use downloader::client::{NseClient, BseClient};
 use downloader::nse::{execute_nse_strategy, api::NseEndpoint};
 use downloader::bse::{execute_bse_strategy, api::BseEndpoint};
+use downloader::misc::{execute_misc_batch, api::MiscEndpoint};
 use downloader::search::load_stock_metadata;
 use crate::commands::data_dir::resolve_data_directory_headless;
 
@@ -129,6 +130,11 @@ pub async fn run_all(symbol: &str, nse_run: bool, bse_run: bool) -> Result<(), S
         BseEndpoint::IntegratedFinanceData,
     ];
 
+    let misc_suite = vec![
+        MiscEndpoint::InvestingHistoricalMonthly,
+        MiscEndpoint::GdpData,
+    ];
+
     {
         let mut guard = ACTIVE_INGESTION.lock().unwrap();
         *guard = Some(IngestionProgress {
@@ -227,7 +233,11 @@ pub async fn run_all(symbol: &str, nse_run: bool, bse_run: bool) -> Result<(), S
         }
     };
 
-    tokio::join!(nse_task, bse_task);
+    let misc_task = async {
+        execute_misc_batch(symbol, misc_suite, &data_dir, 2).await;
+    };
+
+    tokio::join!(nse_task, bse_task, misc_task);
 
     {
         let mut guard = ACTIVE_INGESTION.lock().unwrap();
