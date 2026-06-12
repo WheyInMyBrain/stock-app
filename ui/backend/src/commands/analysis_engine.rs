@@ -37,12 +37,16 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
         let year = row.year;
 
         // Establish default fallback string matrices for macro assumptions
-        let mut rf = "7.0".to_string();
-        let mut rm = "12.0".to_string();
-        let mut g = "10.0".to_string();
-        let mut gn = "4.5".to_string();
+        let mut rf = row.dynamic_rf.to_string();
+        let mut rm = row.dynamic_rm.to_string();
+        let mut g = match tab_key {
+            "DCF" => row.dcf_g.to_string(),
+            "DDM" => row.ddm_g.to_string(),
+            _ => row.rem_g.to_string(),
+        };
+        let mut gn = row.dcf_gn.to_string();
 
-        // 4. Safely pull standalone macro parameters from their isolated string slice sub-pools
+        // Now override ONLY if the user has provided a custom override in the memory pool
         memory_pool::with_active_table::<Vec<String>, _, _>(&format!("{}_{}_rf", metadata_key, year), |t| {
             if !t.is_empty() { rf = t[0].clone(); }
         });
