@@ -1,4 +1,5 @@
 // analysis/src/lib.rs
+pub mod on_fly;
 pub mod runner;
 pub mod data_loader;
 pub mod dcf;

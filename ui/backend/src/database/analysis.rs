@@ -23,6 +23,19 @@ pub struct AnalysisMetadataRow {
     pub bse_beta: f64
 }
 
+#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ValuationResultRow {
+    pub year: i32,
+    // Intermediate Derived Metrics
+    pub calculated_tax_rate: f64,
+    pub calculated_kd: f64,
+    pub calculated_ke: f64,
+    pub calculated_wacc: f64,
+    pub intrinsic_value: f64,
+    pub status_ok: bool,
+    pub error_msg: String,
+}
+
 // =========================================================================
 // 1. UTILITY PARSING HELPERS
 // =========================================================================
