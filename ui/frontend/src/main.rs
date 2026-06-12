@@ -116,7 +116,7 @@ fn main() -> eframe::Result<()> {
 
     let mut native_options = eframe::NativeOptions::default();
     native_options.viewport = egui::ViewportBuilder::default()
-        .with_title("High-Speed Financial Terminal Canvas")
+        .with_title("Stock App")
         .with_inner_size([1100.0, 700.0]);
 
     eframe::run_native(

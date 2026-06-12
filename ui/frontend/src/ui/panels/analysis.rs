@@ -52,11 +52,10 @@ fn check_column_filled(year: i32, metrics: &[&str]) -> bool {
 }
 
 // =========================================================================
-// BACKEND COORDINATION INGESTION WRITER
+// BACKEND COORDINATION INGESTION WRITER & RETRIEVAL HELPERS
 // =========================================================================
 pub fn push_interactive_state_to_pool(years: &[i32], storage_slot_key: &str) {
     let mut master_rows = Vec::with_capacity(years.len());
-
     let mut extracted_values = Vec::with_capacity(years.len());
     {
         for &year in years {
@@ -98,26 +97,12 @@ pub fn push_interactive_state_to_pool(years: &[i32], storage_slot_key: &str) {
         let free_cash_flow = operating_cash_flow + net_capex;
 
         master_rows.push(AnalysisMetadataRow {
-            year,
-            dividend_paid,
-            basic_eps,
-            net_profit_after_tax,
-            total_equity,
-            total_debt,
-            operating_cash_flow,
-            capex_outflow,
-            capex_inflow,
-            net_capex,
-            free_cash_flow,
-            outstanding_shares,
-            profit_before_tax,
-            finance_interest_expense,
-            effective_tax_rate,
-            nse_beta: user_beta,
-            bse_beta: user_beta,
+            year, dividend_paid, basic_eps, net_profit_after_tax, total_equity, total_debt,
+            operating_cash_flow, capex_outflow, capex_inflow, net_capex, free_cash_flow,
+            outstanding_shares, profit_before_tax, finance_interest_expense, effective_tax_rate,
+            nse_beta: user_beta, bse_beta: user_beta,
         });
     }
-
     backend::commands::memory_pool::store_parsed_table(storage_slot_key, master_rows);
 }
 
@@ -159,7 +144,6 @@ fn get_valuation_maps(tab_metrics: &[&str], storage_slot_key: &str) -> (Vec<i32>
 }
 
 fn render_workspace_chart(ui: &mut Ui, result_slot_key: &str, value_label: &'static str) {
-    // 1. Fetch historical pricing points
     let mut entries: Vec<backend::database::analysis::HistoricalChartRow> = Vec::new();
     backend::commands::memory_pool::with_active_table::<Vec<backend::database::analysis::HistoricalChartRow>, _, _>("historical_chart_data", |table| {
         entries = table.clone();
@@ -167,29 +151,21 @@ fn render_workspace_chart(ui: &mut Ui, result_slot_key: &str, value_label: &'sta
 
     let mut nse_points = Vec::with_capacity(entries.len());
     let mut bse_points = Vec::with_capacity(entries.len());
-
     for row in entries {
         if let Some(val) = row.nse_close { nse_points.push(GenericChartPoint { date: row.date.clone(), value: val }); }
         if let Some(val) = row.bse_close { bse_points.push(GenericChartPoint { date: row.date, value: val }); }
     }
 
-    // 2. Fetch computed intrinsic values specifically for the active tab context
     let mut val_rows: Vec<ValuationResultRow> = Vec::new();
     backend::commands::memory_pool::with_active_table::<Vec<ValuationResultRow>, _, _>(result_slot_key, |table| {
         val_rows = table.clone();
     });
 
-    // Ensure intrinsic points render left-to-right
     val_rows.sort_by(|a, b| a.year.cmp(&b.year));
-
     let mut val_points = Vec::with_capacity(val_rows.len());
     for res in val_rows {
         if res.status_ok && res.intrinsic_value > 0.0 {
-            // Append explicit March 31st financial year-end to map to generic string dates correctly
-            val_points.push(GenericChartPoint { 
-                date: format!("{}-03-31", res.year), 
-                value: res.intrinsic_value 
-            });
+            val_points.push(GenericChartPoint { date: format!("{}-03-31", res.year), value: res.intrinsic_value });
         }
     }
 
@@ -197,17 +173,9 @@ fn render_workspace_chart(ui: &mut Ui, result_slot_key: &str, value_label: &'sta
         GenericChartLine { label: "NSE", color: Color32::from_rgb(250, 210, 50), stroke_width: 1.5, points: nse_points },
         GenericChartLine { label: "BSE", color: Color32::from_rgb(50, 150, 250), stroke_width: 1.5, points: bse_points },
     ];
-
-    // Overlay dynamically calculated intrinsic value line if data exists for this specific model
     if !val_points.is_empty() {
-        chart_lines.push(GenericChartLine { 
-            label: value_label, 
-            color: Color32::from_rgb(50, 220, 120), // Standout Green
-            stroke_width: 2.0, 
-            points: val_points 
-        });
+        chart_lines.push(GenericChartLine { label: value_label, color: Color32::from_rgb(50, 220, 120), stroke_width: 2.0, points: val_points });
     }
-
     paint_abstract_chart_canvas(ui, &chart_lines);
 }
 
@@ -249,231 +217,135 @@ fn render_editable_row(
     ui.end_row();
 }
 
+/// Generic grid-rendering abstraction shared symmetrically by all subtabs
+fn render_valuation_matrix_subtab(
+    ui: &mut Ui,
+    title: &'static str,
+    scroll_id: &'static str,
+    grid_id: &'static str,
+    metadata_slot: &'static str,
+    results_slot: &'static str,
+    price_row_label: &'static str,
+    metrics: Vec<(&'static str, &'static str, Box<dyn Fn(&AnalysisMetadataRow) -> String>)>,
+    assumptions: Vec<(&'static str, &'static str, &'static str)>,
+) {
+    let tab_metrics: Vec<&str> = metrics.iter().map(|m| m.1).chain(assumptions.iter().map(|a| a.1)).collect();
+    let (years, analysis_map) = get_valuation_maps(&tab_metrics, metadata_slot);
+    if years.is_empty() { return; }
+
+    let mut results_rows: Vec<ValuationResultRow> = Vec::new();
+    backend::commands::memory_pool::with_active_table::<Vec<ValuationResultRow>, _, _>(results_slot, |table| {
+        results_rows = table.clone();
+    });
+    let results_map: HashMap<i32, ValuationResultRow> = results_rows.into_iter().map(|r| (r.year, r)).collect();
+
+    ui.label(egui::RichText::new(title).strong().size(14.0));
+    ui.add_space(4.0);
+
+    egui::ScrollArea::both().id_source(scroll_id).show(ui, |ui| {
+        egui::Frame::none().stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 45, 45))).show(ui, |ui| {
+            egui::Grid::new(grid_id).striped(true).spacing(egui::vec2(12.0, 8.0)).show(ui, |ui| {
+                render_horizontal_grid_header(ui, &years, "METRICS FROM INTEGRATED PARQUETS");
+                for (label, id, fallback_extractor) in &metrics {
+                    render_editable_row(ui, &years, label, id, metadata_slot, fallback_extractor, &analysis_map);
+                }
+
+                ui.separator(); for _ in &years { ui.separator(); } ui.end_row();
+                render_horizontal_grid_header(ui, &years, "USER FORECAST ASSUMPTIONS");
+                for (label, id, default_val) in &assumptions {
+                    render_editable_row(ui, &years, label, id, metadata_slot, |_| default_val.to_string(), &analysis_map);
+                }
+
+                ui.separator(); for _ in &years { ui.separator(); } ui.end_row();
+                ui.label(egui::RichText::new(price_row_label).strong().color(Color32::from_rgb(50, 220, 120)));
+                for yr in &years {
+                    if let Some(res) = results_map.get(yr) {
+                        if res.status_ok {
+                            ui.label(egui::RichText::new(format!("₹ {:.2}", res.intrinsic_value)).strong().color(Color32::GREEN));
+                        } else {
+                            ui.label(egui::RichText::new(&res.error_msg).weak().color(Color32::LIGHT_RED));
+                        }
+                    } else {
+                        ui.label(egui::RichText::new("0").weak());
+                    }
+                }
+                ui.end_row();
+            });
+        });
+    });
+}
+
 // =========================================================================
-// DISCOUNTED CASH FLOW SUBTAB - ZERO COPY DIRECT RAM DISPLAY ONLY
+// TAB IMPLEMENTATIONS
 // =========================================================================
 struct DcfTab;
 impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DcfTab {
     fn id(&self) -> usize { 0 }
     fn label(&self) -> &'static str { "Discounted Cash Flow (DCF)" }
-    fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { 
-        render_workspace_chart(ui, "dcf_calculated_results", "DCF Value"); 
-    }
-    
+    fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { render_workspace_chart(ui, "dcf_calculated_results", "DCF Value"); }
     fn render_bottom(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) {
-        let metrics = vec!["ocf", "capex_out", "debt", "eq", "shares", "pbt", "pat", "interest", "rf", "rm", "g", "gn"];
-        let (years, analysis_map) = get_valuation_maps(&metrics, "dcf_metadata");
-        if years.is_empty() { return; }
-
-        let mut results_rows: Vec<ValuationResultRow> = Vec::new();
-        backend::commands::memory_pool::with_active_table::<Vec<ValuationResultRow>, _, _>("dcf_calculated_results", |table| {
-            results_rows = table.clone();
-        });
-        let results_map: HashMap<i32, ValuationResultRow> = results_rows.into_iter().map(|r| (r.year, r)).collect();
-
-        ui.label(egui::RichText::new("Discounted Cash Flow (TABULAR CALCULATOR)").strong().size(14.0));
-        ui.add_space(4.0);
-
-        egui::ScrollArea::both().id_source("dcf_matrix_scroll_area").show(ui, |ui| {
-            egui::Frame::none().stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 45, 45))).show(ui, |ui| {
-                egui::Grid::new("dcf_matrix_grid").striped(true).spacing(egui::vec2(12.0, 8.0)).show(ui, |ui| {
-                    render_horizontal_grid_header(ui, &years, "METRICS FROM INTEGRATED PARQUETS");
-                    
-                    render_editable_row(ui, &years, "Operating Cash Flow (OCF)", "ocf", "dcf_metadata", |r| r.operating_cash_flow.to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Capital Expenditure (Capex)", "capex_out", "dcf_metadata", |r| r.capex_outflow.to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Total Debt (Short + Long Term)", "debt", "dcf_metadata", |r| r.total_debt.to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Total Shareholder Equity", "eq", "dcf_metadata", |r| r.total_equity.to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Outstanding Shares Count", "shares", "dcf_metadata", |r| r.outstanding_shares.to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Profit Before Tax (PBT)", "pbt", "dcf_metadata", |r| r.profit_before_tax.to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Net Profit After Tax (PAT)", "pat", "dcf_metadata", |r| r.net_profit_after_tax.to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Finance Interest Expenses", "interest", "dcf_metadata", |r| r.finance_interest_expense.to_string(), &analysis_map);
-
-                    ui.separator(); for _ in &years { ui.separator(); } ui.end_row();
-                    render_horizontal_grid_header(ui, &years, "USER FORECAST ASSUMPTIONS");
-                    
-                    render_editable_row(ui, &years, "Risk Free Rate (Rf)", "rf", "dcf_metadata", |_| "7.0".to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Expected Market Return (Rm)", "rm", "dcf_metadata", |_| "12.0".to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Stage 1 Forecast Growth (g)", "g", "dcf_metadata", |_| "10.0".to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Terminal Perpetuity Growth (gn)", "gn", "dcf_metadata", |_| "4.5".to_string(), &analysis_map);
-
-                    ui.separator(); for _ in &years { ui.separator(); } ui.end_row();
-                    render_horizontal_grid_header(ui, &years, "DERIVED DATA ATTRIBUTES ENGINE");
-
-                    ui.label("Calculated Marginal Tax Rate");
-                    for yr in &years {
-                        if let Some(res) = results_map.get(yr) {
-                            ui.label(format!("{:.1}%", res.calculated_tax_rate * 100.0));
-                        } else {
-                            ui.label(egui::RichText::new("0").weak());
-                        }
-                    }
-                    ui.end_row();
-
-                    ui.label("Calculated Pre-tax Cost of Debt (Kd)");
-                    for yr in &years {
-                        if let Some(res) = results_map.get(yr) {
-                            ui.label(format!("{:.2}%", res.calculated_kd * 100.0));
-                        } else {
-                            ui.label(egui::RichText::new("0").weak());
-                        }
-                    }
-                    ui.end_row();
-
-                    ui.label("Calculated Cost of Equity (Ke)");
-                    for yr in &years {
-                        if let Some(res) = results_map.get(yr) {
-                            ui.label(format!("{:.2}%", res.calculated_ke * 100.0));
-                        } else {
-                            ui.label(egui::RichText::new("0").weak());
-                        }
-                    }
-                    ui.end_row();
-
-                    ui.label(egui::RichText::new("Calculated WACC").strong().color(Color32::from_rgb(50, 160, 240)));
-                    for yr in &years {
-                        if let Some(res) = results_map.get(yr) {
-                            ui.label(format!("{:.2}%", res.calculated_wacc * 100.0));
-                        } else {
-                            ui.label(egui::RichText::new("0").weak());
-                        }
-                    }
-                    ui.end_row();
-
-                    ui.label(egui::RichText::new("DCF INTRINSIC VALUE").strong().color(Color32::from_rgb(50, 220, 120)));
-                    for yr in &years {
-                        if let Some(res) = results_map.get(yr) {
-                            if res.status_ok {
-                                ui.label(egui::RichText::new(format!("₹ {:.2}", res.intrinsic_value)).strong().color(Color32::GREEN));
-                            } else {
-                                ui.label(egui::RichText::new(&res.error_msg).weak().color(Color32::LIGHT_RED));
-                            }
-                        } else {
-                            ui.label(egui::RichText::new("0").weak());
-                        }
-                    }
-                    ui.end_row();
-                });
-            });
-        });
+        render_valuation_matrix_subtab(
+            ui, "Discounted Cash Flow (TABULAR CALCULATOR)", "dcf_matrix_scroll_area", "dcf_matrix_grid", "dcf_metadata", "dcf_calculated_results", "DCF INTRINSIC VALUE",
+            vec![
+                ("Operating Cash Flow (OCF)", "ocf", Box::new(|r| r.operating_cash_flow.to_string())),
+                ("Capital Expenditure (Capex)", "capex_out", Box::new(|r| r.capex_outflow.to_string())),
+                ("Total Debt (Short + Long Term)", "debt", Box::new(|r| r.total_debt.to_string())),
+                ("Total Shareholder Equity", "eq", Box::new(|r| r.total_equity.to_string())),
+                ("Outstanding Shares Count", "shares", Box::new(|r| r.outstanding_shares.to_string())),
+                ("Profit Before Tax (PBT)", "pbt", Box::new(|r| r.profit_before_tax.to_string())),
+                ("Net Profit After Tax (PAT)", "pat", Box::new(|r| r.net_profit_after_tax.to_string())),
+                ("Finance Interest Expenses", "interest", Box::new(|r| r.finance_interest_expense.to_string())),
+            ],
+            vec![
+                ("Risk Free Rate (Rf)", "rf", "7.0"),
+                ("Expected Market Return (Rm)", "rm", "12.0"),
+                ("Stage 1 Forecast Growth (g)", "g", "10.0"),
+                ("Terminal Perpetuity Growth (gn)", "gn", "4.5"),
+            ]
+        );
     }
 }
 
-// =========================================================================
-// DIVIDEND DISCOUNT MODEL SUBTAB - ZERO COPY DIRECT RAM DISPLAY ONLY
-// =========================================================================
 struct DdmTab;
 impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DdmTab {
     fn id(&self) -> usize { 1 }
     fn label(&self) -> &'static str { "Dividend Discount Model (DDM)" }
-    fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { 
-        render_workspace_chart(ui, "ddm_calculated_results", "DDM Value"); 
-    }
-
+    fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { render_workspace_chart(ui, "ddm_calculated_results", "DDM Value"); }
     fn render_bottom(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) {
-        let metrics = vec!["div", "shares", "rf", "rm", "g"];
-        let (years, analysis_map) = get_valuation_maps(&metrics, "ddm_metadata");
-        if years.is_empty() { return; }
-
-        let mut results_rows: Vec<ValuationResultRow> = Vec::new();
-        backend::commands::memory_pool::with_active_table::<Vec<ValuationResultRow>, _, _>("ddm_calculated_results", |table| {
-            results_rows = table.clone();
-        });
-        let results_map: HashMap<i32, ValuationResultRow> = results_rows.into_iter().map(|r| (r.year, r)).collect();
-
-        ui.label(egui::RichText::new("Dividend Discount Model (Gordon Growth Grid)").strong().size(14.0));
-        ui.add_space(4.0);
-
-        egui::ScrollArea::both().id_source("ddm_matrix_scroll_area").show(ui, |ui| {
-            egui::Frame::none().stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 45, 45))).show(ui, |ui| {
-                egui::Grid::new("ddm_matrix_grid").striped(true).spacing(egui::vec2(12.0, 8.0)).show(ui, |ui| {
-                    render_horizontal_grid_header(ui, &years, "METRICS / STATIONS");
-                    render_editable_row(ui, &years, "Aggregate Dividend Paid", "div", "ddm_metadata", |r| r.dividend_paid.to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Outstanding Shares", "shares", "ddm_metadata", |r| r.outstanding_shares.to_string(), &analysis_map);
-                    
-                    ui.separator(); for _ in &years { ui.separator(); } ui.end_row();
-
-                    render_editable_row(ui, &years, "Risk Free Rate (Rf)", "rf", "ddm_metadata", |_| "7.0".to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Market Premium (Rm)", "rm", "ddm_metadata", |_| "12.0".to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Dividend Growth Rate (g)", "g", "ddm_metadata", |_| "5.0".to_string(), &analysis_map);
-
-                    ui.separator(); for _ in &years { ui.separator(); } ui.end_row();
-
-                    ui.label(egui::RichText::new("DDM Intrinsic Share Price").strong().color(Color32::from_rgb(50, 220, 120)));
-                    for yr in &years {
-                        if let Some(res) = results_map.get(yr) {
-                            if res.status_ok {
-                                ui.label(egui::RichText::new(format!("₹ {:.2}", res.intrinsic_value)).strong().color(Color32::GREEN));
-                            } else {
-                                ui.label(egui::RichText::new(&res.error_msg).weak().color(Color32::LIGHT_RED));
-                            }
-                        } else {
-                            ui.label(egui::RichText::new("0").weak());
-                        }
-                    }
-                    ui.end_row();
-                });
-            });
-        });
+        render_valuation_matrix_subtab(
+            ui, "Dividend Discount Model (Gordon Growth Grid)", "ddm_matrix_scroll_area", "ddm_matrix_grid", "ddm_metadata", "ddm_calculated_results", "DDM Intrinsic Share Price",
+            vec![
+                ("Aggregate Dividend Paid", "div", Box::new(|r| r.dividend_paid.to_string())),
+                ("Outstanding Shares", "shares", Box::new(|r| r.outstanding_shares.to_string())),
+            ],
+            vec![
+                ("Risk Free Rate (Rf)", "rf", "7.0"),
+                ("Market Premium (Rm)", "rm", "12.0"),
+                ("Dividend Growth Rate (g)", "g", "5.0"),
+            ]
+        );
     }
 }
 
-// =========================================================================
-// RESIDUAL INCOME MODEL SUBTAB - ZERO COPY DIRECT RAM DISPLAY ONLY
-// =========================================================================
 struct ResidualIncomeTab;
 impl AbstractSubTab<Vec<AnalysisMetadataRow>> for ResidualIncomeTab {
     fn id(&self) -> usize { 2 }
     fn label(&self) -> &'static str { "Residual Income" }
-    fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { 
-        render_workspace_chart(ui, "rem_calculated_results", "RIM Value"); 
-    }
-
+    fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { render_workspace_chart(ui, "rem_calculated_results", "RIM Value"); }
     fn render_bottom(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) {
-        let metrics = vec!["eq", "pat", "shares", "rf", "rm", "g"];
-        let (years, analysis_map) = get_valuation_maps(&metrics, "rem_metadata");
-        if years.is_empty() { return; }
-
-        let mut results_rows: Vec<ValuationResultRow> = Vec::new();
-        backend::commands::memory_pool::with_active_table::<Vec<ValuationResultRow>, _, _>("rem_calculated_results", |table| {
-            results_rows = table.clone();
-        });
-        let results_map: HashMap<i32, ValuationResultRow> = results_rows.into_iter().map(|r| (r.year, r)).collect();
-
-        ui.label(egui::RichText::new("Residual Income Multi-Stage Capital Table").strong().size(14.0));
-        ui.add_space(4.0);
-
-        egui::ScrollArea::both().id_source("ri_matrix_scroll_area").show(ui, |ui| {
-            egui::Frame::none().stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 45, 45))).show(ui, |ui| {
-                egui::Grid::new("ri_matrix_grid").striped(true).spacing(egui::vec2(12.0, 8.0)).show(ui, |ui| {
-                    render_horizontal_grid_header(ui, &years, "METRICS / STATIONS");
-                    render_editable_row(ui, &years, "Total Equity (Book Value)", "eq", "rem_metadata", |r| r.total_equity.to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Net Profit After Tax (PAT)", "pat", "rem_metadata", |r| r.net_profit_after_tax.to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Outstanding Shares", "shares", "rem_metadata", |r| r.outstanding_shares.to_string(), &analysis_map);
-
-                    ui.separator(); for _ in &years { ui.separator(); } ui.end_row();
-
-                    render_editable_row(ui, &years, "Risk Free Rate (Rf)", "rf", "rem_metadata", |_| "7.0".to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Market Return (Rm)", "rm", "rem_metadata", |_| "12.0".to_string(), &analysis_map);
-                    render_editable_row(ui, &years, "Income Growth Forecast (g)", "g", "rem_metadata", |_| "8.0".to_string(), &analysis_map);
-
-                    ui.separator(); for _ in &years { ui.separator(); } ui.end_row();
-
-                    ui.label(egui::RichText::new("RIM Intrinsic Share Price").strong().color(Color32::from_rgb(50, 220, 120)));
-                    for yr in &years {
-                        if let Some(res) = results_map.get(yr) {
-                            if res.status_ok {
-                                ui.label(egui::RichText::new(format!("₹ {:.2}", res.intrinsic_value)).strong().color(Color32::GREEN));
-                            } else {
-                                ui.label(egui::RichText::new(&res.error_msg).weak().color(Color32::LIGHT_RED));
-                            }
-                        } else {
-                            ui.label(egui::RichText::new("0").weak());
-                        }
-                    }
-                    ui.end_row();
-                });
-            });
-        });
+        render_valuation_matrix_subtab(
+            ui, "Residual Income Multi-Stage Capital Table", "ri_matrix_scroll_area", "ri_matrix_grid", "rem_metadata", "rem_calculated_results", "RIM Intrinsic Share Price",
+            vec![
+                ("Total Equity (Book Value)", "eq", Box::new(|r| r.total_equity.to_string())),
+                ("Net Profit After Tax (PAT)", "pat", Box::new(|r| r.net_profit_after_tax.to_string())),
+                ("Outstanding Shares", "shares", Box::new(|r| r.outstanding_shares.to_string())),
+            ],
+            vec![
+                ("Risk Free Rate (Rf)", "rf", "7.0"),
+                ("Market Return (Rm)", "rm", "12.0"),
+                ("Income Growth Forecast (g)", "g", "8.0"),
+            ]
+        );
     }
 }
 
