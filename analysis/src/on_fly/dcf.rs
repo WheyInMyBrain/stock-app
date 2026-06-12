@@ -34,20 +34,32 @@ pub fn calculate_dcf_on_fly(
     gn_str: &str,
 ) -> DcfCalculatedOutput {
     let mut output = DcfCalculatedOutput {
-        calculated_tax_rate: 0.25,
-        calculated_kd: 0.085,
-        calculated_ke: 0.10,
-        calculated_wacc: 0.10,
+        calculated_tax_rate: 0.0,
+        calculated_kd: 0.0,
+        calculated_ke: 0.0,
+        calculated_wacc: 0.0,
         intrinsic_value: 0.0,
         status_ok: false,
         error_msg: String::new(),
     };
 
-    // 1. Parse Input Assumptions safely from strings
-    let rf = rf_str.parse::<f64>().unwrap_or(7.0) / 100.0;
-    let rm = rm_str.parse::<f64>().unwrap_or(12.0) / 100.0;
-    let growth = g_str.parse::<f64>().unwrap_or(10.0) / 100.0;
-    let term_g = gn_str.parse::<f64>().unwrap_or(4.5) / 100.0;
+    // 1. Strict Input Parsing (NO ASSUMPTIONS, NO UNWRAP_OR)
+    let rf = match rf_str.parse::<f64>() {
+        Ok(v) => v / 100.0,
+        Err(_) => { output.error_msg = "Bad Rf".to_string(); return output; }
+    };
+    let rm = match rm_str.parse::<f64>() {
+        Ok(v) => v / 100.0,
+        Err(_) => { output.error_msg = "Bad Rm".to_string(); return output; }
+    };
+    let growth = match g_str.parse::<f64>() {
+        Ok(v) => v / 100.0,
+        Err(_) => { output.error_msg = "Bad g".to_string(); return output; }
+    };
+    let term_g = match gn_str.parse::<f64>() {
+        Ok(v) => v / 100.0,
+        Err(_) => { output.error_msg = "Bad gn".to_string(); return output; }
+    };
 
     // 2. Map Metrics out of Input Block
     let ocf = metrics.operating_cash_flow as f64;
@@ -63,17 +75,34 @@ pub fn calculate_dcf_on_fly(
     
     let beta = (metrics.nse_beta + metrics.bse_beta) / 2.0;
 
-    // 3. Derived Corporate Financial Math Formulas
-    let tax_rate = if pbt > 0.0 && pbt > pat { (pbt - pat) / pbt } else { 0.25 };
-    let kd = if debt > 0.0 { interest / debt } else { 0.085 };
+    // 3. Derived Corporate Financial Math Formulas (STRICT LITERALLY)
+    
+    // Factual reality: If a company makes no profit before tax, they don't pay effective income tax.
+    let tax_rate = if pbt > 0.0 && pbt > pat { (pbt - pat) / pbt } else { 0.0 };
+    
+    // Cost of Debt calculation
+    let kd = if debt > 0.0 { 
+        let calculated_kd = interest / debt;
+        // If interest is massively higher than total debt, the data is structurally broken.
+        if calculated_kd > 1.0 {
+            output.error_msg = "Int > Debt".to_string();
+            return output;
+        }
+        calculated_kd
+    } else { 
+        // Factual reality: A company with no debt has a 0% cost of debt. 
+        0.0 
+    };
+
     let ke = rf + beta * (rm - rf);
     
     let total_cap = debt + equity;
-    let wacc = if total_cap > 0.0 {
-        (ke * (equity / total_cap)) + ((kd * (1.0 - tax_rate)) * (debt / total_cap))
-    } else {
-        ke
-    };
+    if total_cap <= 0.0 {
+        output.error_msg = "Cap <= 0".to_string();
+        return output;
+    }
+
+    let wacc = (ke * (equity / total_cap)) + ((kd * (1.0 - tax_rate)) * (debt / total_cap));
 
     output.calculated_tax_rate = tax_rate;
     output.calculated_kd = kd;
@@ -82,15 +111,15 @@ pub fn calculate_dcf_on_fly(
 
     // 4. Invariant Financial Guardrails Validation
     if shares <= 0.0 {
-        output.error_msg = "Missing Shares".to_string();
+        output.error_msg = "No Shares".to_string();
         return output;
     }
     if base_fcf <= 0.0 {
-        output.error_msg = "Negative FCF".to_string();
+        output.error_msg = "FCF <= 0".to_string();
         return output;
     }
     if wacc <= term_g {
-        output.error_msg = "WACC < gn".to_string();
+        output.error_msg = "WACC <= gn".to_string();
         return output;
     }
 

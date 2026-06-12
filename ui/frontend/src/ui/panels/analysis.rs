@@ -68,7 +68,6 @@ fn check_column_filled(year: i32, metrics: &[&str]) -> bool {
 // =========================================================================
 pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], storage_slot_key: &str) {
     let mut master_rows = Vec::with_capacity(years.len());
-    let mut extracted_values = Vec::with_capacity(years.len());
     
     let prefix = match storage_slot_key {
         "dcf_metadata" => "dcf",
@@ -82,93 +81,91 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
     });
     let base_map: HashMap<i32, AnalysisMetadataRow> = base_rows.into_iter().map(|r| (r.year, r)).collect();
     
-    {
-        for &year in years {
-            if !check_column_filled(year, tab_metrics) {
-                continue;
-            }
-
-            // Extract the baseline assumptions directly from the backend row
-            let baseline_rf = base_map.get(&year).map(|r| r.dynamic_rf.to_string()).unwrap_or_else(|| "7.0".to_string());
-            let baseline_rm = base_map.get(&year).map(|r| r.dynamic_rm.to_string()).unwrap_or_else(|| "12.0".to_string());
-            let baseline_gn = base_map.get(&year).map(|r| r.dcf_gn.to_string()).unwrap_or_else(|| "4.5".to_string());
-            
-            // Route the correct growth metric based on the active tab
-            let baseline_g = base_map.get(&year).map(|r| {
-                match prefix {
-                    "dcf" => r.dcf_g.to_string(),
-                    "ddm" => r.ddm_g.to_string(),
-                    _ => r.rem_g.to_string(),
-                }
-            }).unwrap_or_else(|| "10.0".to_string());
-
-            let rf = access_cell_state(year, &format!("{}_rf", prefix), baseline_rf);
-            let rm = access_cell_state(year, &format!("{}_rm", prefix), baseline_rm);
-            let g  = access_cell_state(year, &format!("{}_g", prefix), baseline_g);
-            let gn = access_cell_state(year, &format!("{}_gn", prefix), baseline_gn);
-
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rf", storage_slot_key, year), vec![rf.clone()]);
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rm", storage_slot_key, year), vec![rm.clone()]);
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_g", storage_slot_key, year), vec![g.clone()]);
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_gn", storage_slot_key, year), vec![gn.clone()]);
-
-            extracted_values.push((
-                year,
-                access_cell_state(year, "eps", "".to_string()),
-                access_cell_state(year, "pat", "".to_string()),
-                access_cell_state(year, "div", "".to_string()),
-                access_cell_state(year, "eq", "".to_string()),
-                access_cell_state(year, "debt", "".to_string()),    
-                access_cell_state(year, "ocf", "".to_string()),
-                access_cell_state(year, "capex_out", "".to_string()),
-                access_cell_state(year, "capex_in", "".to_string()),
-                access_cell_state(year, "shares", "".to_string()),
-                access_cell_state(year, "pbt", "".to_string()),
-                access_cell_state(year, "interest", "".to_string()),
-                access_cell_state(year, "tax_rate", "0.25".to_string()),
-                access_cell_state(year, "beta", "1.0".to_string()),
-                rf, rm, g, gn,
-            ));
+    for &year in years {
+        if !check_column_filled(year, tab_metrics) {
+            continue;
         }
-    }
 
-    for (year, eps, pat, div, eq, debt, ocf, capex_out, capex_in, shares, pbt, interest, tax, beta, rf, rm, g, gn) in extracted_values {
-        // Parse numericals safely
-        let basic_eps = eps.parse::<f64>().unwrap_or(0.0);
-        let net_profit_after_tax = pat.parse::<i64>().unwrap_or(0);
-        let dividend_paid = div.parse::<i64>().unwrap_or(0);
-        let total_equity = eq.parse::<i64>().unwrap_or(0);
-        let total_debt = debt.parse::<i64>().unwrap_or(0);    
-        let operating_cash_flow = ocf.parse::<i64>().unwrap_or(0);
-        let capex_outflow = capex_out.parse::<i64>().unwrap_or(0);
-        let capex_inflow = capex_in.parse::<i64>().unwrap_or(0);
-        let outstanding_shares = shares.parse::<i64>().unwrap_or(0);
-        let profit_before_tax = pbt.parse::<i64>().unwrap_or(0);
-        let finance_interest_expense = interest.parse::<i64>().unwrap_or(0);
-        let effective_tax_rate = tax.parse::<f64>().unwrap_or(0.25);
-        let user_beta = beta.parse::<f64>().unwrap_or(1.0);
-        
-        let net_capex = capex_outflow + capex_inflow;
+        // NO ASSUMPTIONS: We strictly require the backend to have provided the data.
+        // If the backend has no data for this year, we skip the calculation entirely.
+        let base_row = match base_map.get(&year) {
+            Some(row) => row,
+            None => continue, 
+        };
+
+        // 1. EXTRACT ASSUMPTIONS (Fallback to the pristine backend row, not magic numbers)
+        let baseline_g_str = match prefix {
+            "dcf" => base_row.dcf_g.to_string(),
+            "ddm" => base_row.ddm_g.to_string(),
+            _ => base_row.rem_g.to_string(),
+        };
+
+        let rf = access_cell_state(year, &format!("{}_rf", prefix), base_row.dynamic_rf.to_string());
+        let rm = access_cell_state(year, &format!("{}_rm", prefix), base_row.dynamic_rm.to_string());
+        let gn = access_cell_state(year, &format!("{}_gn", prefix), base_row.dcf_gn.to_string());
+        let g  = access_cell_state(year, &format!("{}_g", prefix), baseline_g_str);
+
+        // Store assumptions separately for the UI memory pools
+        backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rf", storage_slot_key, year), vec![rf.clone()]);
+        backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rm", storage_slot_key, year), vec![rm.clone()]);
+        backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_g", storage_slot_key, year), vec![g.clone()]);
+        backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_gn", storage_slot_key, year), vec![gn.clone()]);
+
+        // 2. EXTRACT EDITABLE METRICS (Again, fallback to the backend row)
+        let ext_ocf = access_cell_state(year, "ocf", base_row.operating_cash_flow.to_string());
+        let ext_capex_out = access_cell_state(year, "capex_out", base_row.capex_outflow.to_string());
+        let ext_debt = access_cell_state(year, "debt", base_row.total_debt.to_string());
+        let ext_eq = access_cell_state(year, "eq", base_row.total_equity.to_string());
+        let ext_shares = access_cell_state(year, "shares", base_row.outstanding_shares.to_string());
+        let ext_pbt = access_cell_state(year, "pbt", base_row.profit_before_tax.to_string());
+        let ext_pat = access_cell_state(year, "pat", base_row.net_profit_after_tax.to_string());
+        let ext_interest = access_cell_state(year, "interest", base_row.finance_interest_expense.to_string());
+        let ext_div = access_cell_state(year, "div", base_row.dividend_paid.to_string());
+
+        let operating_cash_flow = ext_ocf.parse::<i64>().unwrap_or(base_row.operating_cash_flow);
+        let capex_outflow = ext_capex_out.parse::<i64>().unwrap_or(base_row.capex_outflow);
+        let total_debt = ext_debt.parse::<i64>().unwrap_or(base_row.total_debt);
+        let total_equity = ext_eq.parse::<i64>().unwrap_or(base_row.total_equity);
+        let outstanding_shares = ext_shares.parse::<i64>().unwrap_or(base_row.outstanding_shares);
+        let profit_before_tax = ext_pbt.parse::<i64>().unwrap_or(base_row.profit_before_tax);
+        let net_profit_after_tax = ext_pat.parse::<i64>().unwrap_or(base_row.net_profit_after_tax);
+        let finance_interest_expense = ext_interest.parse::<i64>().unwrap_or(base_row.finance_interest_expense);
+        let dividend_paid = ext_div.parse::<i64>().unwrap_or(base_row.dividend_paid);
+
+        // 3. RECOMPUTE LOCAL DEPENDENCIES
+        let net_capex = capex_outflow + base_row.capex_inflow;
         let free_cash_flow = operating_cash_flow + net_capex;
 
-        // Reconstruct the row maintaining all original and dynamic data
-        let base_row = base_map.get(&year);
-        
+        // 4. RECONSTRUCT THE MASTER ROW STRICTLY USING BACKEND FACTS
         master_rows.push(AnalysisMetadataRow {
-            year, dividend_paid, basic_eps, net_profit_after_tax, total_equity, total_debt,
-            operating_cash_flow, capex_outflow, capex_inflow, net_capex, free_cash_flow,
-            outstanding_shares, profit_before_tax, finance_interest_expense, effective_tax_rate,
-            nse_beta: user_beta, bse_beta: user_beta, 
+            year, 
+            dividend_paid, 
+            basic_eps: base_row.basic_eps, 
+            net_profit_after_tax, 
+            total_equity, 
+            total_debt,
+            operating_cash_flow, 
+            capex_outflow, 
+            capex_inflow: base_row.capex_inflow, 
+            net_capex, 
+            free_cash_flow,
+            outstanding_shares, 
+            profit_before_tax, 
+            finance_interest_expense, 
+            effective_tax_rate: base_row.effective_tax_rate,
+            nse_beta: base_row.nse_beta, 
+            bse_beta: base_row.bse_beta, 
+            average_beta: base_row.average_beta,
             
-            average_beta: base_row.map(|r| r.average_beta).unwrap_or(1.0),
-            dynamic_rf: rf.parse::<f64>().unwrap_or(7.0),
-            dynamic_rm: rm.parse::<f64>().unwrap_or(12.0),
-            dcf_g: if prefix == "dcf" { g.parse::<f64>().unwrap_or(10.0) } else { base_row.map(|r| r.dcf_g).unwrap_or(10.0) },
-            ddm_g: if prefix == "ddm" { g.parse::<f64>().unwrap_or(5.0) } else { base_row.map(|r| r.ddm_g).unwrap_or(5.0) },
-            rem_g: if prefix == "rem" { g.parse::<f64>().unwrap_or(8.0) } else { base_row.map(|r| r.rem_g).unwrap_or(8.0) },
-            dcf_gn: gn.parse::<f64>().unwrap_or(4.5),
+            dynamic_rf: rf.parse::<f64>().unwrap_or(base_row.dynamic_rf),
+            dynamic_rm: rm.parse::<f64>().unwrap_or(base_row.dynamic_rm),
+            dcf_g: if prefix == "dcf" { g.parse::<f64>().unwrap_or(base_row.dcf_g) } else { base_row.dcf_g },
+            ddm_g: if prefix == "ddm" { g.parse::<f64>().unwrap_or(base_row.ddm_g) } else { base_row.ddm_g },
+            rem_g: if prefix == "rem" { g.parse::<f64>().unwrap_or(base_row.rem_g) } else { base_row.rem_g },
+            dcf_gn: gn.parse::<f64>().unwrap_or(base_row.dcf_gn),
         });
     }
+
     backend::commands::memory_pool::store_parsed_table(storage_slot_key, master_rows);
 }
 
