@@ -11,11 +11,23 @@ use backend::database::analysis::{AnalysisMetadataRow, ValuationResultRow};
 #[derive(Clone)]
 struct DynamicCellCache {
     inputs: HashMap<(i32, String), String>,
+    last_edit_time: f64,
+    pending_recalc: bool,
+    pending_dcf_update: bool,
+    pending_ddm_update: bool,
+    pending_rem_update: bool,
 }
 
 impl Default for DynamicCellCache {
     fn default() -> Self {
-        Self { inputs: HashMap::new() }
+        Self { 
+            inputs: HashMap::new(),
+            last_edit_time: 0.0,
+            pending_recalc: false,
+            pending_dcf_update: false,
+            pending_ddm_update: false,
+            pending_rem_update: false,
+        }
     }
 }
 
@@ -43,8 +55,8 @@ fn check_column_filled(year: i32, metrics: &[&str]) -> bool {
         let cache_ref = cache.borrow();
         for &metric in metrics {
             if let Some(val) = cache_ref.inputs.get(&(year, metric.to_string())) {
-                let trimmed = val.trim();
-                if trimmed.is_empty() || trimmed == "0" || trimmed == "0.0" { return false; }
+                // "0" is a mathematically valid entry. We only reject literal empty strings.
+                if val.trim().is_empty() { return false; }
             } else { return false; }
         }
         true
@@ -54,24 +66,49 @@ fn check_column_filled(year: i32, metrics: &[&str]) -> bool {
 // =========================================================================
 // BACKEND COORDINATION INGESTION WRITER & RETRIEVAL HELPERS
 // =========================================================================
-pub fn push_interactive_state_to_pool(years: &[i32], storage_slot_key: &str) {
+pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], storage_slot_key: &str) {
     let mut master_rows = Vec::with_capacity(years.len());
     let mut extracted_values = Vec::with_capacity(years.len());
+    
+    // Prefix determines which tab-isolated assumptions to fetch
+    let prefix = match storage_slot_key {
+        "dcf_metadata" => "dcf",
+        "ddm_metadata" => "ddm",
+        _ => "rem",
+    };
+    
     {
         for &year in years {
+            // Wait until every box in this column has a value (even if the value is 0)
+            if !check_column_filled(year, tab_metrics) {
+                continue;
+            }
+
+            // CRITICAL FIX: Explicitly send localized assumptions to backend engine memory pool
+            let rf = access_cell_state(year, &format!("{}_rf", prefix), "7.0".to_string());
+            let rm = access_cell_state(year, &format!("{}_rm", prefix), "12.0".to_string());
+            let g  = access_cell_state(year, &format!("{}_g", prefix), "10.0".to_string());
+            let gn = access_cell_state(year, &format!("{}_gn", prefix), "4.5".to_string());
+
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rf", storage_slot_key, year), vec![rf]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rm", storage_slot_key, year), vec![rm]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_g", storage_slot_key, year), vec![g]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_gn", storage_slot_key, year), vec![gn]);
+
+            // Base firm fundamentals remain global
             extracted_values.push((
                 year,
-                access_cell_state(year, "eps", "0".to_string()),
-                access_cell_state(year, "pat", "0".to_string()),
-                access_cell_state(year, "div", "0".to_string()),
-                access_cell_state(year, "eq", "0".to_string()),
-                access_cell_state(year, "debt", "0".to_string()),    
-                access_cell_state(year, "ocf", "0".to_string()),
-                access_cell_state(year, "capex_out", "0".to_string()),
-                access_cell_state(year, "capex_in", "0".to_string()),
-                access_cell_state(year, "shares", "0".to_string()),
-                access_cell_state(year, "pbt", "0".to_string()),
-                access_cell_state(year, "interest", "0".to_string()),
+                access_cell_state(year, "eps", "".to_string()),
+                access_cell_state(year, "pat", "".to_string()),
+                access_cell_state(year, "div", "".to_string()),
+                access_cell_state(year, "eq", "".to_string()),
+                access_cell_state(year, "debt", "".to_string()),    
+                access_cell_state(year, "ocf", "".to_string()),
+                access_cell_state(year, "capex_out", "".to_string()),
+                access_cell_state(year, "capex_in", "".to_string()),
+                access_cell_state(year, "shares", "".to_string()),
+                access_cell_state(year, "pbt", "".to_string()),
+                access_cell_state(year, "interest", "".to_string()),
                 access_cell_state(year, "tax_rate", "0.25".to_string()),
                 access_cell_state(year, "beta", "1.0".to_string()),
             ));
@@ -199,19 +236,22 @@ fn render_editable_row(
 ) {
     ui.label(label);
     for yr in years {
-        let fallback = analysis_map.get(yr).map(&extract_fallback).unwrap_or_else(|| "0".to_string());
+        let fallback = analysis_map.get(yr).map(&extract_fallback).unwrap_or_else(|| "".to_string());
         let mut value_buffer = access_cell_state(*yr, metric_id, fallback);
+        
         if ui.add(egui::TextEdit::singleline(&mut value_buffer).desired_width(80.0)).changed() {
             update_cell_state(*yr, metric_id, value_buffer);
-            push_interactive_state_to_pool(years, storage_slot_key);
-
-            let active_ticker = ACTIVE_PANEL_TICKER.with(|ticker| ticker.borrow().clone());
-            let calculation_tag = match storage_slot_key {
-                "dcf_metadata" => "DCF",
-                "ddm_metadata" => "DDM",
-                _ => "REM",
-            };
-            backend::commands::analysis_engine::compute_on_fly_valuation(&active_ticker, calculation_tag);
+            
+            INTERACTIVE_CELL_CACHE.with(|cache| {
+                let mut c = cache.borrow_mut();
+                c.last_edit_time = ui.input(|i| i.time);
+                c.pending_recalc = true;
+                match storage_slot_key {
+                    "dcf_metadata" => c.pending_dcf_update = true,
+                    "ddm_metadata" => c.pending_ddm_update = true,
+                    _ => c.pending_rem_update = true,
+                }
+            });
         }
     }
     ui.end_row();
@@ -297,10 +337,11 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DcfTab {
                 ("Finance Interest Expenses", "interest", Box::new(|r| r.finance_interest_expense.to_string())),
             ],
             vec![
-                ("Risk Free Rate (Rf)", "rf", "7.0"),
-                ("Expected Market Return (Rm)", "rm", "12.0"),
-                ("Stage 1 Forecast Growth (g)", "g", "10.0"),
-                ("Terminal Perpetuity Growth (gn)", "gn", "4.5"),
+                // CRITICAL FIX: Prefix models so DCF growth doesn't override DDM growth
+                ("Risk Free Rate (Rf)", "dcf_rf", "7.0"),
+                ("Expected Market Return (Rm)", "dcf_rm", "12.0"),
+                ("Stage 1 Forecast Growth (g)", "dcf_g", "10.0"),
+                ("Terminal Perpetuity Growth (gn)", "dcf_gn", "4.5"),
             ]
         );
     }
@@ -319,9 +360,9 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DdmTab {
                 ("Outstanding Shares", "shares", Box::new(|r| r.outstanding_shares.to_string())),
             ],
             vec![
-                ("Risk Free Rate (Rf)", "rf", "7.0"),
-                ("Market Premium (Rm)", "rm", "12.0"),
-                ("Dividend Growth Rate (g)", "g", "5.0"),
+                ("Risk Free Rate (Rf)", "ddm_rf", "7.0"),
+                ("Market Premium (Rm)", "ddm_rm", "12.0"),
+                ("Dividend Growth Rate (g)", "ddm_g", "5.0"),
             ]
         );
     }
@@ -341,9 +382,9 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for ResidualIncomeTab {
                 ("Outstanding Shares", "shares", Box::new(|r| r.outstanding_shares.to_string())),
             ],
             vec![
-                ("Risk Free Rate (Rf)", "rf", "7.0"),
-                ("Market Return (Rm)", "rm", "12.0"),
-                ("Income Growth Forecast (g)", "g", "8.0"),
+                ("Risk Free Rate (Rf)", "rem_rf", "7.0"),
+                ("Market Return (Rm)", "rem_rm", "12.0"),
+                ("Income Growth Forecast (g)", "rem_g", "8.0"),
             ]
         );
     }
@@ -365,7 +406,14 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
     });
 
     if initial_sync_triggered {
-        INTERACTIVE_CELL_CACHE.with(|cache| cache.borrow_mut().inputs.clear());
+        INTERACTIVE_CELL_CACHE.with(|cache| {
+            let mut c = cache.borrow_mut();
+            c.inputs.clear();
+            c.pending_dcf_update = false;
+            c.pending_ddm_update = false;
+            c.pending_rem_update = false;
+            c.pending_recalc = false;
+        });
 
         let mut base_data: Vec<AnalysisMetadataRow> = Vec::new();
         backend::commands::memory_pool::with_active_table::<Vec<AnalysisMetadataRow>, _, _>("analysis_metadata", |table| {
@@ -392,4 +440,50 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
     draw_nav_canvas_orchestrator(
         ui, active_ticker, "analysis_metadata", "VALUATION WORKSPACE", "analysis_active_tab_id", tabs
     );
+
+    let mut trigger_debounced_recalc = false;
+    let mut run_dcf = false;
+    let mut run_ddm = false;
+    let mut run_rem = false;
+
+    INTERACTIVE_CELL_CACHE.with(|cache| {
+        let mut c = cache.borrow_mut();
+        if c.pending_recalc {
+            if ui.input(|i| i.time) - c.last_edit_time > 0.5 { // 500 ms wait
+                c.pending_recalc = false;
+                trigger_debounced_recalc = true;
+                
+                run_dcf = c.pending_dcf_update;
+                run_ddm = c.pending_ddm_update;
+                run_rem = c.pending_rem_update;
+                
+                c.pending_dcf_update = false;
+                c.pending_ddm_update = false;
+                c.pending_rem_update = false;
+            } else {
+                ui.ctx().request_repaint(); // Keep frame updates running until timer finishes
+            }
+        }
+    });
+
+    if trigger_debounced_recalc {
+        if run_dcf {
+            let metrics = vec!["ocf", "capex_out", "debt", "eq", "shares", "pbt", "pat", "interest", "dcf_rf", "dcf_rm", "dcf_g", "dcf_gn"];
+            let (years, _) = get_valuation_maps(&metrics, "dcf_metadata");
+            push_interactive_state_to_pool(&years, &metrics, "dcf_metadata");
+            backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "DCF");
+        }
+        if run_ddm {
+            let metrics = vec!["div", "shares", "ddm_rf", "ddm_rm", "ddm_g"];
+            let (years, _) = get_valuation_maps(&metrics, "ddm_metadata");
+            push_interactive_state_to_pool(&years, &metrics, "ddm_metadata");
+            backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "DDM");
+        }
+        if run_rem {
+            let metrics = vec!["eq", "pat", "shares", "rem_rf", "rem_rm", "rem_g"];
+            let (years, _) = get_valuation_maps(&metrics, "rem_metadata");
+            push_interactive_state_to_pool(&years, &metrics, "rem_metadata");
+            backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "REM");
+        }
+    }
 }

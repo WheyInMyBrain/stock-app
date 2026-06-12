@@ -113,10 +113,11 @@ fn process_ocr_income_statement(bytes: Vec<u8>) -> Result<(
         // -----------------------------------------------------------------
         // TRACK B: PROFIT BEFORE TAX (PBT) EXTRACTION
         // -----------------------------------------------------------------
-        let is_pbt = part.contains("profit") && part.contains("before") && part.contains("tax");
-        let is_pbt_excluded = part.contains("operating") || part.contains("exceptional");
-        
-        if is_pbt && !is_pbt_excluded && !rule.pbt_found && (c_num != 0.0 || p_num != 0.0) {
+        let part_lower = part.to_lowercase();
+        let has_profit_before = part_lower.contains("profit") && part_lower.contains("before");
+        let is_pbt = has_profit_before && (part_lower.contains("tax") || part_lower.contains("exceptional"));
+        let is_operating = part_lower.contains("operating");
+        if is_pbt && !is_operating && !rule.pbt_found && (c_num != 0.0 || p_num != 0.0) {
             rule.pbt_c = c_num;
             rule.pbt_p = p_num;
             rule.pbt_found = true;
@@ -228,6 +229,7 @@ fn process_ocr_cash_flow(
         if ctx_ca.get(i).unwrap_or("").to_lowercase() != "consolidated" { continue; }
         let file_name = match f_ca.get(i) { Some(f) => f.to_string(), None => continue };
         let yr = match extract_year_from_filename(&file_name) { Some(y) => y, None => continue };
+        
         let part = p_ca.get(i).unwrap_or("").to_lowercase();
         let idx = i as i64;
 
@@ -240,15 +242,14 @@ fn process_ocr_cash_flow(
         let c_num = c_raw.parse::<f64>().unwrap_or(0.0);
         let p_num = p_raw.parse::<f64>().unwrap_or(0.0);
 
-        // Parse Dividend Allocations (.last() emulation)
-        if (part.contains("dividend") && part.contains("paid")) || (part.contains("paid") && part.contains("dividend")) {
+        if part.contains("dividend") && part.contains("paid") {
             div_file_map.insert(file_name.clone(), (yr, c_num.abs(), p_num.abs()));
         }
 
-        // Parse Operating Cash Flow (.last() emulation)
-        if part.contains("net") && part.contains("cash") && part.contains("operating") ||
-           part.contains("cash") && part.contains("generated") && part.contains("operations") ||
-           part.contains("net") && part.contains("cash") && part.contains("flow") && part.contains("operating") {
+        // Parse Operating Cash Flow
+        if (part.contains("net") && part.contains("cash") && part.contains("operating")) ||
+        (part.contains("cash") && part.contains("generated") && part.contains("operations")) ||
+        (part.contains("net") && part.contains("cash") && part.contains("flow") && part.contains("operating")) {
             ocf_file_map.insert(file_name.clone(), (yr, c_num, p_num));
         }
     }
@@ -519,7 +520,7 @@ fn process_exchange_xbrl(
             
             "BorrowingsNoncurrent" | "BorrowingsCurrent" => rule.total_debt += val,
 
-            "ProfitLossBeforeTax" => rule.pbt = val,
+            "ProfitLossBeforeTax" | "ProfitBeforeTax" => rule.pbt = val,
             "FinanceCosts" => rule.finance_costs = val,
 
             "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities" |
