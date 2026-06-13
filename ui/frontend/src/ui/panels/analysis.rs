@@ -671,143 +671,146 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for MonteCarloTab {
             update_cell_state(target_year, "mc_lookback", "252".to_string());
         }
 
-        // Wrap the entire bottom panel in a vertical scroll area
         egui::ScrollArea::vertical()
-            .auto_shrink([false; 2])
+            .auto_shrink([true; 2]) 
             .show(ui, |ui| {
-                ui.vertical(|ui| {
-                    ui.heading("Stochastic Model Settings");
-                    ui.add_space(10.0);
+                // Force a maximum width limit to safeguard the workspace layout from expanding
+                ui.allocate_ui(ui.available_size(), |ui| {
+                    ui.vertical(|ui| {
+                        ui.heading("Stochastic Model Settings");
+                        ui.add_space(10.0);
 
-                    egui::Grid::new("mc_interactive_grid")
-                        .num_columns(3)
-                        .spacing([30.0, 14.0])
-                        .show(ui, |ui| {
-                            ui.label("Simulation Anchor Date:");
-                            let mut current_date = access_cell_state(target_year, "mc_date", String::new());
-                            let res_date = ui.add(egui::TextEdit::singleline(&mut current_date).desired_width(85.0));
-                            if res_date.changed() {
-                                update_cell_state(target_year, "mc_date", current_date.clone());
-                                INTERACTIVE_CELL_CACHE.with(|cache| {
-                                    let mut c = cache.borrow_mut();
-                                    c.pending_mc_update = true;
-                                    c.pending_recalc = true;
-                                    c.last_edit_time = ui.input(|i| i.time);
-                                });
-                            }
-                            ui.label("Historical cutoff boundary (YYYY-MM-DD)");
-                            ui.end_row();
+                        egui::Grid::new("mc_interactive_grid")
+                            .num_columns(3)
+                            .spacing([20.0, 14.0])
+                            .show(ui, |ui| {
+                                ui.label("Simulation Anchor Date:");
+                                let mut current_date = access_cell_state(target_year, "mc_date", String::new());
+                                let res_date = ui.add(egui::TextEdit::singleline(&mut current_date).desired_width(85.0));
+                                if res_date.changed() {
+                                    update_cell_state(target_year, "mc_date", current_date.clone());
+                                    INTERACTIVE_CELL_CACHE.with(|cache| {
+                                        let mut c = cache.borrow_mut();
+                                        c.pending_mc_update = true;
+                                        c.pending_recalc = true;
+                                        c.last_edit_time = ui.input(|i| i.time);
+                                    });
+                                }
+                                // Fix: Wrap description text cleanly to prevent horizontal layout bloating
+                                ui.add(egui::Label::new("Historical cutoff boundary (YYYY-MM-DD)").wrap(true));
+                                ui.end_row();
 
-                            ui.label("Historical Return Lookback Window:");
-                            let mut current_lookback = access_cell_state(target_year, "mc_lookback", String::new());
-                            let res_lookback = ui.add(egui::TextEdit::singleline(&mut current_lookback).desired_width(60.0));
-                            if res_lookback.changed() {
-                                update_cell_state(target_year, "mc_lookback", current_lookback.clone());
-                                INTERACTIVE_CELL_CACHE.with(|cache| {
-                                    let mut c = cache.borrow_mut();
-                                    c.pending_mc_update = true;
-                                    c.pending_recalc = true;
-                                    c.last_edit_time = ui.input(|i| i.time);
-                                });
-                            }
-                            ui.label("Trading days history context to harvest drift/volatility (e.g., 252, 504, 756)");
-                            ui.end_row();
+                                ui.label("Historical Lookback Window:");
+                                let mut current_lookback = access_cell_state(target_year, "mc_lookback", String::new());
+                                let res_lookback = ui.add(egui::TextEdit::singleline(&mut current_lookback).desired_width(60.0));
+                                if res_lookback.changed() {
+                                    update_cell_state(target_year, "mc_lookback", current_lookback.clone());
+                                    INTERACTIVE_CELL_CACHE.with(|cache| {
+                                        let mut c = cache.borrow_mut();
+                                        c.pending_mc_update = true;
+                                        c.pending_recalc = true;
+                                        c.last_edit_time = ui.input(|i| i.time);
+                                    });
+                                }
+                                ui.add(egui::Label::new("Trading days context to harvest parameters (e.g., 252, 756)").wrap(true));
+                                ui.end_row();
 
-                            ui.label("Forecast Horizon (Trading Days):");
-                            let mut current_days = access_cell_state(target_year, "mc_days", String::new());
-                            let res_days = ui.add(egui::TextEdit::singleline(&mut current_days).desired_width(60.0));
-                            if res_days.changed() {
-                                update_cell_state(target_year, "mc_days", current_days.clone());
-                                INTERACTIVE_CELL_CACHE.with(|cache| {
-                                    let mut c = cache.borrow_mut();
-                                    c.pending_mc_update = true;
-                                    c.pending_recalc = true;
-                                    c.last_edit_time = ui.input(|i| i.time);
-                                });
-                            }
-                            ui.label("Days forward to project (e.g., 30, 90, 252)");
-                            ui.end_row();
+                                ui.label("Forecast Horizon (Days):");
+                                let mut current_days = access_cell_state(target_year, "mc_days", String::new());
+                                let res_days = ui.add(egui::TextEdit::singleline(&mut current_days).desired_width(60.0));
+                                if res_days.changed() {
+                                    update_cell_state(target_year, "mc_days", current_days.clone());
+                                    INTERACTIVE_CELL_CACHE.with(|cache| {
+                                        let mut c = cache.borrow_mut();
+                                        c.pending_mc_update = true;
+                                        c.pending_recalc = true;
+                                        c.last_edit_time = ui.input(|i| i.time);
+                                    });
+                                }
+                                ui.add(egui::Label::new("Days forward to project (e.g., 30, 90, 252)").wrap(true));
+                                ui.end_row();
 
-                            ui.label("Total Paths to Simulate:");
-                            let mut current_sims = access_cell_state(target_year, "mc_sims", String::new());
-                            let res_sims = ui.add(egui::TextEdit::singleline(&mut current_sims).desired_width(60.0));
-                            if res_sims.changed() {
-                                update_cell_state(target_year, "mc_sims", current_sims.clone());
-                                INTERACTIVE_CELL_CACHE.with(|cache| {
-                                    let mut c = cache.borrow_mut();
-                                    c.pending_mc_update = true;
-                                    c.pending_recalc = true;
-                                    c.last_edit_time = ui.input(|i| i.time);
-                                });
-                            }
-                            ui.label("Iteration count (e.g., 1000, 5000, 10000)");
-                            ui.end_row();
+                                ui.label("Total Paths to Simulate:");
+                                let mut current_sims = access_cell_state(target_year, "mc_sims", String::new());
+                                let res_sims = ui.add(egui::TextEdit::singleline(&mut current_sims).desired_width(60.0));
+                                if res_sims.changed() {
+                                    update_cell_state(target_year, "mc_sims", current_sims.clone());
+                                    INTERACTIVE_CELL_CACHE.with(|cache| {
+                                        let mut c = cache.borrow_mut();
+                                        c.pending_mc_update = true;
+                                        c.pending_recalc = true;
+                                        c.last_edit_time = ui.input(|i| i.time);
+                                    });
+                                }
+                                ui.add(egui::Label::new("Iteration count (e.g., 1000, 5000, 10000)").wrap(true));
+                                ui.end_row();
 
-                            ui.label("Confidence Boundary Percentile (%):");
-                            let mut current_conf = access_cell_state(target_year, "mc_conf", String::new());
-                            let res_conf = ui.add(egui::TextEdit::singleline(&mut current_conf).desired_width(60.0));
-                            if res_conf.changed() {
-                                update_cell_state(target_year, "mc_conf", current_conf.clone());
-                                INTERACTIVE_CELL_CACHE.with(|cache| {
-                                    let mut c = cache.borrow_mut();
-                                    c.pending_mc_update = true;
-                                    c.pending_recalc = true;
-                                    c.last_edit_time = ui.input(|i| i.time);
-                                });
-                            }
-                            ui.label("Statistical threshold tail cutoff (e.g., 95, 99)");
-                            ui.end_row();
-                        });
-
-                    ui.add_space(16.0);
-                    ui.separator();
-                    ui.add_space(8.0);
-
-                    let mut is_dirty = false;
-                    let mut is_awaiting_debounce = false;
-                    INTERACTIVE_CELL_CACHE.with(|cache| {
-                        let c = cache.borrow();
-                        is_dirty = c.pending_mc_update;
-                        is_awaiting_debounce = c.pending_recalc;
-                    });
-
-                    if is_dirty && !is_awaiting_debounce {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.colored_label(Color32::from_rgb(250, 210, 50), "⏳ STATUS: Waiting for user typing to settle...");
-                        });
-                    } else if is_awaiting_debounce {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.colored_label(Color32::from_rgb(50, 150, 250), "⚡ ENGINE: Spawning parallel Rayon threads, running calculations...");
-                        });
-                        ui.ctx().request_repaint(); 
-                    } else {
-                        let mut summary_rows: Vec<backend::database::analysis::MonteCarloResultSummary> = Vec::new();
-                        backend::commands::memory_pool::with_active_table::<Vec<backend::database::analysis::MonteCarloResultSummary>, _, _>("monte_carlo_summary_results", |table| {
-                            summary_rows = table.clone();
-                        });
-
-                        if let Some(summary) = summary_rows.first() {
-                            if summary.status_ok {
-                                ui.colored_label(Color32::from_rgb(50, 220, 120), "✅ STATUS: Calculation complete. Summary results:");
-                                ui.indent("mc_summary_stats", |ui| {
-                                    ui.label(format!("• Expected Terminal Price: {:.2}", summary.expected_value));
-                                    ui.label(format!("• Upper Target Boundary: {:.2}", summary.upper_bound));
-                                    ui.label(format!("• Lower Support Boundary: {:.2}", summary.lower_bound));
-                                });
-                            } else {
-                                ui.colored_label(Color32::from_rgb(230, 75, 75), format!("❌ ENGINE ERROR: {}", summary.error_msg));
-                            }
-                        } else {
-                            INTERACTIVE_CELL_CACHE.with(|cache| {
-                                let mut c = cache.borrow_mut();
-                                c.pending_mc_update = true;
-                                c.pending_recalc = true;
+                                ui.label("Confidence Percentile (%):");
+                                let mut current_conf = access_cell_state(target_year, "mc_conf", String::new());
+                                let res_conf = ui.add(egui::TextEdit::singleline(&mut current_conf).desired_width(60.0));
+                                if res_conf.changed() {
+                                    update_cell_state(target_year, "mc_conf", current_conf.clone());
+                                    INTERACTIVE_CELL_CACHE.with(|cache| {
+                                        let mut c = cache.borrow_mut();
+                                        c.pending_mc_update = true;
+                                        c.pending_recalc = true;
+                                        c.last_edit_time = ui.input(|i| i.time);
+                                    });
+                                }
+                                ui.add(egui::Label::new("Statistical threshold tail cutoff (e.g., 95, 99)").wrap(true));
+                                ui.end_row();
                             });
-                            ui.ctx().request_repaint();
+
+                        ui.add_space(16.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+
+                        let mut is_dirty = false;
+                        let mut is_awaiting_debounce = false;
+                        INTERACTIVE_CELL_CACHE.with(|cache| {
+                            let c = cache.borrow();
+                            is_dirty = c.pending_mc_update;
+                            is_awaiting_debounce = c.pending_recalc;
+                        });
+
+                        if is_dirty && !is_awaiting_debounce {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.weak("Waiting for typing to settle...");
+                            });
+                        } else if is_awaiting_debounce {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.colored_label(Color32::from_rgb(50, 150, 250), "Spawning simulation engines...");
+                            });
+                            ui.ctx().request_repaint(); 
+                        } else {
+                            let mut summary_rows: Vec<backend::database::analysis::MonteCarloResultSummary> = Vec::new();
+                            backend::commands::memory_pool::with_active_table::<Vec<backend::database::analysis::MonteCarloResultSummary>, _, _>("monte_carlo_summary_results", |table| {
+                                summary_rows = table.clone();
+                            });
+
+                            if let Some(summary) = summary_rows.first() {
+                                if summary.status_ok {
+                                    ui.colored_label(Color32::from_rgb(50, 220, 120), "✅ STATUS: Calculation complete. Summary results:");
+                                    ui.indent("mc_summary_stats", |ui| {
+                                        ui.label(format!("• Expected Terminal Price: {:.2}", summary.expected_value));
+                                        ui.label(format!("• Upper Target Boundary: {:.2}", summary.upper_bound));
+                                        ui.label(format!("• Lower Support Boundary: {:.2}", summary.lower_bound));
+                                    });
+                                } else {
+                                    ui.colored_label(Color32::from_rgb(230, 75, 75), format!("❌ ENGINE ERROR: {}", summary.error_msg));
+                                }
+                            } else {
+                                INTERACTIVE_CELL_CACHE.with(|cache| {
+                                    let mut c = cache.borrow_mut();
+                                    c.pending_mc_update = true;
+                                    c.pending_recalc = true;
+                                });
+                                ui.ctx().request_repaint();
+                            }
                         }
-                    }
+                    });
                 });
             });
     }
