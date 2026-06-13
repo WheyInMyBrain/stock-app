@@ -9,6 +9,7 @@ use analysis::on_fly::ddm::{DdmInputMetrics, calculate_ddm_on_fly};
 use analysis::on_fly::rim::{RimInputMetrics, calculate_rim_on_fly};
 use analysis::on_fly::epv::{EpvInputMetrics, calculate_epv_on_fly};
 use analysis::on_fly::bgvm::{GrahamInputMetrics, calculate_graham_on_fly};
+use analysis::on_fly::eva::{EvaInputMetrics, calculate_eva_on_fly};
 
 /// Core non-blocking engine processing pipeline. Takes separate metadata slots,
 /// routes them down to on-fly calculation scripts, and flushes output slots.
@@ -19,6 +20,7 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
         "DDM" => "ddm_metadata",
         "EPV" => "epv_metadata",
         "BGVM" => "bgvm_metadata",
+        "EVA" => "eva_metadata",
         _ => "rem_metadata",
     };
 
@@ -27,6 +29,7 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
         "DDM" => "ddm_calculated_results",
         "EPV" => "epv_calculated_results",
         "BGVM" => "bgvm_calculated_results",
+        "EVA" => "eva_calculated_results",
         _ => "rem_calculated_results",
     };
 
@@ -164,6 +167,31 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
                     calculated_kd: 0.0,
                     calculated_ke: 0.0,
                     calculated_wacc: 0.0, 
+                });
+            }
+            "EVA" => {
+                let eva_inputs = EvaInputMetrics {
+                    profit_before_tax: row.profit_before_tax,
+                    net_profit_after_tax: row.net_profit_after_tax,
+                    total_equity: row.total_equity,
+                    total_debt: row.total_debt,
+                    finance_interest_expense: row.finance_interest_expense,
+                    outstanding_shares: row.outstanding_shares,
+                    nse_beta: row.nse_beta,
+                    bse_beta: row.bse_beta,
+                };
+
+                let output = calculate_eva_on_fly(&eva_inputs, &rf, &rm);
+
+                final_results.push(ValuationResultRow {
+                    year,
+                    intrinsic_value: output.eva_per_share, // Mapped to result field cleanly
+                    calculated_wacc: output.calculated_wacc,
+                    calculated_tax_rate: output.calculated_tax_rate,
+                    status_ok: output.status_ok,
+                    error_msg: output.error_msg,
+                    calculated_kd: 0.0,
+                    calculated_ke: 0.0,
                 });
             }
             _ => {

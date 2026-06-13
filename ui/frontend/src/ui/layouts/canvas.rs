@@ -1,4 +1,4 @@
-use egui::{Ui, Color32, Frame, Margin, Stroke, Pos2, Vec2};
+use egui::{Ui, Color32, Frame, Margin, Stroke, Pos2, Vec2, Rect};
 use std::collections::{HashSet, HashMap, BTreeSet};
 
 pub trait AbstractSubTab<T> {
@@ -150,7 +150,7 @@ pub struct GenericChartLine {
     pub label: &'static str,
     pub color: Color32,
     pub stroke_width: f32,
-    pub points: Vec<GenericChartPoint>, // Must be presorted chronologically
+    pub points: Vec<GenericChartPoint>, 
 }
 
 pub fn paint_abstract_chart_canvas(ui: &mut Ui, lines: &[GenericChartLine]) {
@@ -345,6 +345,195 @@ pub fn paint_abstract_chart_canvas(ui: &mut Ui, lines: &[GenericChartLine]) {
                     );
                     vertical_stack_offset += 22.0;
                 }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct GenericBarGroup {
+    pub date: String,    // Format: "YYYY-MM-DD" or "YYYY"
+    pub value: f64,      
+    pub label: String,    
+}
+
+#[derive(Clone, Debug)]
+pub struct GenericBarChartSeries {
+    pub series_name: &'static str,
+    pub positive_color: Color32,  // Color for values > 0 (e.g., Wealth Creation Green)
+    pub negative_color: Color32,  // Color for values < 0 (e.g., Capital Destruction Red)
+    pub groups: Vec<GenericBarGroup>, // Presorted chronologically
+}
+
+/// Abstract canvas that computes a floating zero-axis line to draw clean upward/downward bars
+pub fn paint_abstract_bar_canvas(ui: &mut Ui, series: &GenericBarChartSeries) {
+    if series.groups.is_empty() {
+        ui.centered_and_justified(|ui| {
+            ui.weak("No historical data available for active bar chart frame context.");
+        });
+        return;
+    }
+
+    // =========================================================================
+    // INITIALIZE BOUNDS AND Y-AXIS SCALE
+    // =========================================================================
+    let mut min_val = f64::MAX;
+    let mut max_val = f64::MIN;
+
+    for bar in &series.groups {
+        if bar.value < min_val { min_val = bar.value; }
+        if bar.value > max_val { max_val = bar.value; }
+    }
+
+    if min_val > 0.0 { min_val = 0.0; }
+    if max_val < 0.0 { max_val = 0.0; }
+
+    let value_range = max_val - min_val;
+    let buffer = if value_range == 0.0 { 100.0 } else { value_range * 0.10 };
+    max_val += buffer;
+    min_val -= buffer;
+
+    let desired_size = Vec2::new(ui.available_width(), ui.available_height() - 10.0);
+    let (response, painter) = ui.allocate_painter(desired_size, egui::Sense::hover());
+    let rect = response.rect;
+
+    painter.rect_filled(rect, 4.0, Color32::from_rgb(10, 10, 10));
+    painter.rect_stroke(rect, 4.0, Stroke::new(1.0, Color32::from_rgb(25, 25, 25)));
+
+    // =========================================================================
+    // SCREEN SPACE MAPPING & HIGH-DENSITY AXIS GUIDELINES
+    // =========================================================================
+    let total_bars = series.groups.len();
+    
+    let map_y = |val: f64| -> f32 {
+        let pct_y = ((val - min_val) / (max_val - min_val)) as f32;
+        rect.bottom() - (pct_y * rect.height())
+    };
+
+    let zero_screen_y = map_y(0.0);
+
+    // High-Density Horizontal Grid (7 benchmark splits instead of 3 for better readability)
+    let grid_stroke = Stroke::new(1.0, Color32::from_rgb(20, 20, 20));
+    let splits = 8; // Creates 7 lines inside the bounds
+    for i in 1..splits {
+        let pct = i as f64 / splits as f64;
+        let y_pos = rect.top() + (rect.height() * pct as f32);
+        
+        painter.line_segment([Pos2::new(rect.left(), y_pos), Pos2::new(rect.right(), y_pos)], grid_stroke);
+        
+        let label_value = max_val - (value_range * pct);
+        painter.text(
+            Pos2::new(rect.left() + 8.0, y_pos - 6.0),
+            egui::Align2::LEFT_TOP,
+            format!("₹ {:.1}", label_value),
+            egui::FontId::proportional(10.0),
+            Color32::from_rgb(90, 90, 90)
+        );
+    }
+
+    // =========================================================================
+    // GEOMETRIC BAR RENDERING
+    // =========================================================================
+    let total_width = rect.width();
+    let section_width = total_width / (total_bars as f32);
+    let bar_width = section_width * 0.75;
+    let half_bar = bar_width / 2.0;
+
+    for (idx, bar) in series.groups.iter().enumerate() {
+        let center_x = rect.left() + (idx as f32 * section_width) + (section_width / 2.0);
+        let target_y = map_y(bar.value);
+
+        let bar_rect = if bar.value >= 0.0 {
+            Rect::from_min_max(Pos2::new(center_x - half_bar, target_y), Pos2::new(center_x + half_bar, zero_screen_y))
+        } else {
+            Rect::from_min_max(Pos2::new(center_x - half_bar, zero_screen_y), Pos2::new(center_x + half_bar, target_y))
+        };
+
+        let fill_color = if bar.value >= 0.0 { series.positive_color } else { series.negative_color };
+        painter.rect_filled(bar_rect, 2.0, fill_color);
+
+        if bar.date.len() >= 4 {
+            let year_text = bar.date[0..4].to_string();
+            painter.text(
+                Pos2::new(center_x, rect.bottom() - 6.0),
+                egui::Align2::CENTER_BOTTOM,
+                year_text,
+                egui::FontId::proportional(11.0),
+                Color32::from_rgb(100, 100, 100)
+            );
+        }
+    }
+
+    // Dynamic Zero Intercept
+    painter.line_segment(
+        [Pos2::new(rect.left(), zero_screen_y), Pos2::new(rect.right(), zero_screen_y)],
+        Stroke::new(1.5, Color32::from_rgb(70, 70, 70))
+    );
+
+    // =========================================================================
+    // ABSOLUTE RADAR HUD DISPLAY LAYER
+    // =========================================================================
+    if let Some(pointer_pos) = ui.ctx().pointer_latest_pos() {
+        if rect.contains(pointer_pos) {
+            let pct_x = (pointer_pos.x - rect.left()) / rect.width();
+            let hover_idx = (pct_x * total_bars as f32).floor().clamp(0.0, (total_bars - 1) as f32) as usize;
+
+            if let Some(target_bar) = series.groups.get(hover_idx) {
+                let center_x = rect.left() + (hover_idx as f32 * section_width) + (section_width / 2.0);
+                let target_y = map_y(target_bar.value);
+
+                // 1. Vertical Guide Line
+                painter.line_segment(
+                    [Pos2::new(center_x, rect.top()), Pos2::new(center_x, rect.bottom() - 20.0)],
+                    Stroke::new(1.0, Color32::from_rgb(80, 80, 80)) // Slightly brighter for visibility
+                );
+
+                // 2. Focused Target Dot
+                painter.circle_filled(Pos2::new(center_x, target_y), 4.0, Color32::WHITE);
+
+                // 3. Optional Context Label (Centered above the bar)
+                if !target_bar.label.trim().is_empty() {
+                    let text_color = if target_bar.value >= 0.0 { series.positive_color } else { series.negative_color };
+                    painter.text(
+                        Pos2::new(center_x, target_y - 12.0),
+                        egui::Align2::CENTER_BOTTOM,
+                        &target_bar.label,
+                        egui::FontId::proportional(12.0),
+                        text_color
+                    );
+                }
+
+                // 4. Timeline Date Badge
+                let date_badge_rect = egui::Rect::from_center_size(
+                    Pos2::new(center_x, rect.bottom() - 14.0),
+                    Vec2::new(75.0, 18.0)
+                );
+                painter.rect_filled(date_badge_rect, 2.0, Color32::from_rgb(40, 40, 40));
+                painter.text(
+                    date_badge_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    &target_bar.date,
+                    egui::FontId::proportional(11.0),
+                    Color32::from_rgb(255, 255, 255)
+                );
+
+                // 5. Aligned Axis Metric Box (Distinct Blue HUD Color to avoid blending into the bar)
+                let hud_bg_color = Color32::from_rgb(40, 120, 220); // Deep Sky Blue 
+                let label_text = format!("{}: ₹ {:.1}", series.series_name, target_bar.value);
+
+                let tag_rect = egui::Rect::from_min_size(
+                    Pos2::new(rect.left() + 4.0, target_y - 9.0),
+                    Vec2::new(140.0, 18.0)
+                );
+
+                painter.rect_filled(tag_rect, 2.0, hud_bg_color);
+                painter.text(
+                    tag_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label_text,
+                    egui::FontId::proportional(11.0),
+                    Color32::WHITE
+                );
             }
         }
     }

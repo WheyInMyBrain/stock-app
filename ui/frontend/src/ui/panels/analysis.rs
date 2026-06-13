@@ -2,7 +2,7 @@ use egui::{Ui, Color32};
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use crate::core::data_manager::DataManager;
-use crate::ui::layouts::canvas::{AbstractSubTab, draw_nav_canvas_orchestrator, paint_abstract_chart_canvas, GenericChartLine, GenericChartPoint};
+use crate::ui::layouts::canvas::{AbstractSubTab, draw_nav_canvas_orchestrator, paint_abstract_chart_canvas, GenericChartLine, GenericChartPoint, paint_abstract_bar_canvas, GenericBarGroup, GenericBarChartSeries};
 use backend::database::analysis::{AnalysisMetadataRow, ValuationResultRow};
 
 // =========================================================================
@@ -18,6 +18,7 @@ struct DynamicCellCache {
     pending_rem_update: bool,
     pending_epv_update: bool,
     pending_bgvm_update: bool,
+    pending_eva_update: bool,
 }
 
 impl Default for DynamicCellCache {
@@ -31,6 +32,7 @@ impl Default for DynamicCellCache {
             pending_rem_update: false,
             pending_epv_update: false,
             pending_bgvm_update: false,
+            pending_eva_update: false,
         }
     }
 }
@@ -77,6 +79,7 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
         "ddm_metadata" => "ddm",
         "epv_metadata" => "epv",
         "bgvm_metadata" => "bgvm",
+        "eva_metadata"  => "eva",
         _ => "rem",
     };
 
@@ -242,6 +245,20 @@ fn render_workspace_chart(ui: &mut Ui, result_slot_key: &str, value_label: &'sta
     paint_abstract_chart_canvas(ui, &chart_lines);
 }
 
+/// Generic workspace router that routes your imported canvas structs straight to the painter
+fn render_workspace_bar_chart(ui: &mut Ui, series: &GenericBarChartSeries) {
+
+    if series.groups.is_empty() {
+        ui.centered_and_justified(|ui| {
+            ui.weak("No historical bar metrics mapped to active canvas frame context.");
+        });
+        return;
+    }
+
+    // Pass the pre-built canvas series directly down to the zero-intercept renderer
+    paint_abstract_bar_canvas(ui, series);
+}
+
 // =========================================================================
 // REUSABLE TABULAR COMPONENTS
 // =========================================================================
@@ -276,6 +293,8 @@ fn render_editable_row(
                     "dcf_metadata" => c.pending_dcf_update = true,
                     "ddm_metadata" => c.pending_ddm_update = true,
                     "epv_metadata" => c.pending_epv_update = true,
+                    "bgvm_metadata" => c.pending_bgvm_update = true,
+                    "eva_metadata" => c.pending_eva_update  = true,
                     _ => c.pending_rem_update = true,
                 }
             });
@@ -466,6 +485,58 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for GrahamTab {
     }
 }
 
+struct EvaTab;
+impl AbstractSubTab<Vec<AnalysisMetadataRow>> for EvaTab {
+    fn id(&self) -> usize { 5 }
+    fn label(&self) -> &'static str { "Economic Value Added (EVA)" }
+    fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) {
+        let mut val_rows: Vec<ValuationResultRow> = Vec::new();
+        backend::commands::memory_pool::with_active_table::<Vec<ValuationResultRow>, _, _>("eva_calculated_results", |table| {
+            val_rows = table.clone();
+        });
+        val_rows.sort_by(|a, b| a.year.cmp(&b.year));
+
+        let mut groups = Vec::with_capacity(val_rows.len());
+        for res in val_rows {
+            groups.push(GenericBarGroup {
+                date: format!("{}-03-31", res.year),
+                value: res.intrinsic_value,
+                label: if res.status_ok {
+                    if res.intrinsic_value >= 0.0 { "Wealth Generated".to_string() } else { "Capital Destroyed".to_string() }
+                } else {
+                    format!("Error: {}", res.error_msg)
+                },
+            });
+        }
+
+        let bar_series = GenericBarChartSeries {
+            series_name: "EVA Per Share",
+            positive_color: Color32::from_rgb(50, 220, 120),  // Green
+            negative_color: Color32::from_rgb(230, 75, 75),   // Red
+            groups,
+        };
+
+        render_workspace_bar_chart(ui, &bar_series);
+    }
+    fn render_bottom(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) {
+        render_valuation_matrix_subtab(
+            ui, "Economic Value Added (Capital Allocation Performance Matrix)", "eva_matrix_scroll_area", "eva_matrix_grid", "eva_metadata", "eva_calculated_results", "EVA Per Share",
+            vec![
+                ("Profit Before Tax (PBT)", "pbt", Box::new(|r| r.profit_before_tax.to_string())),
+                ("Net Profit After Tax (PAT)", "pat", Box::new(|r| r.net_profit_after_tax.to_string())),
+                ("Total Shareholder Equity", "eq", Box::new(|r| r.total_equity.to_string())),
+                ("Total Debt (Short + Long Term)", "debt", Box::new(|r| r.total_debt.to_string())),
+                ("Finance Interest Expenses", "interest", Box::new(|r| r.finance_interest_expense.to_string())),
+                ("Outstanding Shares Count", "shares", Box::new(|r| r.outstanding_shares.to_string())),
+            ],
+            vec![
+                ("Risk Free Rate (Rf)", "eva_rf", Box::new(|r| r.dynamic_rf.to_string())),
+                ("Expected Market Return (Rm)", "eva_rm", Box::new(|r| r.dynamic_rm.to_string())),
+            ]
+        );
+    }
+}
+
 // =========================================================================
 // PIPELINE ROUTING CANVAS ORCHESTRATOR
 // =========================================================================
@@ -502,12 +573,14 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
             backend::commands::memory_pool::store_parsed_table("rem_metadata", base_data.clone());
             backend::commands::memory_pool::store_parsed_table("epv_metadata", base_data.clone()); 
             backend::commands::memory_pool::store_parsed_table("bgvm_metadata", base_data.clone());
+            backend::commands::memory_pool::store_parsed_table("eva_metadata", base_data.clone());
 
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "DCF");
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "DDM");
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "REM");
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "EPV"); 
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "BGVM");
+            backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "EVA");
         }
     }
 
@@ -517,6 +590,7 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
         &ResidualIncomeTab,
         &EpvTab,
         &GrahamTab,
+        &EvaTab,
     ];
 
     draw_nav_canvas_orchestrator(
@@ -529,6 +603,7 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
     let mut run_rem = false;
     let mut run_epv = false;
     let mut run_bgvm = false;
+    let mut run_eva = false;
 
     INTERACTIVE_CELL_CACHE.with(|cache| {
         let mut c = cache.borrow_mut();
@@ -542,12 +617,14 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
                 run_rem = c.pending_rem_update;
                 run_epv = c.pending_epv_update;
                 run_bgvm = c.pending_bgvm_update;
+                run_eva = c.pending_eva_update;
                 
                 c.pending_dcf_update = false;
                 c.pending_ddm_update = false;
                 c.pending_rem_update = false;
                 c.pending_epv_update = false;
                 c.pending_bgvm_update = false;
+                c.pending_eva_update = false;
             } else {
                 ui.ctx().request_repaint(); // Keep frame updates running until timer finishes
             }
@@ -585,5 +662,12 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
             push_interactive_state_to_pool(&years, &metrics, "bgvm_metadata");
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "BGVM");
         }
+        if run_eva {
+            let metrics = vec!["pbt", "pat", "eq", "debt", "interest", "shares", "eva_rf", "eva_rm"];
+            let (years, _) = get_valuation_maps(&metrics, "eva_metadata");
+            push_interactive_state_to_pool(&years, &metrics, "eva_metadata");
+            backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "EVA");
+        }
+        
     }
 }
