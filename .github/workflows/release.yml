@@ -27,19 +27,27 @@ jobs:
       - name: Checkout Repository Code
         uses: actions/checkout@v4
 
+      # 1. Initialize Python (For Docling/PyInstaller)
       - name: Initialize Python Environment
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
 
+      # 2. Initialize Go Environment (For your Scraper Daemon)
+      - name: Initialize Go Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable' # Automatically provisions the latest stable Go compiler
+
+      # 3. Initialize Stable Rust Compiler
       - name: Install Stable Rust Compiler
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
       # We descend into ui/frontend to run the build anchor.
-      # This compiles the workspace and executes the backend build.rs internally on the cloud runner.
+      # This compiles the workspace, executes your Go compiler build layer, and handles Python packaging!
       - name: Compile Cross-Platform Production Binary
         run: |
           cd ui/frontend
