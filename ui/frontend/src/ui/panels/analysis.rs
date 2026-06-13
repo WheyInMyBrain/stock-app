@@ -696,7 +696,6 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for MonteCarloTab {
                                         c.last_edit_time = ui.input(|i| i.time);
                                     });
                                 }
-                                // Fix: Wrap description text cleanly to prevent horizontal layout bloating
                                 ui.add(egui::Label::new("Historical cutoff boundary (YYYY-MM-DD)").wrap(true));
                                 ui.end_row();
 
