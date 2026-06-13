@@ -40,8 +40,8 @@ fn main() {
     }
     #[cfg(target_os = "windows")]
     {
-        println!("cargo:rustc-link-lib=static=ws2_32");
-        println!("cargo:rustc-link-lib=static=userenv");
-        println!("cargo:rustc-link-lib=static=bcrypt");
+        println!("cargo:rustc-link-lib=dylib=ws2_32");
+        println!("cargo:rustc-link-lib=dylib=userenv");
+        println!("cargo:rustc-link-lib=dylib=bcrypt");
     }
 }
