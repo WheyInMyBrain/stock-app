@@ -16,7 +16,12 @@ fn resolve_binaries_directory() -> PathBuf {
     }
     
     let mut manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_path.pop(); // Up to stock-app/ui
+    manifest_path.push("frontend");
+    manifest_path.push("target");
+    manifest_path.push(if cfg!(debug_assertions) { "debug" } else { "release" });
     manifest_path.push("binaries");
+    
     manifest_path
 }
 
@@ -72,7 +77,6 @@ pub fn run_ocr_pipeline_command(
     let stdout = child.stdout.take().ok_or_else(|| "Failed splitting process stdout channel pipe.".to_string())?;
     let stderr = child.stderr.take().ok_or_else(|| "Failed splitting process stderr channel pipe.".to_string())?;
 
-    // 🎯 FIXED OS PIPE DEADLOCK: Drain stdout and stderr concurrently in parallel threads
     let stdout_handle = std::thread::spawn(move || {
         let mut reader = BufReader::new(stdout).lines();
         while let Some(Ok(line)) = reader.next() {

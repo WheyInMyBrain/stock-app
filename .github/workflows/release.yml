@@ -1,0 +1,71 @@
+name: Automated Release Packaging
+
+on:
+  push:
+    tags:
+      - 'v*' # Triggers automatically when you push an explicit release tag like v1.0.0
+
+permissions:
+  contents: write # Grants the runner permissions to publish artifacts directly to your Releases page
+
+jobs:
+  release:
+    name: Build Assets for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: stock_app_windows.zip
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: stock_app_mac_silicon.zip
+
+    steps:
+      - name: Checkout Repository Code
+        uses: actions/checkout@v4
+
+      - name: Initialize Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Stable Rust Compiler
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # We descend into ui/frontend to run the build anchor.
+      # This compiles the workspace and executes the backend build.rs internally on the cloud runner.
+      - name: Compile Cross-Platform Production Binary
+        run: |
+          cd ui/frontend
+          cargo build --release --target ${{ matrix.target }} --workspace
+
+      # WINDOWS PACKAGING ROUTINE (Runs natively on Microsoft Cloud Hosts)
+      - name: Package Release Archive (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          cd ui/frontend/target/${{ matrix.target }}/release
+          Compress-Archive -Path stock_app.exe, binaries -DestinationPath ../../../../${{ matrix.artifact_name }} -Force
+
+      # MAC PACKAGING ROUTINE (Runs natively on Apple Cloud Hosts)
+      - name: Package Release Archive (Mac)
+        if: matrix.os == 'macos-latest'
+        run: |
+          cd ui/frontend/target/${{ matrix.target }}/release
+          zip -r ../../../../${{ matrix.artifact_name }} stock_app binaries
+
+      # Dispatches the compiled ZIP packages straight into your GitHub Releases interface
+      - name: Broadcast Compilation to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact_name }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -48,8 +48,15 @@ fn get_max_mtime(dir: &Path, skip_dirs: &[&str]) -> Option<SystemTime> {
 
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let ocr_source_dir = manifest_dir.join("../../ocr");
-    let target_output_dir = manifest_dir.join("binaries");
+    
+    let ocr_source_dir = manifest_dir.parent().unwrap().parent().unwrap().join("ocr");
+    
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let mut target_output_dir = PathBuf::from(out_dir);
+    target_output_dir.pop(); // pop out
+    target_output_dir.pop(); // pop build identity hash
+    target_output_dir.pop(); // pop "build" folder
+    target_output_dir.push("binaries"); // target/[profile]/binaries
 
     std::fs::create_dir_all(&target_output_dir).unwrap();
 
@@ -134,12 +141,11 @@ fn main() {
             .args(&[
                 "--onefile",
                 "--clean",
-                "--recursive-copy-metadata", 
-                "docling",                   
-                "--distpath",
-                target_output_dir.to_str().unwrap(),
-                "--name",
-                &format!("ocr-{}", target_triple), 
+                "--recursive-copy-metadata", "docling",                   
+                "--recursive-copy-metadata", "torch",                   
+                "--recursive-copy-metadata", "huggingface_hub",                   
+                "--distpath", target_output_dir.to_str().unwrap(),
+                "--name", &format!("ocr-{}", target_triple), 
                 "ocr_engine.py",
             ])
             .status();
