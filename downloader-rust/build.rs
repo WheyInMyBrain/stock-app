@@ -38,4 +38,10 @@ fn main() {
     {
         println!("cargo:rustc-link-lib=pthread");
     }
+    #[cfg(target_os = "windows")]
+    {
+        println!("cargo:rustc-link-lib=static=ws2_32");
+        println!("cargo:rustc-link-lib=static=userenv");
+        println!("cargo:rustc-link-lib=static=bcrypt");
+    }
 }

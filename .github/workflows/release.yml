@@ -31,14 +31,14 @@ jobs:
       - name: Initialize Python Environment
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
           cache: 'pip'
 
       # 2. Initialize Go Environment (For your Scraper Daemon)
       - name: Initialize Go Environment
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable' # Automatically provisions the latest stable Go compiler
+          go-version: 'stable'
 
       # 3. Initialize Stable Rust Compiler
       - name: Install Stable Rust Compiler
@@ -46,33 +46,36 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # We descend into ui/frontend to run the build anchor.
-      # This compiles the workspace, executes your Go compiler build layer, and handles Python packaging!
+      # Compiles the workspace and injects flags to handle MSVC Go exceptions (LNK1223)
       - name: Compile Cross-Platform Production Binary
+        shell: bash
+        env:
+          GOFLAGS: "-buildmode=c-archive -ldflags=-w"
+          CGO_CFLAGS: "-O2"
         run: |
           cd ui/frontend
           cargo build --release --target ${{ matrix.target }} --workspace
 
-      # WINDOWS PACKAGING ROUTINE (Runs natively on Microsoft Cloud Hosts)
+      # WINDOWS PACKAGING ROUTINE (Saves output directly to the workspace root)
       - name: Package Release Archive (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
           cd ui/frontend/target/${{ matrix.target }}/release
-          Compress-Archive -Path stock_app.exe, binaries -DestinationPath ../../../../${{ matrix.artifact_name }} -Force
+          Compress-Archive -Path stock_app.exe, binaries -DestinationPath "${{ github.workspace }}/${{ matrix.artifact_name }}" -Force
 
-      # MAC PACKAGING ROUTINE (Runs natively on Apple Cloud Hosts)
+      # MAC PACKAGING ROUTINE (Saves output directly to the workspace root)
       - name: Package Release Archive (Mac)
         if: matrix.os == 'macos-latest'
         run: |
           cd ui/frontend/target/${{ matrix.target }}/release
-          zip -r ../../../../${{ matrix.artifact_name }} stock_app binaries
+          zip -r "${{ github.workspace }}/${{ matrix.artifact_name }}" stock_app binaries
 
-      # Dispatches the compiled ZIP packages straight into your GitHub Releases interface
+      # Dispatches the compiled ZIP packages straight from the workspace root into GitHub Releases
       - name: Broadcast Compilation to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.artifact_name }}
+          files: ${{ github.workspace }}/${{ matrix.artifact_name }}
           draft: false
           prerelease: false
         env:
