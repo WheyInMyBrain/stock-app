@@ -1,8 +1,4 @@
-Here is a clean, professional `README.md` that perfectly maps out your multi-language architecture. It breaks down the tech stack requirements and explains the distinct role of each module just as you described, while keeping the compilation instructions straightforward.
 
----
-
-```markdown
 # Stock App
 
 A comprehensive, multi-language financial data extraction and intrinsic valuation platform. This system handles everything from fetching raw web data and running OCR on annual reports to executing complex financial models and presenting them in an interactive user interface.
@@ -34,13 +30,15 @@ The repository is modularized by function and language:
 The entire application is compiled and launched directly from the frontend directory using Rust's package manager.
 
 1. Navigate to the frontend workspace:
-   ```bash
-   cd stock-app/ui/frontend
+```bash
+
+cd stock-app/ui/frontend
 
 ```
 
 2. Compile and run the application:
 ```bash
+
 cargo run
 
 ```
