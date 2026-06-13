@@ -28,6 +28,7 @@ pub struct AnalysisMetadataRow {
     pub dcf_gn: f64,
     pub ddm_g: f64,
     pub rem_g: f64,
+    pub bgvm_g: f64,
 }
 
 #[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
@@ -977,7 +978,7 @@ fn compute_dynamic_assumptions(
     net_profit: i64,
     total_equity: i64,
     dividend_paid: i64,
-) -> (f64, f64, f64, f64, f64, f64) {
+) -> (f64, f64, f64, f64) {
     let average_beta = if nse_beta > 0.0 && bse_beta > 0.0 {
         (nse_beta + bse_beta) / 2.0
     } else if nse_beta > 0.0 {
@@ -990,12 +991,10 @@ fn compute_dynamic_assumptions(
 
     let dynamic_rm = dynamic_rf + 5.5;
 
-    // EXACT RULE IMPLEMENTED: Minimum(Historical Real GDP, Dynamic Rf - 1.0%)
-    // Clamped at a floor of 2.0% to prevent negative perpetual growth in severe recessions
     let dynamic_rf_spread = dynamic_rf - 1.0;
     let dcf_gn = dynamic_rf_spread.min(historical_gdp).max(2.0);
 
-    let mut sustainable_g = 10.0; 
+    let mut sustainable_g = 12.0; 
     
     if total_equity > 0 && net_profit > 0 {
         let roe = (net_profit as f64) / (total_equity as f64);
@@ -1006,11 +1005,7 @@ fn compute_dynamic_assumptions(
         sustainable_g = calculated_g.clamp(2.0, 20.0);
     }
 
-    let dcf_g = sustainable_g;
-    let ddm_g = sustainable_g;
-    let rem_g = sustainable_g;
-
-    (average_beta, dynamic_rm, dcf_g, dcf_gn, ddm_g, rem_g)
+    (average_beta, dynamic_rm, dcf_gn, sustainable_g)
 }
 
 // =========================================================================
@@ -1208,7 +1203,7 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
         
         let dynamic_rf = rf_timeline_map.get(&year).copied().unwrap_or(7.0);
 
-        let (average_beta, dynamic_rm, dcf_g, dcf_gn, ddm_g, rem_g) = compute_dynamic_assumptions(
+        let (average_beta, dynamic_rm, dcf_gn, sustainable_g) = compute_dynamic_assumptions(
             calculated_nse_beta, 
             calculated_bse_beta,
             dynamic_rf,
@@ -1239,10 +1234,11 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
             dynamic_rf,
             average_beta,
             dynamic_rm,
-            dcf_g,
             dcf_gn,
-            ddm_g,
-            rem_g,
+            dcf_g: sustainable_g,
+            ddm_g: sustainable_g,
+            rem_g: sustainable_g,
+            bgvm_g: sustainable_g,
         });
     }
 

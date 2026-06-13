@@ -25,43 +25,60 @@ pub fn calculate_rim_on_fly(
     g_str: &str,
 ) -> RimCalculatedOutput {
     let mut output = RimCalculatedOutput {
-        calculated_ke: 0.10,
+        calculated_ke: 0.0,
         intrinsic_value: 0.0,
         status_ok: false,
         error_msg: String::new(),
     };
 
-    // 1. Parse Input Assumptions safely from strings
-    let rf = rf_str.parse::<f64>().unwrap_or(7.0) / 100.0;
-    let rm = rm_str.parse::<f64>().unwrap_or(12.0) / 100.0;
-    let growth = g_str.parse::<f64>().unwrap_or(8.0) / 100.0; // Expected long-term income growth rate
+    // 1. Strict Input Parsing from strings (Zero Assumptions, relies fully on your backend keys)
+    let rf = match rf_str.parse::<f64>() {
+        Ok(v) => v / 100.0,
+        Err(_) => { output.error_msg = "Bad Rf".to_string(); return output; }
+    };
+    let rm = match rm_str.parse::<f64>() {
+        Ok(v) => v / 100.0,
+        Err(_) => { output.error_msg = "Bad Rm".to_string(); return output; }
+    };
+    let raw_growth = match g_str.parse::<f64>() {
+        Ok(v) => v / 100.0,
+        Err(_) => { output.error_msg = "Bad g".to_string(); return output; }
+    };
 
-    // 2. Map Metrics out of Input Block
+    // 2. Macroeconomic Cap: Long-term internal income expansion growth cannot outpace the Risk-Free Rate.
+    // This stops abnormal earnings from compounding into trillions inside the 5-year transition loop.
+    let growth = raw_growth.min(rf);
+
+    // 3. Map Metrics out of Input Block
     let eq_base = metrics.total_equity as f64;
     let pat_base = metrics.net_profit_after_tax as f64;
     let shares = metrics.outstanding_shares as f64;
     
     let beta = (metrics.nse_beta + metrics.bse_beta) / 2.0;
 
-    // 3. Derived Required Return on Equity (CAPM Cost of Equity)
+    // 4. Derived Required Return on Equity (CAPM Cost of Equity)
     let ke = rf + beta * (rm - rf);
     output.calculated_ke = ke;
 
-    // 4. Invariant Financial Guardrails Validation
+    // 5. Invariant Financial Guardrails Validation
     if shares <= 0.0 {
-        output.error_msg = "Missing Shares".to_string();
+        output.error_msg = "No Shares".to_string();
         return output;
     }
     if eq_base <= 0.0 {
-        output.error_msg = "Negative/Zero Equity".to_string();
+        output.error_msg = "Eq <= 0".to_string();
         return output;
     }
     if ke <= 0.0 {
-        output.error_msg = "Invalid Ke Rate".to_string();
+        output.error_msg = "Ke <= 0".to_string();
+        return output;
+    }
+    if ke <= growth {
+        output.error_msg = "Ke <= g".to_string();
         return output;
     }
 
-    // 5. Run 5-Year Multi-Stage Residual Income Projection Engine Loop
+    // 6. Run 5-Year Multi-Stage Residual Income Projection Engine Loop
     let mut pv_residual_income = 0.0;
     let mut projected_equity = eq_base;
     let mut projected_pat = pat_base;
@@ -77,25 +94,21 @@ pub fn calculate_rim_on_fly(
 
         last_residual_income = residual_income;
 
-        // Transition matrix vectors ahead to project the next terminal sequence point:
-        // Clean Surplus Accounting assumption: Equity_t = Equity_t-1 + NetIncome_t - Dividends_t
-        // Assuming earnings retention reinvestment is driving the forward compound sequence
+        // Transition matrix vectors ahead using capped economic growth projection constraints
         projected_pat *= 1.0 + growth;
-        projected_equity += residual_income; // Adding abnormal earnings increments to step adjustments
+        projected_equity += residual_income; 
     }
 
-    // 6. Terminal Capitalization Pass
-    // Capitalizing the terminal economic residual value using perpetuity bounds
+    // 7. Terminal Capitalization Pass
     let terminal_pv_ri = if ke > growth && last_residual_income > 0.0 {
         let terminal_ri = last_residual_income * (1.0 + growth);
         let capitalized_ri = terminal_ri / (ke - growth);
         capitalized_ri / (1.0 + ke).powi(5)
     } else {
-        0.0 // Conservatively assume zero premium growth beyond year 5 if constraints fail
+        0.0 
     };
 
-    // 7. Intrinsic Valuation Bridge 
-    // Value = Current Book Value + PV of Discrete RI (Years 1-5) + PV of Terminal RI
+    // 8. Intrinsic Valuation Bridge 
     let total_firm_value = eq_base + pv_residual_income + terminal_pv_ri;
     let intrinsic_value_per_share = total_firm_value / shares;
 

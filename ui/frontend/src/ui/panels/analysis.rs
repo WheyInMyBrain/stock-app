@@ -16,6 +16,8 @@ struct DynamicCellCache {
     pending_dcf_update: bool,
     pending_ddm_update: bool,
     pending_rem_update: bool,
+    pending_epv_update: bool,
+    pending_bgvm_update: bool,
 }
 
 impl Default for DynamicCellCache {
@@ -27,6 +29,8 @@ impl Default for DynamicCellCache {
             pending_dcf_update: false,
             pending_ddm_update: false,
             pending_rem_update: false,
+            pending_epv_update: false,
+            pending_bgvm_update: false,
         }
     }
 }
@@ -55,7 +59,6 @@ fn check_column_filled(year: i32, metrics: &[&str]) -> bool {
         let cache_ref = cache.borrow();
         for &metric in metrics {
             if let Some(val) = cache_ref.inputs.get(&(year, metric.to_string())) {
-                // "0" is a mathematically valid entry. We only reject literal empty strings.
                 if val.trim().is_empty() { return false; }
             } else { return false; }
         }
@@ -72,6 +75,8 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
     let prefix = match storage_slot_key {
         "dcf_metadata" => "dcf",
         "ddm_metadata" => "ddm",
+        "epv_metadata" => "epv",
+        "bgvm_metadata" => "bgvm",
         _ => "rem",
     };
 
@@ -86,14 +91,11 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
             continue;
         }
 
-        // NO ASSUMPTIONS: We strictly require the backend to have provided the data.
-        // If the backend has no data for this year, we skip the calculation entirely.
         let base_row = match base_map.get(&year) {
             Some(row) => row,
             None => continue, 
         };
 
-        // 1. EXTRACT ASSUMPTIONS (Fallback to the pristine backend row, not magic numbers)
         let baseline_g_str = match prefix {
             "dcf" => base_row.dcf_g.to_string(),
             "ddm" => base_row.ddm_g.to_string(),
@@ -105,13 +107,11 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
         let gn = access_cell_state(year, &format!("{}_gn", prefix), base_row.dcf_gn.to_string());
         let g  = access_cell_state(year, &format!("{}_g", prefix), baseline_g_str);
 
-        // Store assumptions separately for the UI memory pools
         backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rf", storage_slot_key, year), vec![rf.clone()]);
         backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rm", storage_slot_key, year), vec![rm.clone()]);
         backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_g", storage_slot_key, year), vec![g.clone()]);
         backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_gn", storage_slot_key, year), vec![gn.clone()]);
 
-        // 2. EXTRACT EDITABLE METRICS (Again, fallback to the backend row)
         let ext_ocf = access_cell_state(year, "ocf", base_row.operating_cash_flow.to_string());
         let ext_capex_out = access_cell_state(year, "capex_out", base_row.capex_outflow.to_string());
         let ext_debt = access_cell_state(year, "debt", base_row.total_debt.to_string());
@@ -131,12 +131,11 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
         let net_profit_after_tax = ext_pat.parse::<i64>().unwrap_or(base_row.net_profit_after_tax);
         let finance_interest_expense = ext_interest.parse::<i64>().unwrap_or(base_row.finance_interest_expense);
         let dividend_paid = ext_div.parse::<i64>().unwrap_or(base_row.dividend_paid);
+        let parsed_input_g = g.parse::<f64>().unwrap_or(base_row.dcf_g);
 
-        // 3. RECOMPUTE LOCAL DEPENDENCIES
         let net_capex = capex_outflow + base_row.capex_inflow;
         let free_cash_flow = operating_cash_flow + net_capex;
 
-        // 4. RECONSTRUCT THE MASTER ROW STRICTLY USING BACKEND FACTS
         master_rows.push(AnalysisMetadataRow {
             year, 
             dividend_paid, 
@@ -159,9 +158,10 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
             
             dynamic_rf: rf.parse::<f64>().unwrap_or(base_row.dynamic_rf),
             dynamic_rm: rm.parse::<f64>().unwrap_or(base_row.dynamic_rm),
-            dcf_g: if prefix == "dcf" { g.parse::<f64>().unwrap_or(base_row.dcf_g) } else { base_row.dcf_g },
-            ddm_g: if prefix == "ddm" { g.parse::<f64>().unwrap_or(base_row.ddm_g) } else { base_row.ddm_g },
-            rem_g: if prefix == "rem" { g.parse::<f64>().unwrap_or(base_row.rem_g) } else { base_row.rem_g },
+            dcf_g: if prefix == "dcf" { parsed_input_g } else { base_row.dcf_g },
+            ddm_g: if prefix == "ddm" { parsed_input_g } else { base_row.ddm_g },
+            rem_g: if prefix == "rem" { parsed_input_g } else { base_row.rem_g },
+            bgvm_g: if prefix == "bgvm" { parsed_input_g } else { base_row.bgvm_g },
             dcf_gn: gn.parse::<f64>().unwrap_or(base_row.dcf_gn),
         });
     }
@@ -275,6 +275,7 @@ fn render_editable_row(
                 match storage_slot_key {
                     "dcf_metadata" => c.pending_dcf_update = true,
                     "ddm_metadata" => c.pending_ddm_update = true,
+                    "epv_metadata" => c.pending_epv_update = true,
                     _ => c.pending_rem_update = true,
                 }
             });
@@ -348,7 +349,7 @@ fn render_valuation_matrix_subtab(
 struct DcfTab;
 impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DcfTab {
     fn id(&self) -> usize { 0 }
-    fn label(&self) -> &'static str { "Discounted Cash Flow (DCF)" }
+    fn label(&self) -> &'static str { "Discounted Cash Flow" }
     fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { render_workspace_chart(ui, "dcf_calculated_results", "DCF Value"); }
     fn render_bottom(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) {
         render_valuation_matrix_subtab(
@@ -376,7 +377,7 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DcfTab {
 struct DdmTab;
 impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DdmTab {
     fn id(&self) -> usize { 1 }
-    fn label(&self) -> &'static str { "Dividend Discount Model (DDM)" }
+    fn label(&self) -> &'static str { "Dividend Discount Model" }
     fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { render_workspace_chart(ui, "ddm_calculated_results", "DDM Value"); }
     fn render_bottom(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) {
         render_valuation_matrix_subtab(
@@ -397,7 +398,7 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DdmTab {
 struct ResidualIncomeTab;
 impl AbstractSubTab<Vec<AnalysisMetadataRow>> for ResidualIncomeTab {
     fn id(&self) -> usize { 2 }
-    fn label(&self) -> &'static str { "Residual Income" }
+    fn label(&self) -> &'static str { "Residual Income Model" }
     fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { render_workspace_chart(ui, "rem_calculated_results", "RIM Value"); }
     fn render_bottom(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) {
         render_valuation_matrix_subtab(
@@ -411,6 +412,55 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for ResidualIncomeTab {
                 ("Risk Free Rate (Rf)", "rem_rf", Box::new(|r| r.dynamic_rf.to_string())),
                 ("Market Return (Rm)", "rem_rm", Box::new(|r| r.dynamic_rm.to_string())),
                 ("Income Growth Forecast (g)", "rem_g", Box::new(|r| r.rem_g.to_string())),
+            ]
+        );
+    }
+}
+
+struct EpvTab;
+impl AbstractSubTab<Vec<AnalysisMetadataRow>> for EpvTab {
+    fn id(&self) -> usize { 3 }
+    fn label(&self) -> &'static str { "Earnings Power Value" }
+    fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { 
+        render_workspace_chart(ui, "epv_calculated_results", "EPV Zero-Growth Floor"); 
+    }
+    fn render_bottom(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) {
+        render_valuation_matrix_subtab(
+            ui, "Earnings Power Value (Bruce Greenwald Matrix)", "epv_matrix_scroll_area", "epv_matrix_grid", "epv_metadata", "epv_calculated_results", "EPV Intrinsic Value",
+            vec![
+                ("Net Profit After Tax (PAT)", "pat", Box::new(|r| r.net_profit_after_tax.to_string())),
+                ("Total Debt (Short + Long Term)", "debt", Box::new(|r| r.total_debt.to_string())),
+                ("Total Shareholder Equity", "eq", Box::new(|r| r.total_equity.to_string())),
+                ("Outstanding Shares Count", "shares", Box::new(|r| r.outstanding_shares.to_string())),
+                ("Profit Before Tax (PBT)", "pbt", Box::new(|r| r.profit_before_tax.to_string())),
+                ("Finance Interest Expenses", "interest", Box::new(|r| r.finance_interest_expense.to_string())),
+            ],
+            vec![
+                ("Risk Free Rate (Rf)", "epv_rf", Box::new(|r| r.dynamic_rf.to_string())),
+                ("Expected Market Return (Rm)", "epv_rm", Box::new(|r| r.dynamic_rm.to_string())),
+            ]
+        );
+    }
+}
+
+struct GrahamTab;
+impl AbstractSubTab<Vec<AnalysisMetadataRow>> for GrahamTab {
+    fn id(&self) -> usize { 4 }
+    fn label(&self) -> &'static str { "Graham Classic Model" }
+    fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { 
+        render_workspace_chart(ui, "bgvm_calculated_results", "Graham Intrinsic Value"); 
+    }
+    fn render_bottom(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) {
+        render_valuation_matrix_subtab(
+            ui, "Benjamin Graham Formulas Checklist", "bgvm_matrix_scroll_area", "bgvm_matrix_grid", "bgvm_metadata", "bgvm_calculated_results", "Graham Intrinsic Price",
+            vec![
+                ("Net Profit After Tax (PAT)", "pat", Box::new(|r| r.net_profit_after_tax.to_string())),
+                ("Total Equity (Book Value)", "eq", Box::new(|r| r.total_equity.to_string())),
+                ("Outstanding Shares Count", "shares", Box::new(|r| r.outstanding_shares.to_string())),
+            ],
+            vec![
+                ("Risk Free Rate (Rf)", "bgvm_rf", Box::new(|r| r.dynamic_rf.to_string())),
+                ("Expected Long-Term Growth (g)", "bgvm_g", Box::new(|r| r.rem_g.to_string())),
             ]
         );
     }
@@ -450,10 +500,14 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
             backend::commands::memory_pool::store_parsed_table("dcf_metadata", base_data.clone());
             backend::commands::memory_pool::store_parsed_table("ddm_metadata", base_data.clone());
             backend::commands::memory_pool::store_parsed_table("rem_metadata", base_data.clone());
+            backend::commands::memory_pool::store_parsed_table("epv_metadata", base_data.clone()); 
+            backend::commands::memory_pool::store_parsed_table("bgvm_metadata", base_data.clone());
 
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "DCF");
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "DDM");
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "REM");
+            backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "EPV"); 
+            backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "BGVM");
         }
     }
 
@@ -461,6 +515,8 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
         &DcfTab,
         &DdmTab,
         &ResidualIncomeTab,
+        &EpvTab,
+        &GrahamTab,
     ];
 
     draw_nav_canvas_orchestrator(
@@ -471,6 +527,8 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
     let mut run_dcf = false;
     let mut run_ddm = false;
     let mut run_rem = false;
+    let mut run_epv = false;
+    let mut run_bgvm = false;
 
     INTERACTIVE_CELL_CACHE.with(|cache| {
         let mut c = cache.borrow_mut();
@@ -482,10 +540,14 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
                 run_dcf = c.pending_dcf_update;
                 run_ddm = c.pending_ddm_update;
                 run_rem = c.pending_rem_update;
+                run_epv = c.pending_epv_update;
+                run_bgvm = c.pending_bgvm_update;
                 
                 c.pending_dcf_update = false;
                 c.pending_ddm_update = false;
                 c.pending_rem_update = false;
+                c.pending_epv_update = false;
+                c.pending_bgvm_update = false;
             } else {
                 ui.ctx().request_repaint(); // Keep frame updates running until timer finishes
             }
@@ -510,6 +572,18 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
             let (years, _) = get_valuation_maps(&metrics, "rem_metadata");
             push_interactive_state_to_pool(&years, &metrics, "rem_metadata");
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "REM");
+        }
+        if run_epv {
+            let metrics = vec!["pat", "debt", "eq", "shares", "pbt", "interest", "epv_rf", "epv_rm"];
+            let (years, _) = get_valuation_maps(&metrics, "epv_metadata");
+            push_interactive_state_to_pool(&years, &metrics, "epv_metadata");
+            backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "EPV");
+        }
+        if run_bgvm {
+            let metrics = vec!["pat", "eq", "shares", "bgvm_rf", "bgvm_g"];
+            let (years, _) = get_valuation_maps(&metrics, "bgvm_metadata");
+            push_interactive_state_to_pool(&years, &metrics, "bgvm_metadata");
+            backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "BGVM");
         }
     }
 }

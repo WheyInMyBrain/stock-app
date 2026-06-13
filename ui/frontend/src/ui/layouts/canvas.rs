@@ -318,28 +318,32 @@ pub fn paint_abstract_chart_canvas(ui: &mut Ui, lines: &[GenericChartLine]) {
             // Left-Axis Value Tags Layout Loop
             let mut vertical_stack_offset = 0.0;
             for line in lines {
-                // Find point matching current timeline date coordinates
-                if let Some(pt) = line.points.iter().find(|p| p.date == *current_timeline_date) {
-                    if let Some(&master_idx) = date_to_master_idx.get(&pt.date) {
-                        let screen_pos = map_to_screen(master_idx, pt.value);
-                        painter.circle_filled(screen_pos, 4.0, line.color);
+                if line.points.is_empty() { continue; }
 
-                        let label_text = format!("{}: ₹{:.1}", line.label, pt.value);
-                        let tag_rect = egui::Rect::from_min_size(
-                            Pos2::new(rect.left() + 4.0, screen_pos.y - 9.0 + vertical_stack_offset),
-                            Vec2::new(95.0, 18.0)
-                        );
+                let target_point = line.points.iter()
+                    .filter(|p| p.date <= *current_timeline_date)
+                    .last() 
+                    .or_else(|| line.points.first()); 
 
-                        painter.rect_filled(tag_rect, 2.0, line.color);
-                        painter.text(
-                            tag_rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            label_text,
-                            egui::FontId::proportional(10.0),
-                            if line.color == Color32::from_rgb(250, 210, 50) { Color32::BLACK } else { Color32::WHITE }
-                        );
-                        vertical_stack_offset += 22.0;
-                    }
+                if let Some(pt) = target_point {
+                    let screen_pos = map_to_screen(ref_idx, pt.value);
+                    painter.circle_filled(screen_pos, 4.0, line.color);
+
+                    let label_text = format!("{}: ₹{:.1}", line.label, pt.value);
+                    let tag_rect = egui::Rect::from_min_size(
+                        Pos2::new(rect.left() + 4.0, screen_pos.y - 9.0 + vertical_stack_offset),
+                        Vec2::new(120.0, 18.0) 
+                    );
+
+                    painter.rect_filled(tag_rect, 2.0, line.color);
+                    painter.text(
+                        tag_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        label_text,
+                        egui::FontId::proportional(10.0),
+                        if line.color == Color32::from_rgb(250, 210, 50) { Color32::BLACK } else { Color32::WHITE }
+                    );
+                    vertical_stack_offset += 22.0;
                 }
             }
         }

@@ -24,34 +24,47 @@ pub fn calculate_ddm_on_fly(
     g_str: &str,
 ) -> DdmCalculatedOutput {
     let mut output = DdmCalculatedOutput {
-        calculated_ke: 0.10,
+        calculated_ke: 0.0,
         intrinsic_value: 0.0,
         status_ok: false,
         error_msg: String::new(),
     };
 
-    // 1. Parse Input Assumptions safely from strings
-    let rf = rf_str.parse::<f64>().unwrap_or(7.0) / 100.0;
-    let rm = rm_str.parse::<f64>().unwrap_or(12.0) / 100.0;
-    let div_growth = g_str.parse::<f64>().unwrap_or(5.0) / 100.0;
+    // 1. Strict Input Parsing from strings (Zero Assumptions, aligns with your backend empty strings)
+    let rf = match rf_str.parse::<f64>() {
+        Ok(v) => v / 100.0,
+        Err(_) => { output.error_msg = "Bad Rf".to_string(); return output; }
+    };
+    let rm = match rm_str.parse::<f64>() {
+        Ok(v) => v / 100.0,
+        Err(_) => { output.error_msg = "Bad Rm".to_string(); return output; }
+    };
+    let raw_growth = match g_str.parse::<f64>() {
+        Ok(v) => v / 100.0,
+        Err(_) => { output.error_msg = "Bad g".to_string(); return output; }
+    };
 
-    // 2. Map Metrics out of Input Block
+    // 2. Macroeconomic Growth Cap: Infinite perpetuity dividend growth cannot outpace the Risk-Free Rate.
+    // This stops the denominator (Ke - g) from shrinking to zero or turning negative.
+    let div_growth = raw_growth.min(rf);
+
+    // 3. Map Metrics out of Input Block
     let total_div = metrics.dividend_paid as f64;
     let shares = metrics.outstanding_shares as f64;
     
     let beta = (metrics.nse_beta + metrics.bse_beta) / 2.0;
 
-    // 3. Derived Financial Metrics (CAPM Cost of Equity)
+    // 4. Derived Financial Metrics (CAPM Cost of Equity)
     let ke = rf + beta * (rm - rf);
     output.calculated_ke = ke;
 
-    // 4. Invariant Financial Guardrails Validation
+    // 5. Invariant Financial Guardrails Validation
     if shares <= 0.0 {
-        output.error_msg = "Missing Shares".to_string();
+        output.error_msg = "No Shares".to_string();
         return output;
     }
     if total_div <= 0.0 {
-        output.error_msg = "No Dividends".to_string();
+        output.error_msg = "No Div".to_string();
         return output;
     }
     if ke <= div_growth {
@@ -59,12 +72,10 @@ pub fn calculate_ddm_on_fly(
         return output;
     }
 
-    // 5. Calculate Base Dividend Per Share (DPS_0)
+    // 6. Calculate Base Dividend Per Share (DPS_0)
     let dps_base = total_div / shares;
 
-    // 6. Run Gordon Growth Model Perpetuity Capitalization Formula
-    // DPS_1 = DPS_0 * (1 + g)
-    // Value = DPS_1 / (Ke - g)
+    // 7. Run Gordon Growth Model Perpetuity Capitalization Formula
     let dps_forward = dps_base * (1.0 + div_growth);
     let value_per_share = dps_forward / (ke - div_growth);
 

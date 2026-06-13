@@ -7,6 +7,8 @@ use crate::database::analysis::{AnalysisMetadataRow, ValuationResultRow};
 use analysis::on_fly::dcf::{DcfInputMetrics, calculate_dcf_on_fly};
 use analysis::on_fly::ddm::{DdmInputMetrics, calculate_ddm_on_fly};
 use analysis::on_fly::rim::{RimInputMetrics, calculate_rim_on_fly};
+use analysis::on_fly::epv::{EpvInputMetrics, calculate_epv_on_fly};
+use analysis::on_fly::bgvm::{GrahamInputMetrics, calculate_graham_on_fly};
 
 /// Core non-blocking engine processing pipeline. Takes separate metadata slots,
 /// routes them down to on-fly calculation scripts, and flushes output slots.
@@ -15,12 +17,16 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
     let metadata_key = match tab_key {
         "DCF" => "dcf_metadata",
         "DDM" => "ddm_metadata",
+        "EPV" => "epv_metadata",
+        "BGVM" => "bgvm_metadata",
         _ => "rem_metadata",
     };
 
     let result_slot_key = match tab_key {
         "DCF" => "dcf_calculated_results",
         "DDM" => "ddm_calculated_results",
+        "EPV" => "epv_calculated_results",
+        "BGVM" => "bgvm_calculated_results",
         _ => "rem_calculated_results",
     };
 
@@ -107,10 +113,57 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
                     intrinsic_value: output.intrinsic_value,
                     status_ok: output.status_ok,
                     error_msg: output.error_msg,
-                    // Use zero defaults for non-DDM parameters
                     calculated_tax_rate: 0.0,
                     calculated_kd: 0.0,
                     calculated_wacc: 0.0,
+                });
+            }
+            "EPV" => {
+                // Map inputs to the standalone library EPV core
+                let epv_inputs = EpvInputMetrics {
+                    outstanding_shares: row.outstanding_shares,
+                    profit_before_tax: row.profit_before_tax,
+                    net_profit_after_tax: row.net_profit_after_tax,
+                    total_debt: row.total_debt,
+                    total_equity: row.total_equity,
+                    finance_interest_expense: row.finance_interest_expense,
+                    nse_beta: row.nse_beta,
+                    bse_beta: row.bse_beta,
+                };
+
+                let output = calculate_epv_on_fly(&epv_inputs, &rf, &rm);
+
+                final_results.push(ValuationResultRow {
+                    year,
+                    calculated_tax_rate: output.calculated_tax_rate,
+                    calculated_kd: output.calculated_kd,
+                    calculated_ke: output.calculated_ke,
+                    calculated_wacc: output.calculated_wacc,
+                    intrinsic_value: output.intrinsic_value,
+                    status_ok: output.status_ok,
+                    error_msg: output.error_msg,
+                });
+            }
+            "BGVM" => {
+                let graham_inputs = GrahamInputMetrics {
+                    outstanding_shares: row.outstanding_shares,
+                    net_profit_after_tax: row.net_profit_after_tax,
+                    total_equity: row.total_equity,
+                    nse_beta: row.nse_beta,
+                    bse_beta: row.bse_beta,
+                };
+
+                let output = calculate_graham_on_fly(&graham_inputs, &rf, &g);
+
+                final_results.push(ValuationResultRow {
+                    year,
+                    intrinsic_value: output.intrinsic_value, 
+                    status_ok: output.status_ok,
+                    error_msg: output.error_msg,
+                    calculated_tax_rate: 0.0,
+                    calculated_kd: 0.0,
+                    calculated_ke: 0.0,
+                    calculated_wacc: 0.0, 
                 });
             }
             _ => {
@@ -131,7 +184,6 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
                     intrinsic_value: output.intrinsic_value,
                     status_ok: output.status_ok,
                     error_msg: output.error_msg,
-                    // Use zero defaults for non-RIM parameters
                     calculated_tax_rate: 0.0,
                     calculated_kd: 0.0,
                     calculated_wacc: 0.0,
