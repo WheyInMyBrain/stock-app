@@ -19,6 +19,7 @@ struct DynamicCellCache {
     pending_epv_update: bool,
     pending_bgvm_update: bool,
     pending_eva_update: bool,
+    pending_mc_update: bool,
 }
 
 impl Default for DynamicCellCache {
@@ -33,6 +34,7 @@ impl Default for DynamicCellCache {
             pending_epv_update: false,
             pending_bgvm_update: false,
             pending_eva_update: false,
+            pending_mc_update: false,
         }
     }
 }
@@ -80,6 +82,7 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
         "epv_metadata" => "epv",
         "bgvm_metadata" => "bgvm",
         "eva_metadata"  => "eva",
+        "monte_carlo_metadata" => "mc",
         _ => "rem",
     };
 
@@ -90,10 +93,25 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
     let base_map: HashMap<i32, AnalysisMetadataRow> = base_rows.into_iter().map(|r| (r.year, r)).collect();
     
     for &year in years {
+        if storage_slot_key == "monte_carlo_metadata" {
+            let days = access_cell_state(year, "mc_days", String::new());
+            let sims = access_cell_state(year, "mc_sims", String::new());
+            let conf = access_cell_state(year, "mc_conf", String::new());
+            let date = access_cell_state(year, "mc_date", String::new());
+            let lookback = access_cell_state(year, "mc_lookback", String::new());
+
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_mc_days", storage_slot_key), vec![days]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_mc_sims", storage_slot_key), vec![sims]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_mc_conf", storage_slot_key), vec![conf]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_mc_date", storage_slot_key), vec![date]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_mc_lookback", storage_slot_key), vec![lookback]);
+            continue; 
+        }
+
         if !check_column_filled(year, tab_metrics) {
             continue;
         }
-
+        
         let base_row = match base_map.get(&year) {
             Some(row) => row,
             None => continue, 
@@ -295,6 +313,7 @@ fn render_editable_row(
                     "epv_metadata" => c.pending_epv_update = true,
                     "bgvm_metadata" => c.pending_bgvm_update = true,
                     "eva_metadata" => c.pending_eva_update  = true,
+                    "monte_carlo_metadata"  => c.pending_mc_update  = true,
                     _ => c.pending_rem_update = true,
                 }
             });
@@ -537,6 +556,263 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for EvaTab {
     }
 }
 
+struct MonteCarloTab;
+impl AbstractSubTab<Vec<AnalysisMetadataRow>> for MonteCarloTab {
+    fn id(&self) -> usize { 6 }
+    fn label(&self) -> &'static str { "Monte Carlo Simulation" }
+    
+    fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { 
+        // 1. Fetch historical data points
+        let mut entries: Vec<backend::database::analysis::HistoricalChartRow> = Vec::new();
+        backend::commands::memory_pool::with_active_table::<Vec<backend::database::analysis::HistoricalChartRow>, _, _>("historical_chart_data", |table| {
+            entries = table.clone();
+        });
+
+        let mut nse_points = Vec::with_capacity(entries.len());
+        let mut bse_points = Vec::with_capacity(entries.len());
+        for row in entries {
+            if let Some(val) = row.nse_close { nse_points.push(GenericChartPoint { date: row.date.clone(), value: val }); }
+            if let Some(val) = row.bse_close { bse_points.push(GenericChartPoint { date: row.date, value: val }); }
+        }
+
+        let mut chart_lines = vec![
+            GenericChartLine { label: "NSE", color: Color32::from_rgb(250, 210, 50), stroke_width: 1.5, points: nse_points },
+            GenericChartLine { label: "BSE", color: Color32::from_rgb(50, 150, 250), stroke_width: 1.5, points: bse_points },
+        ];
+
+        // 2. Fetch calculated simulation paths from pool
+        let mut path_points: Vec<backend::database::analysis::MonteCarloPathPoint> = Vec::new();
+        backend::commands::memory_pool::with_active_table::<Vec<backend::database::analysis::MonteCarloPathPoint>, _, _>("monte_carlo_path_results", |table| {
+            path_points = table.clone();
+        });
+
+        if !path_points.is_empty() {
+            // Group step points into vector tracks
+            let mut paths_map: std::collections::HashMap<u32, Vec<backend::database::analysis::MonteCarloPathPoint>> = std::collections::HashMap::new();
+            for pt in path_points {
+                paths_map.entry(pt.path_index).or_default().push(pt);
+            }
+
+            // Gather the final terminal prices to establish a distribution scaling frame
+            let mut terminal_values = Vec::new();
+            for path in paths_map.values() {
+                if !path.is_empty() {
+                    terminal_values.push(path.last().unwrap().simulated_price);
+                }
+            }
+
+            let total_paths = terminal_values.len() as f64;
+            let avg_terminal_price = if total_paths > 0.0 { terminal_values.iter().sum::<f64>() / total_paths } else { 0.0 };
+
+            for (idx, steps) in paths_map {
+                let mut path_points_rendered = Vec::with_capacity(steps.len());
+                for step in &steps {
+                    path_points_rendered.push(GenericChartPoint {
+                        date: step.step_date.clone(), // Uses matched string alignment identifiers directly
+                        value: step.simulated_price,
+                    });
+                }
+
+                // 3. Distribution Gradient Coloring Mechanics
+                // Scales path divergence relative to the sample average terminal expected value
+                let final_price = steps.last().map(|s| s.simulated_price).unwrap_or(avg_terminal_price);
+                
+                let path_color = if final_price >= avg_terminal_price {
+                    // Trajectory upward: Blend pure green scaling saturation intensity based on divergence depth
+                    let divergence_ratio = if avg_terminal_price > 0.0 { ((final_price - avg_terminal_price) / avg_terminal_price).min(1.0) } else { 0.5 };
+                    let green_component = (140.0 + (115.0 * divergence_ratio)) as u8; 
+                    let alpha_component = (35.0 + (50.0 * divergence_ratio)) as u8;
+                    Color32::from_rgba_unmultiplied(40, green_component, 110, alpha_component)
+                } else {
+                    // Trajectory downward: Blend pure red scaling saturation intensity based on divergence depth
+                    let divergence_ratio = if final_price > 0.0 { ((avg_terminal_price - final_price) / final_price).min(1.0) } else { 0.5 };
+                    let red_component = (140.0 + (115.0 * divergence_ratio)) as u8;
+                    let alpha_component = (35.0 + (50.0 * divergence_ratio)) as u8;
+                    Color32::from_rgba_unmultiplied(red_component, 65, 65, alpha_component)
+                };
+
+                chart_lines.push(GenericChartLine {
+                    label: if idx == 0 { "Simulated Trajectories" } else { "" },
+                    color: path_color,
+                    stroke_width: 1.2,
+                    points: path_points_rendered,
+                });
+            }
+        }
+
+        paint_abstract_chart_canvas(ui, &chart_lines);
+    }
+    
+    fn render_bottom(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) {
+        let target_year = match _data.last() {
+            Some(row) => row.year,
+            None => return, 
+        };
+
+        let mut chart_rows: Vec<backend::database::analysis::HistoricalChartRow> = Vec::new();
+        backend::commands::memory_pool::with_active_table::<Vec<backend::database::analysis::HistoricalChartRow>, _, _>("historical_chart_data", |table| {
+            chart_rows = table.clone();
+        });
+
+        let absolute_latest_date = match chart_rows.last() {
+            Some(row) => row.date.clone(),
+            None => return, 
+        };
+
+        let is_initialized = INTERACTIVE_CELL_CACHE.with(|cache| {
+            cache.borrow().inputs.contains_key(&(target_year, "mc_days".to_string()))
+        });
+
+        if !is_initialized {
+            update_cell_state(target_year, "mc_date", absolute_latest_date.clone());
+            update_cell_state(target_year, "mc_days", "252".to_string());
+            update_cell_state(target_year, "mc_sims", "5000".to_string());
+            update_cell_state(target_year, "mc_conf", "95".to_string());
+            update_cell_state(target_year, "mc_lookback", "252".to_string());
+        }
+
+        // Wrap the entire bottom panel in a vertical scroll area
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    ui.heading("Stochastic Model Settings");
+                    ui.add_space(10.0);
+
+                    egui::Grid::new("mc_interactive_grid")
+                        .num_columns(3)
+                        .spacing([30.0, 14.0])
+                        .show(ui, |ui| {
+                            ui.label("Simulation Anchor Date:");
+                            let mut current_date = access_cell_state(target_year, "mc_date", String::new());
+                            let res_date = ui.add(egui::TextEdit::singleline(&mut current_date).desired_width(85.0));
+                            if res_date.changed() {
+                                update_cell_state(target_year, "mc_date", current_date.clone());
+                                INTERACTIVE_CELL_CACHE.with(|cache| {
+                                    let mut c = cache.borrow_mut();
+                                    c.pending_mc_update = true;
+                                    c.pending_recalc = true;
+                                    c.last_edit_time = ui.input(|i| i.time);
+                                });
+                            }
+                            ui.label("Historical cutoff boundary (YYYY-MM-DD)");
+                            ui.end_row();
+
+                            ui.label("Historical Return Lookback Window:");
+                            let mut current_lookback = access_cell_state(target_year, "mc_lookback", String::new());
+                            let res_lookback = ui.add(egui::TextEdit::singleline(&mut current_lookback).desired_width(60.0));
+                            if res_lookback.changed() {
+                                update_cell_state(target_year, "mc_lookback", current_lookback.clone());
+                                INTERACTIVE_CELL_CACHE.with(|cache| {
+                                    let mut c = cache.borrow_mut();
+                                    c.pending_mc_update = true;
+                                    c.pending_recalc = true;
+                                    c.last_edit_time = ui.input(|i| i.time);
+                                });
+                            }
+                            ui.label("Trading days history context to harvest drift/volatility (e.g., 252, 504, 756)");
+                            ui.end_row();
+
+                            ui.label("Forecast Horizon (Trading Days):");
+                            let mut current_days = access_cell_state(target_year, "mc_days", String::new());
+                            let res_days = ui.add(egui::TextEdit::singleline(&mut current_days).desired_width(60.0));
+                            if res_days.changed() {
+                                update_cell_state(target_year, "mc_days", current_days.clone());
+                                INTERACTIVE_CELL_CACHE.with(|cache| {
+                                    let mut c = cache.borrow_mut();
+                                    c.pending_mc_update = true;
+                                    c.pending_recalc = true;
+                                    c.last_edit_time = ui.input(|i| i.time);
+                                });
+                            }
+                            ui.label("Days forward to project (e.g., 30, 90, 252)");
+                            ui.end_row();
+
+                            ui.label("Total Paths to Simulate:");
+                            let mut current_sims = access_cell_state(target_year, "mc_sims", String::new());
+                            let res_sims = ui.add(egui::TextEdit::singleline(&mut current_sims).desired_width(60.0));
+                            if res_sims.changed() {
+                                update_cell_state(target_year, "mc_sims", current_sims.clone());
+                                INTERACTIVE_CELL_CACHE.with(|cache| {
+                                    let mut c = cache.borrow_mut();
+                                    c.pending_mc_update = true;
+                                    c.pending_recalc = true;
+                                    c.last_edit_time = ui.input(|i| i.time);
+                                });
+                            }
+                            ui.label("Iteration count (e.g., 1000, 5000, 10000)");
+                            ui.end_row();
+
+                            ui.label("Confidence Boundary Percentile (%):");
+                            let mut current_conf = access_cell_state(target_year, "mc_conf", String::new());
+                            let res_conf = ui.add(egui::TextEdit::singleline(&mut current_conf).desired_width(60.0));
+                            if res_conf.changed() {
+                                update_cell_state(target_year, "mc_conf", current_conf.clone());
+                                INTERACTIVE_CELL_CACHE.with(|cache| {
+                                    let mut c = cache.borrow_mut();
+                                    c.pending_mc_update = true;
+                                    c.pending_recalc = true;
+                                    c.last_edit_time = ui.input(|i| i.time);
+                                });
+                            }
+                            ui.label("Statistical threshold tail cutoff (e.g., 95, 99)");
+                            ui.end_row();
+                        });
+
+                    ui.add_space(16.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    let mut is_dirty = false;
+                    let mut is_awaiting_debounce = false;
+                    INTERACTIVE_CELL_CACHE.with(|cache| {
+                        let c = cache.borrow();
+                        is_dirty = c.pending_mc_update;
+                        is_awaiting_debounce = c.pending_recalc;
+                    });
+
+                    if is_dirty && !is_awaiting_debounce {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.colored_label(Color32::from_rgb(250, 210, 50), "⏳ STATUS: Waiting for user typing to settle...");
+                        });
+                    } else if is_awaiting_debounce {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.colored_label(Color32::from_rgb(50, 150, 250), "⚡ ENGINE: Spawning parallel Rayon threads, running calculations...");
+                        });
+                        ui.ctx().request_repaint(); 
+                    } else {
+                        let mut summary_rows: Vec<backend::database::analysis::MonteCarloResultSummary> = Vec::new();
+                        backend::commands::memory_pool::with_active_table::<Vec<backend::database::analysis::MonteCarloResultSummary>, _, _>("monte_carlo_summary_results", |table| {
+                            summary_rows = table.clone();
+                        });
+
+                        if let Some(summary) = summary_rows.first() {
+                            if summary.status_ok {
+                                ui.colored_label(Color32::from_rgb(50, 220, 120), "✅ STATUS: Calculation complete. Summary results:");
+                                ui.indent("mc_summary_stats", |ui| {
+                                    ui.label(format!("• Expected Terminal Price: {:.2}", summary.expected_value));
+                                    ui.label(format!("• Upper Target Boundary: {:.2}", summary.upper_bound));
+                                    ui.label(format!("• Lower Support Boundary: {:.2}", summary.lower_bound));
+                                });
+                            } else {
+                                ui.colored_label(Color32::from_rgb(230, 75, 75), format!("❌ ENGINE ERROR: {}", summary.error_msg));
+                            }
+                        } else {
+                            INTERACTIVE_CELL_CACHE.with(|cache| {
+                                let mut c = cache.borrow_mut();
+                                c.pending_mc_update = true;
+                                c.pending_recalc = true;
+                            });
+                            ui.ctx().request_repaint();
+                        }
+                    }
+                });
+            });
+    }
+}
+
 // =========================================================================
 // PIPELINE ROUTING CANVAS ORCHESTRATOR
 // =========================================================================
@@ -559,6 +835,10 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
             c.pending_dcf_update = false;
             c.pending_ddm_update = false;
             c.pending_rem_update = false;
+            c.pending_epv_update = false;
+            c.pending_bgvm_update = false;
+            c.pending_eva_update = false;
+            c.pending_mc_update = false;
             c.pending_recalc = false;
         });
 
@@ -574,6 +854,7 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
             backend::commands::memory_pool::store_parsed_table("epv_metadata", base_data.clone()); 
             backend::commands::memory_pool::store_parsed_table("bgvm_metadata", base_data.clone());
             backend::commands::memory_pool::store_parsed_table("eva_metadata", base_data.clone());
+            backend::commands::memory_pool::store_parsed_table("monte_carlo_metadata", base_data.clone());
 
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "DCF");
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "DDM");
@@ -591,6 +872,7 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
         &EpvTab,
         &GrahamTab,
         &EvaTab,
+        &MonteCarloTab,
     ];
 
     draw_nav_canvas_orchestrator(
@@ -604,6 +886,7 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
     let mut run_epv = false;
     let mut run_bgvm = false;
     let mut run_eva = false;
+    let mut run_mc = false;
 
     INTERACTIVE_CELL_CACHE.with(|cache| {
         let mut c = cache.borrow_mut();
@@ -618,6 +901,7 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
                 run_epv = c.pending_epv_update;
                 run_bgvm = c.pending_bgvm_update;
                 run_eva = c.pending_eva_update;
+                run_mc = c.pending_mc_update;
                 
                 c.pending_dcf_update = false;
                 c.pending_ddm_update = false;
@@ -625,6 +909,7 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
                 c.pending_epv_update = false;
                 c.pending_bgvm_update = false;
                 c.pending_eva_update = false;
+                c.pending_mc_update = false;
             } else {
                 ui.ctx().request_repaint(); // Keep frame updates running until timer finishes
             }
@@ -667,6 +952,19 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
             let (years, _) = get_valuation_maps(&metrics, "eva_metadata");
             push_interactive_state_to_pool(&years, &metrics, "eva_metadata");
             backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "EVA");
+        }
+        if run_mc {
+            let metrics = vec!["mc_days", "mc_sims", "mc_conf", "mc_date", "mc_lookback"];
+            let mut metadata_rows: Vec<AnalysisMetadataRow> = Vec::new();
+            backend::commands::memory_pool::with_active_table::<Vec<AnalysisMetadataRow>, _, _>("analysis_metadata", |table| {
+                metadata_rows = table.clone();
+            });
+            let target_year = match metadata_rows.last() {
+                Some(row) => row.year,
+                None => return,
+            };
+            push_interactive_state_to_pool(&[target_year], &metrics, "monte_carlo_metadata");
+            backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, "MONTE_CARLO");
         }
         
     }

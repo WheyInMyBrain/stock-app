@@ -10,6 +10,7 @@ use analysis::on_fly::rim::{RimInputMetrics, calculate_rim_on_fly};
 use analysis::on_fly::epv::{EpvInputMetrics, calculate_epv_on_fly};
 use analysis::on_fly::bgvm::{GrahamInputMetrics, calculate_graham_on_fly};
 use analysis::on_fly::eva::{EvaInputMetrics, calculate_eva_on_fly};
+use analysis::on_fly::monte_carlo::{MonteCarloInputMetrics, calculate_monte_carlo_on_fly};
 
 /// Core non-blocking engine processing pipeline. Takes separate metadata slots,
 /// routes them down to on-fly calculation scripts, and flushes output slots.
@@ -21,6 +22,7 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
         "EPV" => "epv_metadata",
         "BGVM" => "bgvm_metadata",
         "EVA" => "eva_metadata",
+        "MONTE_CARLO" => "monte_carlo_metadata",
         _ => "rem_metadata",
     };
 
@@ -30,6 +32,7 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
         "EPV" => "epv_calculated_results",
         "BGVM" => "bgvm_calculated_results",
         "EVA" => "eva_calculated_results",
+        "MONTE_CARLO" => "monte_carlo_summary_results",
         _ => "rem_calculated_results",
     };
 
@@ -38,6 +41,101 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
     memory_pool::with_active_table::<Vec<AnalysisMetadataRow>, _, _>(metadata_key, |table| {
         inputs = table.clone();
     });
+
+    // =========================================================================
+    // SPECIALIZED MONTE CARLO PROBABILISTIC INTERCEPTOR
+    // =========================================================================
+    // =========================================================================
+    // SPECIALIZED MONTE CARLO PROBABILISTIC INTERCEPTOR
+    // =========================================================================
+    if tab_key == "MONTE_CARLO" {
+        let mut chart_rows: Vec<crate::database::analysis::HistoricalChartRow> = Vec::new();
+        memory_pool::with_active_table::<Vec<crate::database::analysis::HistoricalChartRow>, _, _>("historical_chart_data", |table| {
+            chart_rows = table.clone();
+        });
+
+        let mut mc_days = String::new();
+        let mut mc_sims = String::new();
+        let mut mc_conf = String::new();
+        let mut mc_date = String::new();
+        let mut mc_lookback = String::new();
+
+        memory_pool::with_active_table::<Vec<String>, _, _>(&format!("{}_mc_days", metadata_key), |t| {
+            if !t.is_empty() { mc_days = t[0].clone(); }
+        });
+        memory_pool::with_active_table::<Vec<String>, _, _>(&format!("{}_mc_sims", metadata_key), |t| {
+            if !t.is_empty() { mc_sims = t[0].clone(); }
+        });
+        memory_pool::with_active_table::<Vec<String>, _, _>(&format!("{}_mc_conf", metadata_key), |t| {
+            if !t.is_empty() { mc_conf = t[0].clone(); }
+        });
+        memory_pool::with_active_table::<Vec<String>, _, _>(&format!("{}_mc_date", metadata_key), |t| {
+            if !t.is_empty() { mc_date = t[0].clone(); }
+        });
+        memory_pool::with_active_table::<Vec<String>, _, _>(&format!("{}_mc_lookback", metadata_key), |t| {
+            if !t.is_empty() { mc_lookback = t[0].clone(); }
+        });
+
+        let days_parsed = match mc_days.parse::<usize>() { Ok(val) => val, Err(_) => return, };
+        let sims_parsed = match mc_sims.parse::<usize>() { Ok(val) => val, Err(_) => return, };
+        let conf_parsed = match mc_conf.parse::<f64>() { Ok(val) => val, Err(_) => return, };
+        let lookback_parsed = match mc_lookback.parse::<usize>() { Ok(val) => val, Err(_) => return, };
+
+        let cutoff_index = match chart_rows.iter().position(|row| row.date == mc_date) {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        // Extract complete price data sequence up to anchor cutoff index
+        let close_prices: Vec<f64> = chart_rows[0..=cutoff_index]
+            .iter()
+            .filter_map(|row| row.nse_close.or(row.bse_close))
+            .collect();
+
+        if close_prices.is_empty() { return; }
+
+        let mc_inputs = MonteCarloInputMetrics {
+            forecast_days: days_parsed,
+            num_simulations: sims_parsed,
+            confidence_level: conf_parsed,
+            visual_paths_to_return: 10, 
+            historical_lookback: lookback_parsed,
+        };
+
+        let output = calculate_monte_carlo_on_fly(&close_prices, &mc_inputs);
+
+        let summary = vec![crate::database::analysis::MonteCarloResultSummary {
+            ticker: _ticker.to_string(),
+            expected_value: output.expected_value,
+            upper_bound: output.upper_bound,
+            lower_bound: output.lower_bound,
+            forecast_horizon: mc_inputs.forecast_days as u32,
+            total_simulations: mc_inputs.num_simulations as u32,
+            status_ok: output.status_ok,
+            error_msg: output.error_msg,
+        }];
+
+        let mut path_points = Vec::new();
+        for (path_idx, path) in output.visual_paths.iter().enumerate() {
+            for (step_idx, price) in path.iter().enumerate() {
+                let step_label = if step_idx == 0 {
+                    mc_date.clone()
+                } else {
+                    format!("{} T+{:03}", mc_date, step_idx)
+                };
+
+                path_points.push(crate::database::analysis::MonteCarloPathPoint {
+                    path_index: path_idx as u32,
+                    step_date: step_label,
+                    simulated_price: *price,
+                });
+            }
+        }
+
+        memory_pool::store_parsed_table(result_slot_key, summary);
+        memory_pool::store_parsed_table("monte_carlo_path_results", path_points);
+        return; 
+    }
 
     let mut final_results = Vec::with_capacity(inputs.len());
 

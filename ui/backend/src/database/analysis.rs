@@ -1,6 +1,7 @@
 use crate::commands::memory_pool::store_parsed_table;
 use polars::prelude::*;
 use std::collections::{HashMap, BTreeSet, BTreeMap, HashSet};
+use serde::{Serialize, Deserialize};
 
 #[derive(Default, Debug, Clone)]
 pub struct AnalysisMetadataRow {
@@ -31,10 +32,9 @@ pub struct AnalysisMetadataRow {
     pub bgvm_g: f64,
 }
 
-#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
 pub struct ValuationResultRow {
     pub year: i32,
-    // Intermediate Derived Metrics
     pub calculated_tax_rate: f64,
     pub calculated_kd: f64,
     pub calculated_ke: f64,
@@ -42,6 +42,25 @@ pub struct ValuationResultRow {
     pub intrinsic_value: f64,
     pub status_ok: bool,
     pub error_msg: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonteCarloResultSummary {
+    pub ticker: String,
+    pub expected_value: f64,    
+    pub upper_bound: f64,       
+    pub lower_bound: f64,       
+    pub forecast_horizon: u32,  
+    pub total_simulations: u32, 
+    pub status_ok: bool,
+    pub error_msg: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonteCarloPathPoint {
+    pub path_index: u32,       
+    pub step_date: String,              
+    pub simulated_price: f64,   
 }
 
 // =========================================================================
