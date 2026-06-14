@@ -1,7 +1,43 @@
-use egui::Ui;
+// stock-app/ui/frontend/src/ui/panels/overview.rs
+
+use egui::{Ui, Color32, Vec2, Stroke};
 use crate::core::data_manager::DataManager;
 use crate::ui::layouts::canvas::{AbstractSubTab, draw_nav_canvas_orchestrator};
 use backend::database::overview::OverviewMetadata;
+
+/// Custom formatter parsing raw numbers into Indian Currency 3-2-2 digit groupings
+fn format_indian_style_number(val: f64) -> String {
+    if val == 0.0 { return "0".to_string(); }
+    let rounded = val.round() as i64;
+    let is_negative = rounded < 0;
+    let clean_int = rounded.abs().to_string();
+
+    let mut result = String::new();
+    let len = clean_int.len();
+
+    if len <= 3 {
+        result.push_str(&clean_int);
+    } else {
+        let last_three = &clean_int[len - 3..];
+        let remaining = &clean_int[..len - 3];
+        
+        let mut groups = Vec::new();
+        let mut chars: Vec<char> = remaining.chars().collect();
+        
+        while !chars.is_empty() {
+            let split_pos = chars.len().saturating_sub(2);
+            let group: String = chars.drain(split_pos..).collect();
+            groups.push(group);
+        }
+        groups.reverse();
+        
+        result.push_str(&groups.join(","));
+        result.push(',');
+        result.push_str(last_three);
+    }
+
+    if is_negative { format!("-{}", result) } else { result }
+}
 
 struct DetailsSubTab;
 impl AbstractSubTab<OverviewMetadata> for DetailsSubTab {
@@ -35,6 +71,187 @@ impl AbstractSubTab<OverviewMetadata> for DetailsSubTab {
     }
 }
 
+struct ShareholdersMatrixSubTab;
+impl AbstractSubTab<OverviewMetadata> for ShareholdersMatrixSubTab {
+    fn id(&self) -> usize { 3 }
+    fn label(&self) -> &'static str { "Shareholders Structure" }
+
+    fn render_main(&self, ui: &mut Ui, meta: &OverviewMetadata) {
+        if meta.available_reporting_dates.is_empty() {
+            ui.weak("No regulatory shareholding data logs cached for this ticker.");
+            return;
+        }
+
+        // Get unique rows to keep everything structured properly
+        let unique_macro_labels: Vec<&str> = meta
+            .macro_allocations
+            .iter()
+            .map(|r| r.category_label.as_str())
+            .collect::<std::collections::BTreeSet<&str>>()
+            .into_iter()
+            .collect();
+
+        let unique_whale_names: Vec<(&str, &str)> = meta
+            .hni_whales
+            .iter()
+            .map(|r| (r.investor_name.as_str(), r.entity_classification.as_str()))
+            .collect::<std::collections::BTreeSet<(&str, &str)>>()
+            .into_iter()
+            .collect();
+
+        egui::ScrollArea::vertical()
+            .id_source("shareholders_dead_simple_vertical_scroll")
+            .show(ui, |ui| {
+
+                let panel_max_safe_width = ui.available_width();
+
+                ui.label(egui::RichText::new("CAP-TABLE MACRO STRUCTURE ALLOCATION").strong().color(Color32::from_rgb(100, 180, 240)));
+                ui.add_space(6.0);
+
+                egui::ScrollArea::horizontal()
+                    .id_source("macro_horizontal_containment_shield")
+                    .max_width(panel_max_safe_width)
+                    .show(ui, |ui| {
+                        egui::Grid::new("macro_allocations_simple_grid")
+                            .striped(true)
+                            .spacing(Vec2::new(32.0, 12.0))
+                            .show(ui, |ui| {
+                                // Headers
+                                ui.label(egui::RichText::new("SEGMENT PARTICULARS").strong());
+                                for quarter_date in &meta.available_reporting_dates {
+                                    ui.label(egui::RichText::new(quarter_date).strong().color(Color32::WHITE));
+                                }
+                                ui.end_row();
+
+                                // Data rows
+                                for label in &unique_macro_labels {
+                                    ui.label(egui::RichText::new(*label).strong());
+                                    
+                                    for quarter_date in &meta.available_reporting_dates {
+                                        let cell_match = meta.macro_allocations.iter().find(|r| r.date == *quarter_date && r.category_label == *label);
+                                        ui.vertical(|ui| {
+                                            if let Some(row) = cell_match {
+                                                ui.label(egui::RichText::new(format!("{:.2}%", row.stake_percentage)).color(Color32::from_rgb(100, 180, 240)).strong());
+                                                ui.small(format_indian_style_number(row.share_count));
+                                            } else {
+                                                ui.weak("0.00%");
+                                                ui.small("0");
+                                            }
+                                        });
+                                    }
+                                    ui.end_row();
+                                }
+                            });
+                    });
+
+                ui.add_space(28.0);
+
+                ui.label(egui::RichText::new("STRATEGIC HNI WHALES DISCLOSURE MATRIX").strong().color(Color32::from_rgb(100, 240, 140)));
+                ui.add_space(6.0);
+
+                if unique_whale_names.is_empty() {
+                    ui.weak("↳ No individual corporate bodies or whales holding >= 1% registered.");
+                } else {
+                    egui::ScrollArea::horizontal()
+                        .id_source("whale_horizontal_containment_shield")
+                        .max_width(panel_max_safe_width)
+                        .show(ui, |ui| {
+                            egui::Grid::new("whale_allocations_simple_grid")
+                                .striped(true)
+                                .spacing(Vec2::new(32.0, 12.0))
+                                .show(ui, |ui| {
+                                    // Headers
+                                    ui.label(egui::RichText::new("INVESTOR LEGAL IDENTITY [CLASSIFICATION]").strong());
+                                    for quarter_date in &meta.available_reporting_dates {
+                                        ui.label(egui::RichText::new(quarter_date).strong().color(Color32::WHITE));
+                                    }
+                                    ui.end_row();
+
+                                    // Data rows
+                                    for (name, class_tag) in &unique_whale_names {
+                                        ui.label(format!("{} [{}]", name, class_tag));
+                                        
+                                        for quarter_date in &meta.available_reporting_dates {
+                                            let whale_match = meta.hni_whales.iter().find(|r| r.date == *quarter_date && r.investor_name == *name);
+                                            ui.vertical(|ui| {
+                                                if let Some(row) = whale_match {
+                                                    ui.label(egui::RichText::new(format!("{:.2}%", row.stake_percentage)).color(Color32::from_rgb(100, 240, 140)).strong());
+                                                    ui.small(format_indian_style_number(row.share_count));
+                                                } else {
+                                                    ui.weak("0.00%");
+                                                    ui.small("0");
+                                                }
+                                            });
+                                        }
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                }
+
+                ui.add_space(28.0);
+
+                ui.label(egui::RichText::new("LATEST REVEALED SIGNIFICANT BENEFICIAL OWNERSHIP (SBO DIRECTORY)").strong().color(Color32::from_rgb(240, 180, 100)));
+                ui.add_space(6.0);
+
+                if meta.sbo_registry.is_empty() {
+                    ui.weak("↳ No complex indirect SBO human governance command tracks reported inside this asset catalog.");
+                } else {
+                    let mut active_sbo_quarter = String::new();
+                    let mut filtered_sbos = Vec::new();
+
+                    for date in &meta.available_reporting_dates {
+                        let matches: Vec<_> = meta.sbo_registry.iter().filter(|r| r.date == *date).collect();
+                        if !matches.is_empty() {
+                            active_sbo_quarter = date.clone();
+                            filtered_sbos = matches;
+                            break;
+                        }
+                    }
+
+                    if filtered_sbos.is_empty() {
+                        ui.weak("↳ No active SBO layers reported in recent quarters.");
+                    } else {
+                        ui.label(egui::RichText::new(format!("Showing latest available data from: {}", active_sbo_quarter)).italics().color(Color32::GRAY));
+                        ui.add_space(8.0);
+
+                        // Render as a flat vertical list that naturally wraps and stays inside your side-panel boundaries
+                        ui.vertical(|ui| {
+                            for row in filtered_sbos {
+                                let item_frame = egui::Frame::none()
+                                    .fill(Color32::from_rgb(22, 22, 22))
+                                    .inner_margin(egui::Margin::same(12.0))
+                                    .stroke(Stroke::new(1.0, Color32::from_rgb(40, 45, 50)));
+
+                                item_frame.show(ui, |ui| {
+                                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.weak("Ultimate Human SBO: ");
+                                            ui.label(egui::RichText::new(&row.human_sbo_name).strong().color(Color32::WHITE));
+                                        });
+                                        ui.add_space(2.0);
+                                        ui.horizontal(|ui| {
+                                            ui.weak("Registered Proxy Shell / Trust: ");
+                                            ui.label(egui::RichText::new(&row.proxy_registered_owner).color(Color32::from_rgb(240, 180, 100)));
+                                        });
+                                        ui.add_space(2.0);
+                                        ui.horizontal(|ui| {
+                                            ui.weak("Origin & Acquisition Date: ");
+                                            ui.label(format!("{} ({})", row.nationality, row.acquisition_date));
+                                        });
+                                    });
+                                });
+                                ui.add_space(8.0);
+                            }
+                        });
+                    }
+                }
+            });
+    }
+
+    fn render_bottom(&self, _ui: &mut Ui, _meta: &OverviewMetadata) {}
+}
+
 struct BoardSubTab;
 impl AbstractSubTab<OverviewMetadata> for BoardSubTab {
     fn id(&self) -> usize { 1 }
@@ -54,16 +271,16 @@ pub fn draw_overview_panel(ui: &mut Ui, active_ticker: &str) {
 
     let tabs: &[&dyn AbstractSubTab<OverviewMetadata>] = &[
         &DetailsSubTab,
+        &ShareholdersMatrixSubTab,
         &BoardSubTab,
     ];
 
-    // Passes our concrete type data parameters out into the abstract layout framework
     draw_nav_canvas_orchestrator(
         ui,
         active_ticker,
-        "overview_metadata",        // Target memory pool lookup table key
-        "OVERVIEW",                 // Title heading contextual identifier 
-        "overview_active_sub_tab",  // Unique token string driving temporary frame view state storage keys
+        "overview_metadata",        
+        "OVERVIEW",                 
+        "overview_active_sub_tab",  
         tabs,
     );
 }
