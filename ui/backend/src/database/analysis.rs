@@ -60,6 +60,15 @@ pub struct MonteCarloPathPoint {
     pub simulated_price: f64,   
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DcfMcPercentileSummary {
+    pub year: i32,
+    pub p100: f64, pub p97_5: f64, pub p95: f64, pub p90: f64,
+    pub p75: f64,  pub p50: f64,   pub p25: f64, pub p10: f64,
+    pub p5: f64,   pub p2_5: f64,  pub p0: f64,  pub average: f64,
+    pub mean_g: f64, pub vol_g: f64, pub status_ok: bool, pub error_msg: String,
+}
+
 // =========================================================================
 // 1. UTILITY PARSING HELPERS
 // =========================================================================

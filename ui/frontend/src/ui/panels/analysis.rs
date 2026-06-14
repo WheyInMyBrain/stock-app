@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::core::data_manager::DataManager;
 use crate::ui::layouts::canvas::{AbstractSubTab, draw_nav_canvas_orchestrator, paint_abstract_chart_canvas, GenericChartLine, GenericChartPoint, paint_abstract_bar_canvas, GenericBarGroup, GenericBarChartSeries};
-use backend::database::analysis::{AnalysisMetadataRow, ValuationResultRow};
+use backend::database::analysis::{AnalysisMetadataRow, ValuationResultRow, DcfMcPercentileSummary};
 
 // =========================================================================
 // THREAD-SAFE CELLS CACHE CONTROL LAYER
@@ -17,6 +17,7 @@ pub enum ModelType {
     Bgvm,
     Eva,
     MonteCarlo,
+    DcfMonteCarlo,
 }
 
 impl ModelType {
@@ -29,6 +30,7 @@ impl ModelType {
             Self::Bgvm => "BGVM",
             Self::Eva => "EVA",
             Self::MonteCarlo => "MONTE_CARLO",
+            Self::DcfMonteCarlo => "DCF_MONTE_CARLO",
         }
     }
 
@@ -41,6 +43,7 @@ impl ModelType {
             Self::Bgvm => "bgvm_metadata",
             Self::Eva => "eva_metadata",
             Self::MonteCarlo => "monte_carlo_metadata",
+            Self::DcfMonteCarlo => "dcfmc_metadata",
         }
     }
 
@@ -70,6 +73,11 @@ impl ModelType {
             ],
             Self::MonteCarlo => &[
                 "mc_days", "mc_sims", "mc_conf", "mc_date", "mc_lookback"
+            ],
+            Self::DcfMonteCarlo => &[
+                "dcfmc_ocf", "dcfmc_capex_out", "dcfmc_debt", "dcfmc_eq", "dcfmc_shares", 
+                "dcfmc_pbt", "dcfmc_pat", "dcfmc_interest", "dcfmc_rf", "dcfmc_rm", 
+                "dcfmc_gn", "dcfmc_sims"
             ],
         }
     }
@@ -150,6 +158,76 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
 
     let mut master_rows = Vec::with_capacity(years.len());
     let mut key_buf = String::with_capacity(64);
+    
+    if storage_slot_key == "dcfmc_metadata" {
+        for &year in years {
+            let ocf = access_cell_state(year, "dcfmc_ocf", base_map.get(&year).map(|r| r.operating_cash_flow.to_string()).unwrap_or_default());
+            let capex = access_cell_state(year, "dcfmc_capex_out", base_map.get(&year).map(|r| r.capex_outflow.to_string()).unwrap_or_default());
+            let debt = access_cell_state(year, "dcfmc_debt", base_map.get(&year).map(|r| r.total_debt.to_string()).unwrap_or_default());
+            let eq = access_cell_state(year, "dcfmc_eq", base_map.get(&year).map(|r| r.total_equity.to_string()).unwrap_or_default());
+            let shares = access_cell_state(year, "dcfmc_shares", base_map.get(&year).map(|r| r.outstanding_shares.to_string()).unwrap_or_default());
+            let pbt = access_cell_state(year, "dcfmc_pbt", base_map.get(&year).map(|r| r.profit_before_tax.to_string()).unwrap_or_default());
+            let pat = access_cell_state(year, "dcfmc_pat", base_map.get(&year).map(|r| r.net_profit_after_tax.to_string()).unwrap_or_default());
+            let interest = access_cell_state(year, "dcfmc_interest", base_map.get(&year).map(|r| r.finance_interest_expense.to_string()).unwrap_or_default());
+            let div = access_cell_state(year, "dcfmc_div", base_map.get(&year).map(|r| r.dividend_paid.to_string()).unwrap_or_default());
+            
+            let rf = access_cell_state(year, "dcfmc_rf", base_map.get(&year).map(|r| r.dynamic_rf.to_string()).unwrap_or_default());
+            let rm = access_cell_state(year, "dcfmc_rm", base_map.get(&year).map(|r| r.dynamic_rm.to_string()).unwrap_or_default());
+            let gn = access_cell_state(year, "dcfmc_gn", base_map.get(&year).map(|r| r.terminal_gn.to_string()).unwrap_or_default());
+            let sims = access_cell_state(year, "dcfmc_sims", "5000".to_string());
+
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rf", storage_slot_key, year), vec![rf.clone()]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rm", storage_slot_key, year), vec![rm.clone()]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_gn", storage_slot_key, year), vec![gn.clone()]);
+            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_sims", storage_slot_key, year), vec![sims.clone()]);
+
+            update_cell_state(year, "dcfmc_ocf", ocf.clone());
+            update_cell_state(year, "dcfmc_capex_out", capex.clone());
+            update_cell_state(year, "dcfmc_debt", debt.clone());
+            update_cell_state(year, "dcfmc_eq", eq.clone());
+            update_cell_state(year, "dcfmc_shares", shares.clone());
+            update_cell_state(year, "dcfmc_pbt", pbt.clone());
+            update_cell_state(year, "dcfmc_pat", pat.clone());
+            update_cell_state(year, "dcfmc_interest", interest.clone());
+            update_cell_state(year, "dcfmc_div", div.clone());
+            update_cell_state(year, "dcfmc_rf", rf.clone());
+            update_cell_state(year, "dcfmc_rm", rm.clone());
+            update_cell_state(year, "dcfmc_gn", gn.clone());
+            update_cell_state(year, "dcfmc_sims", sims.clone());
+
+            let base_row = match base_map.get(&year) { Some(r) => r, None => continue };
+            
+            let parsed_ocf = ocf.parse::<i64>().unwrap_or(base_row.operating_cash_flow);
+            let parsed_capex = capex.parse::<i64>().unwrap_or(base_row.capex_outflow);
+
+            master_rows.push(AnalysisMetadataRow {
+                year,
+                dividend_paid: div.parse::<i64>().unwrap_or(base_row.dividend_paid),
+                basic_eps: base_row.basic_eps,
+                net_profit_after_tax: pat.parse::<i64>().unwrap_or(base_row.net_profit_after_tax),
+                total_equity: eq.parse::<i64>().unwrap_or(base_row.total_equity),
+                total_debt: debt.parse::<i64>().unwrap_or(base_row.total_debt),
+                operating_cash_flow: parsed_ocf,
+                capex_outflow: parsed_capex,
+                capex_inflow: base_row.capex_inflow,
+                net_capex: parsed_capex + base_row.capex_inflow,
+                free_cash_flow: parsed_ocf + (parsed_capex + base_row.capex_inflow),
+                outstanding_shares: shares.parse::<i64>().unwrap_or(base_row.outstanding_shares),
+                profit_before_tax: pbt.parse::<i64>().unwrap_or(base_row.profit_before_tax),
+                finance_interest_expense: interest.parse::<i64>().unwrap_or(base_row.finance_interest_expense),
+                effective_tax_rate: base_row.effective_tax_rate,
+                nse_beta: base_row.nse_beta,
+                bse_beta: base_row.bse_beta,
+                average_beta: base_row.average_beta,
+                dynamic_rf: rf.parse::<f64>().unwrap_or(base_row.dynamic_rf),
+                dynamic_rm: rm.parse::<f64>().unwrap_or(base_row.dynamic_rm),
+                sustainable_g: base_row.sustainable_g,
+                terminal_gn: gn.parse::<f64>().unwrap_or(base_row.terminal_gn),
+            });
+        }
+        backend::commands::memory_pool::store_parsed_table(storage_slot_key, master_rows);
+        return;
+    }
 
     for &year in years {
         if !check_column_filled(year, tab_metrics) { continue; }
@@ -341,6 +419,7 @@ fn render_editable_row(
                 "bgvm_metadata" => ModelType::Bgvm,
                 "eva_metadata"  => ModelType::Eva,
                 "monte_carlo_metadata" => ModelType::MonteCarlo,
+                "dcfmc_metadata" => ModelType::DcfMonteCarlo,
                 _ => ModelType::Rem,
             };
 
@@ -839,6 +918,145 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for MonteCarloTab {
     }
 }
 
+pub struct DcfMonteCarloTab;
+impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DcfMonteCarloTab {
+    fn id(&self) -> usize { 7 }
+    fn label(&self) -> &'static str { "Stochastic DCF" }
+
+    fn render_main(&self, ui: &mut Ui, _data: &Vec<AnalysisMetadataRow>) { 
+        let mut results = Vec::new();
+        
+        backend::commands::memory_pool::with_active_table::<Vec<DcfMcPercentileSummary>, _, _>(
+            "dcfmc_calculated_results", 
+            |table| { results = table.clone(); }
+        );
+
+        if results.is_empty() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak("Simulating multi-percentile parallel distribution paths...");
+            });
+            return;
+        }
+
+        // 1. Unpack baseline raw historical stock exchange market close trends
+        let mut entries: Vec<backend::database::analysis::HistoricalChartRow> = Vec::new();
+        backend::commands::memory_pool::with_active_table::<Vec<backend::database::analysis::HistoricalChartRow>, _, _>("historical_chart_data", |table| {
+            entries = table.clone();
+        });
+
+        let mut nse_points = Vec::with_capacity(entries.len());
+        let mut bse_points = Vec::with_capacity(entries.len());
+        for row in &entries {
+            if let Some(val) = row.nse_close { nse_points.push(GenericChartPoint { date: row.date.clone(), value: val }); }
+            if let Some(val) = row.bse_close { bse_points.push(GenericChartPoint { date: row.date.clone(), value: val }); }
+        }
+
+        let mut chart_lines = vec![
+            GenericChartLine { label: "NSE", color: Color32::from_rgb(250, 210, 50), stroke_width: 1.5, points: nse_points },
+            GenericChartLine { label: "BSE", color: Color32::from_rgb(50, 150, 250), stroke_width: 1.5, points: bse_points },
+        ];
+
+        // 2. Unpack Monte Carlo statistical summaries mapped chronologically year-by-year
+        let mut p100_pts  = Vec::with_capacity(results.len());
+        let mut p97_5_pts = Vec::with_capacity(results.len());
+        let mut p95_pts   = Vec::with_capacity(results.len());
+        let mut p90_pts   = Vec::with_capacity(results.len());
+        let mut p75_pts   = Vec::with_capacity(results.len());
+        let mut p50_pts   = Vec::with_capacity(results.len());
+        let mut p25_pts   = Vec::with_capacity(results.len());
+        let mut p10_pts   = Vec::with_capacity(results.len());
+        let mut p5_pts    = Vec::with_capacity(results.len());
+        let mut p2_5_pts  = Vec::with_capacity(results.len());
+        let mut p0_pts    = Vec::with_capacity(results.len());
+        let mut avg_pts   = Vec::with_capacity(results.len());
+
+        for step in &results {
+            // Match the summary node year against our historical data entries to find its true YYYY-MM-DD signature
+            let exact_chart_date = entries
+                .iter()
+                .find(|row| row.date.starts_with(&step.year.to_string()))
+                .map(|row| row.date.clone())
+                .unwrap_or_else(|| format!("{}-03-31", step.year));
+
+            p100_pts.push(GenericChartPoint  { date: exact_chart_date.clone(), value: step.p100 });
+            p97_5_pts.push(GenericChartPoint { date: exact_chart_date.clone(), value: step.p97_5 });
+            p95_pts.push(GenericChartPoint   { date: exact_chart_date.clone(), value: step.p95 });
+            p90_pts.push(GenericChartPoint   { date: exact_chart_date.clone(), value: step.p90 });
+            p75_pts.push(GenericChartPoint   { date: exact_chart_date.clone(), value: step.p75 });
+            p50_pts.push(GenericChartPoint   { date: exact_chart_date.clone(), value: step.p50 });
+            p25_pts.push(GenericChartPoint   { date: exact_chart_date.clone(), value: step.p25 });
+            p10_pts.push(GenericChartPoint   { date: exact_chart_date.clone(), value: step.p10 });
+            p5_pts.push(GenericChartPoint    { date: exact_chart_date.clone(), value: step.p5 });
+            p2_5_pts.push(GenericChartPoint  { date: exact_chart_date.clone(), value: step.p2_5 });
+            p0_pts.push(GenericChartPoint    { date: exact_chart_date.clone(), value: step.p0 });
+            avg_pts.push(GenericChartPoint   { date: exact_chart_date,         value: step.average });
+        }
+
+        // 3. Assemble tracks using highly differentiated color paths
+        chart_lines.extend(vec![
+            GenericChartLine { label: "Max (P100)", color: Color32::from_rgb(34, 139, 34), stroke_width: 1.0, points: p100_pts },
+            GenericChartLine { label: "P97.5", color: Color32::from_rgb(46, 139, 87), stroke_width: 1.0, points: p97_5_pts },
+            GenericChartLine { label: "P95", color: Color32::from_rgb(60, 179, 113), stroke_width: 1.0, points: p95_pts },
+            GenericChartLine { label: "P90", color: Color32::from_rgb(50, 205, 50), stroke_width: 1.2, points: p90_pts },
+            GenericChartLine { label: "P75", color: Color32::from_rgb(0, 191, 255), stroke_width: 1.2, points: p75_pts },
+            GenericChartLine { label: "Median (P50)", color: Color32::from_rgb(30, 144, 255), stroke_width: 2.2, points: p50_pts },
+            GenericChartLine { label: "Average", color: Color32::from_rgb(255, 215, 0), stroke_width: 1.8, points: avg_pts },
+            GenericChartLine { label: "P25", color: Color32::from_rgb(138, 43, 226), stroke_width: 1.2, points: p25_pts },
+            GenericChartLine { label: "P10", color: Color32::from_rgb(218, 112, 214), stroke_width: 1.2, points: p10_pts },
+            GenericChartLine { label: "P5", color: Color32::from_rgb(255, 69, 0), stroke_width: 1.0, points: p5_pts },
+            GenericChartLine { label: "P2.5", color: Color32::from_rgb(220, 20, 60), stroke_width: 1.0, points: p2_5_pts },
+            GenericChartLine { label: "Min (P0)", color: Color32::from_rgb(139, 0, 0), stroke_width: 1.0, points: p0_pts },
+        ]);
+
+        egui::ScrollArea::vertical()
+            .id_source("stochastic_dcf_canvas_scroll")
+            .auto_shrink([true; 2])
+            .show(ui, |ui| {
+                paint_abstract_chart_canvas(ui, &chart_lines);
+            });
+    }
+    
+    fn render_bottom(&self, ui: &mut Ui, data: &Vec<AnalysisMetadataRow>) {
+        if let Some(first_row) = data.first() {
+            let is_initialized = INTERACTIVE_CELL_CACHE.with(|cache| {
+                cache.borrow().inputs.contains_key(&(first_row.year, "dcfmc_sims".to_string()))
+            });
+            if !is_initialized {
+                for row in data {
+                    update_cell_state(row.year, "dcfmc_sims", "5000".to_string());
+                }
+            }
+        }
+
+        render_valuation_matrix_subtab(
+            ui, 
+            "Stochastic Monte Carlo DCF (PROBABILITY CALCULATOR)", 
+            "dcfmc_matrix_scroll_area", 
+            "dcfmc_matrix_grid", 
+            "dcfmc_metadata", 
+            "dcfmc_calculated_results",
+            "STOCHASTIC EXPECTED VALUE",
+            vec![
+                ("Operating Cash Flow (OCF)", "dcfmc_ocf", Box::new(|r| r.operating_cash_flow.to_string())),
+                ("Capital Expenditure (Capex)", "dcfmc_capex_out", Box::new(|r| r.capex_outflow.to_string())),
+                ("Total Debt (Short + Long Term)", "dcfmc_debt", Box::new(|r| r.total_debt.to_string())),
+                ("Total Shareholder Equity", "dcfmc_eq", Box::new(|r| r.total_equity.to_string())),
+                ("Outstanding Shares Count", "dcfmc_shares", Box::new(|r| r.outstanding_shares.to_string())),
+                ("Profit Before Tax (PBT)", "dcfmc_pbt", Box::new(|r| r.profit_before_tax.to_string())),
+                ("Net Profit After Tax (PAT)", "dcfmc_pat", Box::new(|r| r.net_profit_after_tax.to_string())),
+                ("Finance Interest Expenses", "dcfmc_interest", Box::new(|r| r.finance_interest_expense.to_string())),
+            ],
+            vec![
+                ("Risk Free Rate (Rf)", "dcfmc_rf", Box::new(|r| r.dynamic_rf.to_string())),
+                ("Expected Market Return (Rm)", "dcfmc_rm", Box::new(|r| r.dynamic_rm.to_string())),
+                ("Terminal Perpetuity Growth (gn)", "dcfmc_gn", Box::new(|r| r.terminal_gn.to_string())),
+                ("Number of Simulations", "dcfmc_sims", Box::new(|_| "5000".to_string())),
+            ]
+        );
+    }
+}
+
 // =========================================================================
 // PIPELINE ROUTING CANVAS ORCHESTRATOR
 // =========================================================================
@@ -854,9 +1072,10 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
         }
     });
 
-    const ALL_MODELS: [ModelType; 7] = [
+    const ALL_MODELS: [ModelType; 8] = [
         ModelType::Dcf, ModelType::Ddm, ModelType::Rem, 
-        ModelType::Epv, ModelType::Bgvm, ModelType::Eva, ModelType::MonteCarlo
+        ModelType::Epv, ModelType::Bgvm, ModelType::Eva, ModelType::MonteCarlo,
+        ModelType::DcfMonteCarlo
     ];
 
     if initial_sync_triggered {
@@ -875,7 +1094,11 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
         if !base_data.is_empty() {
             for model in &ALL_MODELS {
                 backend::commands::memory_pool::store_parsed_table(model.metadata_key(), base_data.clone());
-                if *model != ModelType::MonteCarlo {
+                if *model == ModelType::DcfMonteCarlo {
+                    let years: Vec<i32> = base_data.iter().map(|r| r.year).collect();
+                    push_interactive_state_to_pool(&years, model.metrics(), model.metadata_key());
+                    backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, model.as_str());
+                } else if *model != ModelType::MonteCarlo {
                     backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, model.as_str());
                 }
             }
@@ -883,7 +1106,7 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
     }
 
     let tabs: &[&dyn AbstractSubTab<Vec<AnalysisMetadataRow>>] = &[
-        &DcfTab, &DdmTab, &ResidualIncomeTab, &EpvTab, &GrahamTab, &EvaTab, &MonteCarloTab,
+        &DcfTab, &DdmTab, &ResidualIncomeTab, &EpvTab, &GrahamTab, &EvaTab, &MonteCarloTab, &DcfMonteCarloTab,
     ];
 
     draw_nav_canvas_orchestrator(
@@ -904,7 +1127,6 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
         }
     });
 
-    // Execute updates dynamically for flags found in the set
     for model in models_to_recalc {
         if model == ModelType::MonteCarlo {
             let mut metadata_rows: Vec<AnalysisMetadataRow> = Vec::new();
@@ -915,6 +1137,14 @@ pub fn draw_analysis_panel(ui: &mut Ui, active_ticker: &str) {
                 push_interactive_state_to_pool(&[row.year], model.metrics(), model.metadata_key());
                 backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, model.as_str());
             }
+        } else if model == ModelType::DcfMonteCarlo {
+            let mut metadata_rows: Vec<AnalysisMetadataRow> = Vec::new();
+            backend::commands::memory_pool::with_active_table::<Vec<AnalysisMetadataRow>, _, _>(model.metadata_key(), |table| {
+                metadata_rows = table.clone();
+            });
+            let years: Vec<i32> = metadata_rows.iter().map(|r| r.year).collect();
+            push_interactive_state_to_pool(&years, model.metrics(), model.metadata_key());
+            backend::commands::analysis_engine::compute_on_fly_valuation(active_ticker, model.as_str());
         } else {
             let (years, _) = get_valuation_maps(model.metrics(), model.metadata_key());
             push_interactive_state_to_pool(&years, model.metrics(), model.metadata_key());
