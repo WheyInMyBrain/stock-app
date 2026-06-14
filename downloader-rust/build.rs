@@ -14,7 +14,8 @@ fn main() {
         .args(&[
             "build",
             "-buildmode=c-archive",
-            "-ldflags=-s -w",
+            "-gcflags=all=-shared -asmflags=all=-shared", 
+            "-ldflags=-s -w -extldflags=-Wl,--omit-frame-pointer",
             "-o",
             lib_path.to_str().unwrap(),
             ".",

@@ -46,11 +46,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # Compiles the workspace and injects flags to handle MSVC Go exceptions (LNK1223)
+      # Compiles the workspace and injects the global Go assembly override flag 
+      # which prevents the production of corrupted .pdata sections on Windows runners.
+      # GOARCH is forced explicitly to prevent runtime optimization cross-talk.
       - name: Compile Cross-Platform Production Binary
         shell: bash
         env:
-          GOFLAGS: "-buildmode=c-archive -ldflags=-w"
+          GOARCH: amd64
+          GOAMD64: v1
+          GOFLAGS: "-gcflags=all=-shared -asmflags=all=-shared -ldflags=-w"
           CGO_CFLAGS: "-O2"
         run: |
           cd ui/frontend
