@@ -266,6 +266,82 @@ impl AbstractSubTab<OverviewMetadata> for BoardSubTab {
     }
 }
 
+struct InvestorComplaintsSubTab;
+impl AbstractSubTab<OverviewMetadata> for InvestorComplaintsSubTab {
+    fn id(&self) -> usize { 4 } // Assign next sequential index slot
+    fn label(&self) -> &'static str { "Investor Complaints" }
+
+    fn render_main(&self, ui: &mut Ui, meta: &OverviewMetadata) {
+        if meta.investor_complaints.is_empty() {
+            ui.weak("No regulatory investor complaint data logs filed for this ticker.");
+            return;
+        }
+
+        ui.label(egui::RichText::new("HISTORICAL INVESTOR COMPLAINTS MATRIX").strong().color(Color32::from_rgb(240, 110, 110)));
+        ui.add_space(8.0);
+
+        // Keep it safe inside a single horizontal scroll view wrapper container
+        egui::ScrollArea::horizontal()
+            .id_source("investor_complaints_horizontal_scroller")
+            .max_width(ui.available_width())
+            .show(ui, |ui| {
+                egui::Grid::new("complaints_timeline_grid")
+                    .striped(true)
+                    .spacing(Vec2::new(32.0, 14.0))
+                    .show(ui, |ui| {
+                        
+                        // --- ROW 1: HEADER QUARTER DATE LABELS ---
+                        ui.label(egui::RichText::new("METRIC PARAMETER TRACK").strong().heading());
+                        for row in &meta.investor_complaints {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new(&row.date).strong().color(Color32::WHITE));
+                            });
+                        }
+                        ui.end_row();
+
+                        // --- ROW 2: PENDING AT BEGINNING OF PERIOD ---
+                        ui.label("Complaints Pending (Beginning)");
+                        for row in &meta.investor_complaints {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(format!("{:.0}", row.complaints_beginning));
+                            });
+                        }
+                        ui.end_row();
+
+                        // --- ROW 3: RECEIVED DURING PERIOD ---
+                        ui.label("Complaints Received");
+                        for row in &meta.investor_complaints {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new(format!("{:.0}", row.complaints_received)).color(Color32::from_rgb(255, 165, 0)));
+                            });
+                        }
+                        ui.end_row();
+
+                        // --- ROW 4: DISPOSED OF DURING PERIOD ---
+                        ui.label("Complaints Disposed / Resolved");
+                        for row in &meta.investor_complaints {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(egui::RichText::new(format!("{:.0}", row.complaints_disposed)).color(Color32::from_rgb(100, 240, 140)));
+                            });
+                        }
+                        ui.end_row();
+
+                        // --- ROW 5: UNRESOLVED END OF PERIOD BACKLOG ---
+                        ui.label(egui::RichText::new("Net Unresolved Backlog").strong());
+                        for row in &meta.investor_complaints {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let color = if row.complaints_unresolved > 0.0 { Color32::LIGHT_RED } else { Color32::GRAY };
+                                ui.label(egui::RichText::new(format!("{:.0}", row.complaints_unresolved)).color(color).strong());
+                            });
+                        }
+                        ui.end_row();
+                    });
+            });
+    }
+
+    fn render_bottom(&self, _ui: &mut Ui, _meta: &OverviewMetadata) {}
+}
+
 pub fn draw_overview_panel(ui: &mut Ui, active_ticker: &str) {
     DataManager::ensure_overview_data(active_ticker);
 
@@ -273,6 +349,7 @@ pub fn draw_overview_panel(ui: &mut Ui, active_ticker: &str) {
         &DetailsSubTab,
         &ShareholdersMatrixSubTab,
         &BoardSubTab,
+        &InvestorComplaintsSubTab,
     ];
 
     draw_nav_canvas_orchestrator(

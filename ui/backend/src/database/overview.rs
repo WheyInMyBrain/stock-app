@@ -40,6 +40,15 @@ pub struct HistoricalSboRow {
     pub acquisition_date: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HistoricalComplaintRow {
+    pub date: String,
+    pub complaints_beginning: f64,
+    pub complaints_received: f64,
+    pub complaints_disposed: f64,
+    pub complaints_unresolved: f64,
+}
+
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct OverviewMetadata {
     pub macro_category: String,
@@ -58,12 +67,11 @@ pub struct OverviewMetadata {
     pub email: String,
     pub website: String,
     pub directors: Vec<DirectorRow>,
-    
-    // Unified Shareholding Data Pipelines Attached Directly onto your Overview Node
     pub available_reporting_dates: Vec<String>,
     pub macro_allocations: Vec<HistoricalMacroAllocationRow>,
     pub hni_whales: Vec<HistoricalWhaleRow>,
     pub sbo_registry: Vec<HistoricalSboRow>,
+    pub investor_complaints: Vec<HistoricalComplaintRow>,
 }
 
 // =========================================================================
@@ -396,6 +404,76 @@ pub fn hydrate_overview_metadata(ticker: &str) -> Result<(), String> {
     meta.macro_allocations = chosen_macro_allocations;
     meta.hni_whales = chosen_hni_whales;
     meta.sbo_registry = chosen_sbo_registry;
+
+    let nse_json = loader
+        .load_json_struct::<serde_json::Value>("nse_investor-complaints/endpoint-metadata.json")
+        .unwrap_or_default();
+
+    let mut complaint_timeline = Vec::new();
+    
+    let filings_pool = if let Some(arr) = nse_json.as_array() {
+        arr.clone()
+    } else if let Some(arr) = nse_json.get("data").and_then(|v| v.as_array()) {
+        arr.clone()
+    } else {
+        Vec::new()
+    };
+
+    let parse_to_sortable_key = |date_str: &str| -> String {
+        let parts: Vec<&str> = date_str.split('-').collect();
+        if parts.len() == 3 {
+            let day = parts[0];
+            let month_str = parts[1].to_lowercase();
+            let year = parts[2];
+
+            let month_num = match month_str.as_str() {
+                "jan" => "01", "feb" => "02", "mar" => "03", "apr" => "04",
+                "may" => "05", "jun" => "06", "jul" => "07", "aug" => "08",
+                "sep" => "09", "oct" => "10", "nov" => "11", "dec" => "12",
+                _ => "00",
+            };
+            format!("{}{}{}", year, month_num, day)
+        } else {
+            "00000000".to_string() 
+        }
+    };
+
+    for filing in &filings_pool {
+        let date_str = filing.get("date").and_then(|v| v.as_str()).unwrap_or("N/A").to_string();
+        
+        let get_f64_field = |key: &str| -> f64 {
+            if let Some(val) = filing.get(key) {
+                if let Some(s) = val.as_str() {
+                    s.parse::<f64>().unwrap_or(0.0)
+                } else {
+                    val.as_f64().unwrap_or(0.0)
+                }
+            } else {
+                0.0
+            }
+        };
+
+        let beg = get_f64_field("complBeg");
+        let recv = get_f64_field("complRecv");
+        let disp = get_f64_field("complDisp");
+        let unres = get_f64_field("complUnres");
+
+        complaint_timeline.push(HistoricalComplaintRow {
+            date: date_str,
+            complaints_beginning: beg,
+            complaints_received: recv,
+            complaints_disposed: disp,
+            complaints_unresolved: unres,
+        });
+    }
+
+    complaint_timeline.sort_by(|a, b| {
+        let key_a = parse_to_sortable_key(&a.date);
+        let key_b = parse_to_sortable_key(&b.date);
+        key_b.cmp(&key_a) 
+    });
+
+    meta.investor_complaints = complaint_timeline;
 
     store_parsed_table("overview_metadata", meta);
     Ok(())
