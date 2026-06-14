@@ -25,11 +25,8 @@ pub struct AnalysisMetadataRow {
     pub dynamic_rf: f64,
     pub average_beta: f64,
     pub dynamic_rm: f64,
-    pub dcf_g: f64,
-    pub dcf_gn: f64,
-    pub ddm_g: f64,
-    pub rem_g: f64,
-    pub bgvm_g: f64,
+    pub sustainable_g: f64,
+    pub terminal_gn: f64,
 }
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize)]
@@ -1011,7 +1008,7 @@ fn compute_dynamic_assumptions(
     let dynamic_rm = dynamic_rf + 5.5;
 
     let dynamic_rf_spread = dynamic_rf - 1.0;
-    let dcf_gn = dynamic_rf_spread.min(historical_gdp).max(2.0);
+    let terminal_gn = dynamic_rf_spread.min(historical_gdp).max(2.0);
 
     let mut sustainable_g = 12.0; 
     
@@ -1024,7 +1021,7 @@ fn compute_dynamic_assumptions(
         sustainable_g = calculated_g.clamp(2.0, 20.0);
     }
 
-    (average_beta, dynamic_rm, dcf_gn, sustainable_g)
+    (average_beta, dynamic_rm, terminal_gn, sustainable_g)
 }
 
 // =========================================================================
@@ -1222,7 +1219,7 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
         
         let dynamic_rf = rf_timeline_map.get(&year).copied().unwrap_or(7.0);
 
-        let (average_beta, dynamic_rm, dcf_gn, sustainable_g) = compute_dynamic_assumptions(
+        let (average_beta, dynamic_rm, terminal_gn, sustainable_g) = compute_dynamic_assumptions(
             calculated_nse_beta, 
             calculated_bse_beta,
             dynamic_rf,
@@ -1253,11 +1250,8 @@ pub fn hydrate_analysis_metadata(ticker: &str) -> Result<(), String> {
             dynamic_rf,
             average_beta,
             dynamic_rm,
-            dcf_gn,
-            dcf_g: sustainable_g,
-            ddm_g: sustainable_g,
-            rem_g: sustainable_g,
-            bgvm_g: sustainable_g,
+            sustainable_g,
+            terminal_gn,
         });
     }
 

@@ -117,16 +117,10 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
             None => continue, 
         };
 
-        let baseline_g_str = match prefix {
-            "dcf" => base_row.dcf_g.to_string(),
-            "ddm" => base_row.ddm_g.to_string(),
-            _ => base_row.rem_g.to_string(),
-        };
-
         let rf = access_cell_state(year, &format!("{}_rf", prefix), base_row.dynamic_rf.to_string());
         let rm = access_cell_state(year, &format!("{}_rm", prefix), base_row.dynamic_rm.to_string());
-        let gn = access_cell_state(year, &format!("{}_gn", prefix), base_row.dcf_gn.to_string());
-        let g  = access_cell_state(year, &format!("{}_g", prefix), baseline_g_str);
+        let g  = access_cell_state(year, &format!("{}_g", prefix),  base_row.sustainable_g.to_string());
+        let gn = access_cell_state(year, &format!("{}_gn", prefix), base_row.terminal_gn.to_string());
 
         backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rf", storage_slot_key, year), vec![rf.clone()]);
         backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rm", storage_slot_key, year), vec![rm.clone()]);
@@ -152,7 +146,6 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
         let net_profit_after_tax = ext_pat.parse::<i64>().unwrap_or(base_row.net_profit_after_tax);
         let finance_interest_expense = ext_interest.parse::<i64>().unwrap_or(base_row.finance_interest_expense);
         let dividend_paid = ext_div.parse::<i64>().unwrap_or(base_row.dividend_paid);
-        let parsed_input_g = g.parse::<f64>().unwrap_or(base_row.dcf_g);
 
         let net_capex = capex_outflow + base_row.capex_inflow;
         let free_cash_flow = operating_cash_flow + net_capex;
@@ -179,11 +172,8 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
             
             dynamic_rf: rf.parse::<f64>().unwrap_or(base_row.dynamic_rf),
             dynamic_rm: rm.parse::<f64>().unwrap_or(base_row.dynamic_rm),
-            dcf_g: if prefix == "dcf" { parsed_input_g } else { base_row.dcf_g },
-            ddm_g: if prefix == "ddm" { parsed_input_g } else { base_row.ddm_g },
-            rem_g: if prefix == "rem" { parsed_input_g } else { base_row.rem_g },
-            bgvm_g: if prefix == "bgvm" { parsed_input_g } else { base_row.bgvm_g },
-            dcf_gn: gn.parse::<f64>().unwrap_or(base_row.dcf_gn),
+            sustainable_g: g.parse::<f64>().unwrap_or(base_row.sustainable_g),
+            terminal_gn: gn.parse::<f64>().unwrap_or(base_row.terminal_gn),
         });
     }
 
@@ -405,8 +395,8 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DcfTab {
             vec![
                 ("Risk Free Rate (Rf)", "dcf_rf", Box::new(|r| r.dynamic_rf.to_string())),
                 ("Expected Market Return (Rm)", "dcf_rm", Box::new(|r| r.dynamic_rm.to_string())),
-                ("Stage 1 Forecast Growth (g)", "dcf_g", Box::new(|r| r.dcf_g.to_string())),
-                ("Terminal Perpetuity Growth (gn)", "dcf_gn", Box::new(|r| r.dcf_gn.to_string())),
+                ("Stage 1 Forecast Growth (g)", "dcf_g", Box::new(|r| r.sustainable_g.to_string())),
+                ("Terminal Perpetuity Growth (gn)", "dcf_gn", Box::new(|r| r.terminal_gn.to_string())),
             ]
         );
     }
@@ -427,7 +417,7 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for DdmTab {
             vec![
                 ("Risk Free Rate (Rf)", "ddm_rf", Box::new(|r| r.dynamic_rf.to_string())),
                 ("Market Premium (Rm)", "ddm_rm", Box::new(|r| r.dynamic_rm.to_string())),
-                ("Dividend Growth Rate (g)", "ddm_g", Box::new(|r| r.ddm_g.to_string())),
+                ("Dividend Growth Rate (g)", "ddm_g", Box::new(|r| r.sustainable_g.to_string())),
             ]
         );
     }
@@ -449,7 +439,7 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for ResidualIncomeTab {
             vec![
                 ("Risk Free Rate (Rf)", "rem_rf", Box::new(|r| r.dynamic_rf.to_string())),
                 ("Market Return (Rm)", "rem_rm", Box::new(|r| r.dynamic_rm.to_string())),
-                ("Income Growth Forecast (g)", "rem_g", Box::new(|r| r.rem_g.to_string())),
+                ("Income Growth Forecast (g)", "rem_g", Box::new(|r| r.sustainable_g.to_string())),
             ]
         );
     }
@@ -498,7 +488,7 @@ impl AbstractSubTab<Vec<AnalysisMetadataRow>> for GrahamTab {
             ],
             vec![
                 ("Risk Free Rate (Rf)", "bgvm_rf", Box::new(|r| r.dynamic_rf.to_string())),
-                ("Expected Long-Term Growth (g)", "bgvm_g", Box::new(|r| r.rem_g.to_string())),
+                ("Expected Long-Term Growth (g)", "bgvm_g", Box::new(|r| r.sustainable_g.to_string())),
             ]
         );
     }

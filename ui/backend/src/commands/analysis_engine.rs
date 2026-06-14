@@ -45,9 +45,6 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
     // =========================================================================
     // SPECIALIZED MONTE CARLO PROBABILISTIC INTERCEPTOR
     // =========================================================================
-    // =========================================================================
-    // SPECIALIZED MONTE CARLO PROBABILISTIC INTERCEPTOR
-    // =========================================================================
     if tab_key == "MONTE_CARLO" {
         let mut chart_rows: Vec<crate::database::analysis::HistoricalChartRow> = Vec::new();
         memory_pool::with_active_table::<Vec<crate::database::analysis::HistoricalChartRow>, _, _>("historical_chart_data", |table| {
@@ -146,12 +143,8 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
         // Establish default fallback string matrices for macro assumptions
         let mut rf = row.dynamic_rf.to_string();
         let mut rm = row.dynamic_rm.to_string();
-        let mut g = match tab_key {
-            "DCF" => row.dcf_g.to_string(),
-            "DDM" => row.ddm_g.to_string(),
-            _ => row.rem_g.to_string(),
-        };
-        let mut gn = row.dcf_gn.to_string();
+        let mut g  = row.sustainable_g.to_string();
+        let mut gn = row.terminal_gn.to_string();
 
         // Now override ONLY if the user has provided a custom override in the memory pool
         memory_pool::with_active_table::<Vec<String>, _, _>(&format!("{}_{}_rf", metadata_key, year), |t| {
@@ -283,7 +276,7 @@ pub fn compute_on_fly_valuation(_ticker: &str, tab_key: &str) {
 
                 final_results.push(ValuationResultRow {
                     year,
-                    intrinsic_value: output.eva_per_share, // Mapped to result field cleanly
+                    intrinsic_value: output.eva_per_share, 
                     calculated_wacc: output.calculated_wacc,
                     calculated_tax_rate: output.calculated_tax_rate,
                     status_ok: output.status_ok,
