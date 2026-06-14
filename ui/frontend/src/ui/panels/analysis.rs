@@ -127,9 +127,7 @@ fn check_column_filled(year: i32, metrics: &[&str]) -> bool {
 // BACKEND COORDINATION INGESTION WRITER & RETRIEVAL HELPERS
 // =========================================================================
 pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], storage_slot_key: &str) {
-    // 1. Calculate clean string prefixes ONCE outside the loop to avoid heavy heap churn
-    let prefix = storage_slot_key.replace("_metadata", "");
-
+    // 1. Handle specialized Monte Carlo macro inputs branch
     if storage_slot_key == "monte_carlo_metadata" {
         for &year in years {
             let days = access_cell_state(year, "mc_days", String::new());
@@ -147,7 +145,7 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
         return;
     }
 
-    // Single lock allocation strategy - reserve bounds safely
+    // 2. Fetch baseline data snapshot map using single-lock allocations
     let mut base_map: HashMap<i32, AnalysisMetadataRow> = HashMap::new();
     backend::commands::memory_pool::with_active_table::<Vec<AnalysisMetadataRow>, _, _>("analysis_metadata", |table| {
         base_map.reserve(table.len());
@@ -156,93 +154,32 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
         }
     });
 
+    let prefix = storage_slot_key.replace("_metadata", "");
     let mut master_rows = Vec::with_capacity(years.len());
     let mut key_buf = String::with_capacity(64);
     
-    if storage_slot_key == "dcfmc_metadata" {
-        for &year in years {
-            let ocf = access_cell_state(year, "dcfmc_ocf", base_map.get(&year).map(|r| r.operating_cash_flow.to_string()).unwrap_or_default());
-            let capex = access_cell_state(year, "dcfmc_capex_out", base_map.get(&year).map(|r| r.capex_outflow.to_string()).unwrap_or_default());
-            let debt = access_cell_state(year, "dcfmc_debt", base_map.get(&year).map(|r| r.total_debt.to_string()).unwrap_or_default());
-            let eq = access_cell_state(year, "dcfmc_eq", base_map.get(&year).map(|r| r.total_equity.to_string()).unwrap_or_default());
-            let shares = access_cell_state(year, "dcfmc_shares", base_map.get(&year).map(|r| r.outstanding_shares.to_string()).unwrap_or_default());
-            let pbt = access_cell_state(year, "dcfmc_pbt", base_map.get(&year).map(|r| r.profit_before_tax.to_string()).unwrap_or_default());
-            let pat = access_cell_state(year, "dcfmc_pat", base_map.get(&year).map(|r| r.net_profit_after_tax.to_string()).unwrap_or_default());
-            let interest = access_cell_state(year, "dcfmc_interest", base_map.get(&year).map(|r| r.finance_interest_expense.to_string()).unwrap_or_default());
-            let div = access_cell_state(year, "dcfmc_div", base_map.get(&year).map(|r| r.dividend_paid.to_string()).unwrap_or_default());
-            
-            let rf = access_cell_state(year, "dcfmc_rf", base_map.get(&year).map(|r| r.dynamic_rf.to_string()).unwrap_or_default());
-            let rm = access_cell_state(year, "dcfmc_rm", base_map.get(&year).map(|r| r.dynamic_rm.to_string()).unwrap_or_default());
-            let gn = access_cell_state(year, "dcfmc_gn", base_map.get(&year).map(|r| r.terminal_gn.to_string()).unwrap_or_default());
-            let sims = access_cell_state(year, "dcfmc_sims", "5000".to_string());
-
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rf", storage_slot_key, year), vec![rf.clone()]);
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_rm", storage_slot_key, year), vec![rm.clone()]);
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_gn", storage_slot_key, year), vec![gn.clone()]);
-            backend::commands::memory_pool::store_parsed_table(&format!("{}_{}_sims", storage_slot_key, year), vec![sims.clone()]);
-
-            update_cell_state(year, "dcfmc_ocf", ocf.clone());
-            update_cell_state(year, "dcfmc_capex_out", capex.clone());
-            update_cell_state(year, "dcfmc_debt", debt.clone());
-            update_cell_state(year, "dcfmc_eq", eq.clone());
-            update_cell_state(year, "dcfmc_shares", shares.clone());
-            update_cell_state(year, "dcfmc_pbt", pbt.clone());
-            update_cell_state(year, "dcfmc_pat", pat.clone());
-            update_cell_state(year, "dcfmc_interest", interest.clone());
-            update_cell_state(year, "dcfmc_div", div.clone());
-            update_cell_state(year, "dcfmc_rf", rf.clone());
-            update_cell_state(year, "dcfmc_rm", rm.clone());
-            update_cell_state(year, "dcfmc_gn", gn.clone());
-            update_cell_state(year, "dcfmc_sims", sims.clone());
-
-            let base_row = match base_map.get(&year) { Some(r) => r, None => continue };
-            
-            let parsed_ocf = ocf.parse::<i64>().unwrap_or(base_row.operating_cash_flow);
-            let parsed_capex = capex.parse::<i64>().unwrap_or(base_row.capex_outflow);
-
-            master_rows.push(AnalysisMetadataRow {
-                year,
-                dividend_paid: div.parse::<i64>().unwrap_or(base_row.dividend_paid),
-                basic_eps: base_row.basic_eps,
-                net_profit_after_tax: pat.parse::<i64>().unwrap_or(base_row.net_profit_after_tax),
-                total_equity: eq.parse::<i64>().unwrap_or(base_row.total_equity),
-                total_debt: debt.parse::<i64>().unwrap_or(base_row.total_debt),
-                operating_cash_flow: parsed_ocf,
-                capex_outflow: parsed_capex,
-                capex_inflow: base_row.capex_inflow,
-                net_capex: parsed_capex + base_row.capex_inflow,
-                free_cash_flow: parsed_ocf + (parsed_capex + base_row.capex_inflow),
-                outstanding_shares: shares.parse::<i64>().unwrap_or(base_row.outstanding_shares),
-                profit_before_tax: pbt.parse::<i64>().unwrap_or(base_row.profit_before_tax),
-                finance_interest_expense: interest.parse::<i64>().unwrap_or(base_row.finance_interest_expense),
-                effective_tax_rate: base_row.effective_tax_rate,
-                nse_beta: base_row.nse_beta,
-                bse_beta: base_row.bse_beta,
-                average_beta: base_row.average_beta,
-                dynamic_rf: rf.parse::<f64>().unwrap_or(base_row.dynamic_rf),
-                dynamic_rm: rm.parse::<f64>().unwrap_or(base_row.dynamic_rm),
-                sustainable_g: base_row.sustainable_g,
-                terminal_gn: gn.parse::<f64>().unwrap_or(base_row.terminal_gn),
-            });
-        }
-        backend::commands::memory_pool::store_parsed_table(storage_slot_key, master_rows);
-        return;
-    }
-
+    // 3. Process corporate tracking matrix records
     for &year in years {
-        if !check_column_filled(year, tab_metrics) { continue; }
+        if storage_slot_key != "dcfmc_metadata" && !check_column_filled(year, tab_metrics) { 
+            continue; 
+        }
+
         let base_row = match base_map.get(&year) {
             Some(row) => row,
             None => continue, 
         };
 
-        // Unified helper closure using pre-calculated `prefix` references
+        // High performance helper closure to extract, sync, and persist variables uniformly
         let mut process_cell = |suffix: &str, default: String, store_suffix: Option<&str>| -> String {
             key_buf.clear();
             use std::fmt::Write;
             let _ = write!(key_buf, "{}_{}", prefix, suffix);
             
             let val = access_cell_state(year, &key_buf, default);
+            
+            // Mirror state mutations cleanly to cell tracking registry cache
+            update_cell_state(year, &key_buf, val.clone());
+
             if let Some(st_suffix) = store_suffix {
                 key_buf.clear();
                 let _ = write!(key_buf, "{}_{}_{}", storage_slot_key, year, st_suffix);
@@ -251,13 +188,21 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
             val
         };
 
+        // Reconcile financial tracking parameter strings cleanly
         let rf = process_cell("rf", base_row.dynamic_rf.to_string(), Some("rf"));
         let rm = process_cell("rm", base_row.dynamic_rm.to_string(), Some("rm"));
-        let g  = process_cell("g",  base_row.sustainable_g.to_string(), Some("g"));
         let gn = process_cell("gn", base_row.terminal_gn.to_string(), Some("gn"));
+        
+        // Handle standalone Dcf vs DcfMonteCarlo growth identifier key variants safely
+        let growth_suffix = if prefix == "dcfmc" { "sims" } else { "g" };
+        let growth_default = if prefix == "dcfmc" { "5000".to_string() } else { base_row.sustainable_g.to_string() };
+        let g = process_cell(growth_suffix, growth_default, Some(growth_suffix));
+
+        // Resolve edge case metric schema string differences (capex_out vs capex_outflow)
+        let capex_key = if prefix == "dcfmc" || prefix == "dcf" { "capex_out" } else { "capex" };
 
         let operating_cash_flow = process_cell("ocf", base_row.operating_cash_flow.to_string(), None).parse::<i64>().unwrap_or(base_row.operating_cash_flow);
-        let capex_outflow = process_cell("capex_out", base_row.capex_outflow.to_string(), None).parse::<i64>().unwrap_or(base_row.capex_outflow);
+        let capex_outflow = process_cell(capex_key, base_row.capex_outflow.to_string(), None).parse::<i64>().unwrap_or(base_row.capex_outflow);
         let total_debt = process_cell("debt", base_row.total_debt.to_string(), None).parse::<i64>().unwrap_or(base_row.total_debt);
         let total_equity = process_cell("eq", base_row.total_equity.to_string(), None).parse::<i64>().unwrap_or(base_row.total_equity);
         let outstanding_shares = process_cell("shares", base_row.outstanding_shares.to_string(), None).parse::<i64>().unwrap_or(base_row.outstanding_shares);
@@ -289,7 +234,7 @@ pub fn push_interactive_state_to_pool(years: &[i32], tab_metrics: &[&str], stora
             average_beta: base_row.average_beta,
             dynamic_rf: rf.parse::<f64>().unwrap_or(base_row.dynamic_rf),
             dynamic_rm: rm.parse::<f64>().unwrap_or(base_row.dynamic_rm),
-            sustainable_g: g.parse::<f64>().unwrap_or(base_row.sustainable_g),
+            sustainable_g: if prefix == "dcfmc" { base_row.sustainable_g } else { g.parse::<f64>().unwrap_or(base_row.sustainable_g) },
             terminal_gn: gn.parse::<f64>().unwrap_or(base_row.terminal_gn),
         });
     }
