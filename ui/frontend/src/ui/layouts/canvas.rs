@@ -1,4 +1,4 @@
-use egui::{Ui, Color32, Frame, Margin, Stroke, Pos2, Vec2, Rect};
+use egui::{Ui, Color32, Stroke, Pos2, Vec2, Rect};
 use std::collections::{HashSet, HashMap, BTreeSet};
 
 pub trait AbstractSubTab<T> {
@@ -31,6 +31,7 @@ pub fn draw_three_zone_canvas<M, B, S>(
     let total_height = ui.available_height();
     let spacing = ui.spacing().item_spacing;
 
+    // Rigidly calculate structural layouts
     let side_width = (total_width * 0.18).clamp(160.0, 260.0);
     let left_width = total_width - side_width - spacing.x;
 
@@ -39,15 +40,26 @@ pub fn draw_three_zone_canvas<M, B, S>(
     let main_height = ideal_main_height.min(max_allowed_main_height).max(160.0);
     let bottom_height = total_height - main_height - spacing.y;
 
-    let slot_frame = Frame::none()
+    // Enhanced Border Setup: Increased contrast to Slate Gray (55, 55, 55) for crisp definition
+    let slot_frame = egui::Frame::none()
         .fill(Color32::from_rgb(14, 14, 14))
-        .inner_margin(Margin::same(12.0))
-        .stroke(Stroke::new(1.0, Color32::from_rgb(28, 28, 28)));
+        .inner_margin(egui::Margin::same(12.0))
+        .stroke(Stroke::new(1.5, Color32::from_rgb(55, 55, 55))); // Thicker, higher-visibility border
 
     ui.horizontal(|ui| {
+        // Enforce structural padding constraints on the outer horizon loop
+        ui.spacing_mut().item_spacing = spacing;
+
+        // LEFT COLUMN ZONE (MAIN + BOTTOM)
         ui.allocate_ui(egui::vec2(left_width, total_height), |ui| {
             ui.vertical(|ui| {
+                
+                // 1. MAIN ZONE PANEL (Rigidly Locked Bounds)
                 ui.allocate_ui(egui::vec2(left_width, main_height), |ui| {
+                    // HARD BOUNDARY CONSTRAINT: Freezes panel dimensions regardless of interior content scale
+                    ui.set_min_size(egui::vec2(left_width, main_height));
+                    ui.set_max_size(egui::vec2(left_width, main_height));
+                    
                     slot_frame.show(ui, |ui| {
                         ui.set_height(ui.available_height());
                         ui.set_width(ui.available_width());
@@ -55,7 +67,14 @@ pub fn draw_three_zone_canvas<M, B, S>(
                     });
                 });
 
+                ui.add_space(spacing.y);
+
+                // 2. BOTTOM ZONE PANEL (Rigidly Locked Bounds)
                 ui.allocate_ui(egui::vec2(left_width, bottom_height), |ui| {
+                    // HARD BOUNDARY CONSTRAINT: Stops overflow elements from bleeding downward
+                    ui.set_min_size(egui::vec2(left_width, bottom_height));
+                    ui.set_max_size(egui::vec2(left_width, bottom_height));
+                    
                     slot_frame.show(ui, |ui| {
                         ui.set_height(ui.available_height());
                         ui.set_width(ui.available_width());
@@ -65,7 +84,12 @@ pub fn draw_three_zone_canvas<M, B, S>(
             });
         });
 
+        // RIGHT SIDE ZONE (Rigidly Locked Bounds)
         ui.allocate_ui(egui::vec2(side_width, total_height), |ui| {
+            // HARD BOUNDARY CONSTRAINT: Locks the sidebar width completely in place
+            ui.set_min_size(egui::vec2(side_width, total_height));
+            ui.set_max_size(egui::vec2(side_width, total_height));
+            
             slot_frame.show(ui, |ui| {
                 ui.set_height(ui.available_height());
                 ui.set_width(ui.available_width());

@@ -2,6 +2,7 @@
 
 pub mod overview;
 pub mod analysis;
+pub mod financial;
 
 use std::fs;
 use crate::commands::data_dir::resolve_data_directory_headless;

@@ -353,7 +353,7 @@ fn render_editable_row(
         let fallback = analysis_map.get(yr).map(&extract_fallback).unwrap_or_default();
         let mut value_buffer = access_cell_state(*yr, metric_id, fallback);
         
-        if ui.add(egui::TextEdit::singleline(&mut value_buffer).desired_width(80.0)).changed() {
+        if ui.add(egui::TextEdit::singleline(&mut value_buffer).desired_width(120.0)).changed() {
             update_cell_state(*yr, metric_id, value_buffer);
             
             // Map the storage string down to our new type-safe enum variants
