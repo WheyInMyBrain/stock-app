@@ -11,28 +11,11 @@ struct HistoryLedgerData {
 
 /// The high-resolution stochastic matrix pipeline generator
 pub fn execute_monte_carlo_matrix_pipeline(
-    matrix: &UnifiedCompanyMatrix, // 🎯 PICKER INTERCEPT: Ingests structured shared memory context
+    matrix: &UnifiedCompanyMatrix,
     base_wacc: f64,
     base_terminal_g: f64,
 ) -> Result<Vec<MonteCarloMatrixCell>, &'static str> {
     
-    // Internal helper closure maps historical shares out of memory structures
-    let find_historical_shares = |target_date: &str| -> f64 {
-        if let Some(&shares) = matrix.share_history_timeline.get(target_date) {
-            return shares;
-        }
-        let target_year = target_date.split('-').next().unwrap_or("2024");
-        let mut sorted_dates: Vec<&String> = matrix.share_history_timeline.keys().collect();
-        sorted_dates.sort();
-        
-        for date_key in sorted_dates.iter().rev() {
-            if date_key.starts_with(target_year) {
-                return *matrix.share_history_timeline.get(*date_key).unwrap_or(&53_954_106.0);
-            }
-        }
-        *matrix.share_history_timeline.values().next().unwrap_or(&53_954_106.0)
-    };
-
     // ==============================================================================
     // 📊 STEP 1: PARSE VALID CAPEX RATIOS FROM DATA WAREHOUSE MATRIX
     // ==============================================================================
@@ -95,7 +78,13 @@ pub fn execute_monte_carlo_matrix_pipeline(
     let std_margin = var_margin.sqrt().max(0.01);
 
     let base_revenue = history_ledger.last().unwrap().revenue; 
-    let shares_outstanding = find_historical_shares(&last_snapshot_date);
+
+    // 🎯 REFACTOR OPTIMIZATION: Ultra-clean, zero-cost share lookup expression 
+    // Attempts exact match, falls back to maximum historical total, or 1.0 to prevent division by zero.
+    let shares_outstanding = matrix.share_history_timeline.get(&last_snapshot_date)
+        .cloned()
+        .or_else(|| matrix.share_history_timeline.values().max_by(|a, b| a.total_cmp(b)).cloned())
+        .unwrap_or(1.0);
 
     // ==============================================================================
     // 📊 STEP 3: CONCURRENT STOCHASTIC SCENARIO EXECUTION
@@ -115,6 +104,14 @@ pub fn execute_monte_carlo_matrix_pipeline(
     let final_matrix_output: Vec<MonteCarloMatrixCell> = grid_tasks
         .par_iter()
         .map(|&(wacc, mult)| {
+            // 🛡️ EARLY OUT SECURITY FILTER: Avoid executing 10,000 useless iterations if math limits breach
+            if wacc <= base_terminal_g {
+                return MonteCarloMatrixCell {
+                    wacc, terminal_g: base_terminal_g, operational_multiplier: mult, trials_executed: 0,
+                    p10_bear: 0.0, p30_conservative: 0.0, p50_median: 0.0, p70_optimistic: 0.0, p90_bull: 0.0, mean_expected: 0.0
+                };
+            }
+
             let shifted_mean_growth = base_mean_growth * mult;
             let shifted_mean_margin = base_mean_margin * mult;
 

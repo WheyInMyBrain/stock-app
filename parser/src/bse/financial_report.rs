@@ -1,15 +1,16 @@
-use hashbrown::HashMap;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
+use std::io::Read;
 use std::path::Path;
+use rayon::prelude::*;
 use crate::bse::utils::BseRecord;
 
-#[derive(Debug, Clone, Default)]
-struct ContextDates {
-    start_date: String,
-    end_date: String,
+// A simple tracking container to hold data gathered sequentially before multi-threaded cleaning
+struct RawElement {
+    tag_name: String,
+    context_id: String,
+    raw_text: String,
 }
 
 pub fn parse(path: &Path) -> Result<Vec<BseRecord>, String> {
@@ -20,110 +21,57 @@ pub fn parse(path: &Path) -> Result<Vec<BseRecord>, String> {
         return Err("Empty file".to_string());
     }
 
-    let file = File::open(path).map_err(|e| e.to_string())?;
-    let mut buf_reader = BufReader::new(file);
-    let mut reader = Reader::from_reader(&mut buf_reader);
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut raw_content = String::new();
+    file.read_to_string(&mut raw_content).map_err(|e| e.to_string())?;
+
+    let clean_xml = if let Some(start_idx) = raw_content.find('<') {
+        &raw_content[start_idx..]
+    } else {
+        &raw_content
+    };
+
+    let mut reader = Reader::from_str(clean_xml);
     reader.config_mut().trim_text(true);
+    reader.config_mut().check_end_names = false;
 
     let mut buf = Vec::new();
-    let mut date_map: HashMap<String, ContextDates> = HashMap::new();
-    let mut records = Vec::new();
-
-    // PASS 1: Map Timeline Context Nodes
-    let mut active_context_id = String::new();
-    let mut inside_period = false;
-    let mut temp_dates = ContextDates::default();
-    let mut current_element = String::new();
+    
+    let mut intermediate_elements = Vec::new();
+    let mut open_tag = String::new();
+    let mut open_context = String::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
                 let local_name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
-                current_element = local_name.clone();
-
-                if local_name == "context" || local_name.ends_with(":context") {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.local_name().as_ref() == b"id" {
-                            let ctx_id = String::from_utf8_lossy(&attr.value).into_owned();
-                            if ctx_id == "OneD" || ctx_id == "FourD" {
-                                active_context_id = ctx_id;
-                                temp_dates = ContextDates::default();
-                            }
-                            break;
-                        }
-                    }
-                } else if (local_name == "period" || local_name.ends_with(":period")) && !active_context_id.is_empty() {
-                    inside_period = true;
-                }
-            }
-            Ok(Event::Text(e)) => {
-                if inside_period && !active_context_id.is_empty() {
-                    let text = e.unescape().unwrap().into_owned();
-                    if current_element == "startDate" || current_element.ends_with(":startDate") {
-                        temp_dates.start_date = text;
-                    } else if current_element == "endDate" || current_element.ends_with(":endDate") {
-                        temp_dates.end_date = text;
-                    }
-                }
-            }
-            Ok(Event::End(e)) => {
-                let local_name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
-                if local_name == "context" || local_name.ends_with(":context") {
-                    if !active_context_id.is_empty() {
-                        date_map.insert(active_context_id.clone(), temp_dates.clone());
-                    }
-                    active_context_id.clear();
-                } else if local_name == "period" || local_name.ends_with(":period") {
-                    inside_period = false;
-                }
-                current_element.clear();
-            }
-            Ok(Event::Eof) => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    // PASS 2: Stream Facts
-    let inner_stream = reader.into_inner();
-    inner_stream.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    
-    let mut data_reader = Reader::from_reader(inner_stream);
-    data_reader.config_mut().trim_text(true);
-    
-    let mut open_tag = String::new();
-    let mut open_context = String::new();
-
-    loop {
-        match data_reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                let local_name = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                let mut found_context = String::new();
+                
                 for attr in e.attributes().flatten() {
                     if attr.key.local_name().as_ref() == b"contextRef" {
-                        let ctx_ref = String::from_utf8_lossy(&attr.value).into_owned();
-                        if ctx_ref == "OneD" || ctx_ref == "FourD" {
-                            open_tag = local_name.clone();
-                            open_context = ctx_ref;
-                        }
+                        found_context = String::from_utf8_lossy(&attr.value).into_owned();
                         break;
                     }
+                }
+
+                if !found_context.is_empty() {
+                    open_tag = local_name;
+                    open_context = found_context;
+                } else {
+                    open_tag.clear();
+                    open_context.clear();
                 }
             }
             Ok(Event::Text(e)) => {
                 if !open_tag.is_empty() && !open_context.is_empty() {
-                    let text_value = e.unescape().unwrap().into_owned();
-                    let date_string = match date_map.get(&open_context) {
-                        Some(d) => format!("{} to {}", d.start_date, d.end_date),
-                        None => "Dates Missing".to_string(),
-                    };
-
-                    records.push(BseRecord {
-                        source_file: file_name.clone(),
-                        tag_name: open_tag.clone(),
-                        context_id: open_context.clone(),
-                        date_bounds: date_string,
-                        raw_value: text_value,
-                    });
+                    let text_value = e.unescape().unwrap_or_default().into_owned();
+                    if !text_value.is_empty() {
+                        intermediate_elements.push(RawElement {
+                            tag_name: open_tag.clone(),
+                            context_id: open_context.clone(),
+                            raw_text: text_value,
+                        });
+                    }
                 }
             }
             Ok(Event::End(_)) => {
@@ -135,6 +83,26 @@ pub fn parse(path: &Path) -> Result<Vec<BseRecord>, String> {
         }
         buf.clear();
     }
+
+    let records: Vec<BseRecord> = intermediate_elements
+        .into_par_iter()
+        .map(|elem| {
+            let clean_value = elem.raw_text
+                .replace('\r', "")
+                .replace('\n', " ")
+                .split_whitespace()
+                .collect::<Vec<&str>>()
+                .join(" ");
+
+            BseRecord {
+                source_file: file_name.clone(),
+                tag_name: elem.tag_name,
+                context_id: elem.context_id,
+                date_bounds: String::new(),
+                raw_value: clean_value,
+            }
+        })
+        .collect();
 
     Ok(records)
 }

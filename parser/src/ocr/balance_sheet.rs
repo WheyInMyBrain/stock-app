@@ -40,7 +40,12 @@ pub fn process_markdown_table(file_name: &str, header_text: &str, table_str: &st
             continue;
         }
         
-        let mut cells: Vec<String> = line_clean.split('|').map(|c| c.trim().to_string()).collect();
+        let delimiter = if line_clean.contains('┆') { '┆' } else { '|' };
+        if !line_clean.contains(delimiter) {
+            continue;
+        }
+        
+        let mut cells: Vec<String> = line_clean.split(delimiter).map(|c| c.trim().to_string()).collect();
         if !cells.is_empty() && cells[0].is_empty() { cells.remove(0); }
         if !cells.is_empty() && cells[cells.len() - 1].is_empty() { cells.pop(); }
         
@@ -131,48 +136,46 @@ pub fn process_markdown_table(file_name: &str, header_text: &str, table_str: &st
     }
 
     let mut final_processed_rows = Vec::with_capacity(repaired_rows.len());
-        for (particulars, notes_val, right_side_data) in repaired_rows {
-            let active_candidates: Vec<String> = right_side_data
-                .iter()
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .collect();
+    for (particulars, notes_val, right_side_data) in repaired_rows {
+        let active_candidates: Vec<String> = right_side_data
+            .iter()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .collect();
 
-            let mut curr_year_val = String::new();
-            let mut prev_year_val = String::new();
+        let mut curr_year_val = String::new();
+        let mut prev_year_val = String::new();
 
-            if active_candidates.len() == 1 {
-                curr_year_val = active_candidates[0].clone();
-            } else if active_candidates.len() >= 2 {
-                curr_year_val = active_candidates[0].clone();
-                prev_year_val = active_candidates[1].clone();
-            }
-
-            // Upgraded directly to map explicit data attributes natively
-            final_processed_rows.push(UnifiedOcrOutput {
-                source_file: file_name.to_string(),
-                statement_type: "balance_sheet".to_string(),
-                particulars,
-                context: report_type.clone(),
-                notes: notes_val,
-                curr_year: curr_year_val,
-                prev_year: prev_year_val,
-            });
+        if active_candidates.len() == 1 {
+            curr_year_val = active_candidates[0].clone();
+        } else if active_candidates.len() >= 2 {
+            curr_year_val = active_candidates[0].clone();
+            prev_year_val = active_candidates[1].clone();
         }
 
-        if final_processed_rows.len() < 25 {
-            return Vec::new();
-        }
+        final_processed_rows.push(UnifiedOcrOutput {
+            source_file: file_name.to_string(),
+            statement_type: "balance_sheet".to_string(),
+            particulars,
+            context: report_type.clone(),
+            notes: notes_val,
+            curr_year: curr_year_val,
+            prev_year: prev_year_val,
+        });
+    }
 
-        // 6. Slice away split multi-line layout remnants
-        let mut slice_start_idx = 0;
-        let mut check_header_str = String::new();
-        for i in 0..std::cmp::min(3, final_processed_rows.len()) {
-            check_header_str.push_str(&final_processed_rows[i].particulars);
-        }
-        if split_header_regex.is_match(&check_header_str) && final_processed_rows.len() > 3 {
-            slice_start_idx = 3;
-        }
+    if final_processed_rows.len() < 25 {
+        return Vec::new();
+    }
 
-        final_processed_rows[slice_start_idx..].to_vec()
+    let mut slice_start_idx = 0;
+    let mut check_header_str = String::new();
+    for i in 0..std::cmp::min(3, final_processed_rows.len()) {
+        check_header_str.push_str(&final_processed_rows[i].particulars);
+    }
+    if split_header_regex.is_match(&check_header_str) && final_processed_rows.len() > 3 {
+        slice_start_idx = 3;
+    }
+
+    final_processed_rows[slice_start_idx..].to_vec()
 }

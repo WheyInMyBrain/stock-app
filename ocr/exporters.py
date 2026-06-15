@@ -10,4 +10,4 @@ class JSONFileExporter(BaseDocumentExporter):
         with open(output_path, "w", encoding="utf-8") as json_file:
             json.dump(content, json_file, indent=2, ensure_ascii=False)
             
-        print(f"💾 Saved structured layout JSON artifact to: {output_path}")
+        print(f"\x1b[35m[OCR] 💾 Saved structured layout JSON artifact to: {output_path}\x1b[0m")

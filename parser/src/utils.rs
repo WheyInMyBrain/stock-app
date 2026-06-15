@@ -1,126 +1,84 @@
+// parser/src/utils.rs
 use polars::prelude::*;
-use std::fs::{self, File};
+use std::fs;
+use std::fs::File;
 use std::path::Path;
 
-pub fn save_to_parquet(
-    input_folder_path: &str,
-    sub_hierarchy: &[&str], 
-    files: &Vec<String>,
-    tags: &Vec<String>,
-    contexts: &Vec<String>,
-    dates: &Vec<String>,
-    values: &Vec<String>,
+/// ⚡ Zero-Copy Columnar Dataset Serializer for Standard Exchange Filings (XML)
+pub fn save_to_parquet<P: AsRef<Path>>(
+    data_dir_base: P,
+    ticker: &str,
+    folder_name: &str,
+    mut files: Vec<String>,
+    mut tags: Vec<String>,
+    mut contexts: Vec<String>,
+    mut dates: Vec<String>,
+    mut values: Vec<String>,
 ) -> PolarsResult<String> {
-    
-    let path_obj = Path::new(input_folder_path);
-    
-    // Non-destructive parsing logic fallback 
-    let (ticker, file_base_name) = if sub_hierarchy.is_empty() {
-        let legacy_folder_name = path_obj.file_name().unwrap().to_string_lossy().into_owned();
-        let legacy_ticker = path_obj
-            .parent()
-            .unwrap()
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        (legacy_ticker, legacy_folder_name)
-    } else {
-        // For OCR paths, main.rs passed custom target path format metadata tokens down
-        let extracted_statement_filename = path_obj.file_name().unwrap().to_string_lossy().into_owned();
-        
-        let mut check_ancestor = path_obj;
-        while let Some(parent) = check_ancestor.parent() {
-            if parent.file_name().map(|f| f.to_string_lossy()) == Some("data".into()) {
-                break;
-            }
-            check_ancestor = parent;
-        }
-        let dynamic_ticker = check_ancestor.file_name().unwrap().to_string_lossy().into_owned();
-        (dynamic_ticker, extracted_statement_filename)
-    };
-
-    let mut output_dir = format!("../data/{}/parquets", ticker);
-    for subfolder in sub_hierarchy {
-        output_dir.push_str(&format!("/{}", subfolder));
-    }
-
-    let output_file_path = format!("{}/{}.parquet", output_dir, file_base_name);
-
+    let output_dir = data_dir_base.as_ref().join(ticker).join("parquets");
     if let Err(e) = fs::create_dir_all(&output_dir) {
         return Err(PolarsError::ComputeError(
-            format!("Failed to create directory structure {}: {}", output_dir, e).into()
+            format!("Failed to create directory structure {:?}: {}", output_dir, e).into()
         ));
     }
 
-    let s_files = Series::new("source_file".into(), files);
-    let s_tags = Series::new("tag_name".into(), tags);
-    let s_contexts = Series::new("context_id".into(), contexts);
-    let s_dates = Series::new("date_bounds".into(), dates);
-    let s_values = Series::new("raw_value".into(), values);
+    let output_file_path = output_dir.join(format!("{}.parquet", folder_name));
+
+    let s_files = Series::new("source_file".into(), std::mem::take(&mut files));
+    let s_tags = Series::new("tag_name".into(), std::mem::take(&mut tags));
+    let s_contexts = Series::new("context_id".into(), std::mem::take(&mut contexts));
+    let s_dates = Series::new("date_bounds".into(), std::mem::take(&mut dates));
+    let s_values = Series::new("raw_value".into(), std::mem::take(&mut values));
 
     let mut df = DataFrame::new(vec![s_files, s_tags, s_contexts, s_dates, s_values])?;
 
-    let output_file = File::create(Path::new(&output_file_path)).map_err(|e| {
-        PolarsError::ComputeError(format!("Failed to build physical output track: {}", e).into())
+    let output_file = File::create(&output_file_path).map_err(|e| {
+        PolarsError::ComputeError(format!("Failed to build physical output track at {:?}: {}", output_file_path, e).into())
     })?;
     
     ParquetWriter::new(output_file).finish(&mut df)?;
 
-    Ok(output_file_path)
+    Ok(output_file_path.to_string_lossy().into_owned())
 }
 
-pub fn save_ocr_to_parquet(
-    input_folder_path: &str,
-    sub_hierarchy: &[&str],
-    files: &Vec<String>,
-    statements: &Vec<String>,
-    contexts: &Vec<String>,
-    particulars: &Vec<String>,
-    notes: &Vec<String>,
-    curr_years: &Vec<String>,
-    prev_years: &Vec<String>,
+/// ⚡ Zero-Copy Columnar Dataset Serializer for Annual OCR Data (Markdown)
+pub fn save_ocr_to_parquet<P: AsRef<Path>>(
+    data_dir_base: P,
+    ticker: &str,
+    statement_type: &str,
+    mut files: Vec<String>,
+    mut statements: Vec<String>,
+    mut contexts: Vec<String>,
+    mut particulars: Vec<String>,
+    mut notes: Vec<String>,
+    mut curr_years: Vec<String>,
+    mut prev_years: Vec<String>,
 ) -> PolarsResult<String> {
-    let path_obj = Path::new(input_folder_path);
-    let extracted_statement_filename = path_obj.file_name().unwrap().to_string_lossy().into_owned();
-    
-    let mut check_ancestor = path_obj;
-    while let Some(parent) = check_ancestor.parent() {
-        if parent.file_name().map(|f| f.to_string_lossy()) == Some("data".into()) {
-            break;
-        }
-        check_ancestor = parent;
-    }
-    let ticker = check_ancestor.file_name().unwrap().to_string_lossy().into_owned();
-
-    let mut output_dir = format!("../data/{}/parquets", ticker);
-    for subfolder in sub_hierarchy {
-        output_dir.push_str(&format!("/{}", subfolder));
-    }
-    let output_file_path = format!("{}/{}.parquet", output_dir, extracted_statement_filename);
-
+    // 🎯 FIXED: Removed unnecessary 'mut' keyword to comply with Cargo analysis rules
+    let output_dir = data_dir_base.as_ref().join(ticker).join("parquets").join("annual_report");
     if let Err(e) = fs::create_dir_all(&output_dir) {
         return Err(PolarsError::ComputeError(
-            format!("Failed to create directory structure {}: {}", output_dir, e).into()
+            format!("Failed to create directory structure {:?}: {}", output_dir, e).into()
         ));
     }
 
-    // Natively structure your explicit 7-column database fields
-    let s_files = Series::new("file_name".into(), files);
-    let s_statement = Series::new("statement_type".into(), statements);
-    let s_contexts = Series::new("context_id".into(), contexts);
-    let s_particulars = Series::new("particulars".into(), particulars);
-    let s_notes = Series::new("notes".into(), notes);
-    let s_curr = Series::new("curr_year".into(), curr_years);
-    let s_prev = Series::new("prev_year".into(), prev_years);
+    let output_file_path = output_dir.join(format!("{}.parquet", statement_type));
+
+    let s_files = Series::new("file_name".into(), std::mem::take(&mut files));
+    let s_statement = Series::new("statement_type".into(), std::mem::take(&mut statements));
+    let s_contexts = Series::new("context_id".into(), std::mem::take(&mut contexts));
+    let s_particulars = Series::new("particulars".into(), std::mem::take(&mut particulars));
+    let s_notes = Series::new("notes".into(), std::mem::take(&mut notes));
+    let s_curr = Series::new("curr_year".into(), std::mem::take(&mut curr_years));
+    let s_prev = Series::new("prev_year".into(), std::mem::take(&mut prev_years));
 
     let mut df = DataFrame::new(vec![s_files, s_statement, s_contexts, s_particulars, s_notes, s_curr, s_prev])?;
 
-    let output_file = File::create(Path::new(&output_file_path)).map_err(|e| {
-        PolarsError::ComputeError(format!("Failed to build physical output track: {}", e).into())
+    let output_file = File::create(&output_file_path).map_err(|e| {
+        PolarsError::ComputeError(format!("Failed to build physical output track at {:?}: {}", output_file_path, e).into())
     })?;
     
     ParquetWriter::new(output_file).finish(&mut df)?;
 
-    Ok(output_file_path)
+    Ok(output_file_path.to_string_lossy().into_owned())
 }

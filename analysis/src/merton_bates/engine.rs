@@ -1,70 +1,26 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
-use chrono::{TimeZone, Utc};
 use rayon::prelude::*;
 use rand_distr::{Normal, Distribution, Poisson};
-use serde::Deserialize;
 use crate::merton_bates::MertonBatesCell;
-use crate::data_loader::Exchange; // 🎯 Unified discriminator enum imported from central core
+use crate::data_loader::UnifiedCompanyMatrix;
 
-#[derive(Debug, Deserialize)]
-struct ChartDataWrapper {
-    #[serde(rename = "grapthData")]
-    pub graph_data: Vec<Vec<serde_json::Value>>,
-}
-
-/// Ingests your 10Y timeline chart and computes rolling real-world prices and volatilities
+/// Processes rolling log returns, dynamic real-world prices, and volatilities from raw memory chart records
 fn extract_price_and_vol_vectors(
-    ticker: &str,
-    exchange: Exchange,
+    matrix: &UnifiedCompanyMatrix,
 ) -> (Vec<String>, HashMap<String, f64>, HashMap<String, f64>) {
     let mut dates = Vec::new();
     let mut prices = HashMap::new();
     let mut volatilities = HashMap::new();
 
-    let path_str = match exchange {
-        Exchange::Bse => format!("../data/{}/bse_historical-chart-data/10Y.json", ticker),
-        Exchange::Nse => format!("../data/{}/nse_historical-chart-data/10Y.json", ticker),
-    };
-
-    let file_path = Path::new(&path_str);
-    if !file_path.exists() {
-        println!("⚠️  [MERTON_BATES]: Target 10Y.json trace missing at {:?}. Aborting track safely.", file_path);
-        return (dates, prices, volatilities);
-    }
-
-    let file = match File::open(file_path) {
-        Ok(f) => f,
-        Err(_) => return (dates, prices, volatilities),
-    };
-    let reader = BufReader::new(file);
-
-    let parsed_chart: ChartDataWrapper = match serde_json::from_reader(reader) {
-        Ok(data) => data,
-        Err(_) => return (dates, prices, volatilities),
-    };
-
-    let mut sequential_records: Vec<(String, f64)> = Vec::new();
-
-    for tuple in parsed_chart.graph_data {
-        if tuple.len() < 2 { continue; }
-        
-        let ms_timestamp = tuple[0].as_i64().unwrap_or(0);
-        let raw_price = tuple[1].as_f64().unwrap_or(0.0);
-
-        if ms_timestamp == 0 || raw_price <= 0.0 { continue; }
-
-        let datetime = Utc.timestamp_millis_opt(ms_timestamp).unwrap();
-        let formatted_date = datetime.format("%Y-%m-%d").to_string();
-        
-        sequential_records.push((formatted_date, raw_price));
-    }
+    let sequential_records = &matrix.raw_chart_records;
 
     if sequential_records.len() < 22 {
         return (dates, prices, volatilities);
     }
+
+    dates.reserve(sequential_records.len() - 21);
+    prices.reserve(sequential_records.len() - 21);
+    volatilities.reserve(sequential_records.len() - 21);
 
     for i in 21..sequential_records.len() {
         let (ref target_date, target_price) = sequential_records[i];
@@ -84,6 +40,8 @@ fn extract_price_and_vol_vectors(
         let variance = log_returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (log_returns.len() - 1) as f64;
         
         let annualized_volatility = variance.sqrt() * (252.0_f64).sqrt();
+        
+        // 🎯 MERTON-BATES DEFAULTS: Preserve model-specific fallback volatility floor constraint (0.20)
         let safe_vol = if annualized_volatility.is_nan() || annualized_volatility <= 0.0 { 0.20 } else { annualized_volatility };
 
         dates.push(target_date.clone());
@@ -136,10 +94,9 @@ fn simulate_jump_diffusion_paths(
 }
 
 pub fn execute_merton_bates_pipeline(
-    ticker: &str,
-    exchange: Exchange,
+    matrix: &UnifiedCompanyMatrix,
 ) -> Vec<MertonBatesCell> {
-    let (timeline_dates, historical_prices, historical_volatilities) = extract_price_and_vol_vectors(ticker, exchange);
+    let (timeline_dates, historical_prices, historical_volatilities) = extract_price_and_vol_vectors(matrix);
 
     if timeline_dates.is_empty() {
         return Vec::new();

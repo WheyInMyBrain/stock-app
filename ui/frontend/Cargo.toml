@@ -1,0 +1,23 @@
+[package]
+name = "stock_app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Core immediate-mode hardware-accelerated GUI frameworks
+eframe = { version = "0.27.2", features = ["wgpu", "glow"] }
+egui = "0.27.2"
+
+# Utilities for JSON serialization maps matching telemetry records
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Connects the shared backend library into the native process
+stock_app_backend = { path = "../backend" }
+tokio = "1.52.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

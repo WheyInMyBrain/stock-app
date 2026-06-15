@@ -10,28 +10,11 @@ struct DynamicYearData {
 }
 
 pub fn execute_dual_dcf_pipeline(
-    matrix: &UnifiedCompanyMatrix, // 🎯 PICKER INTERCEPT: Takes pre-compiled cache directly
+    matrix: &UnifiedCompanyMatrix, 
     base_wacc: f64,
     base_terminal_g: f64,
 ) -> Result<Vec<DcfMatrixCell>, &'static str> {
     
-    // Internal picker closure maps timeline share tokens dynamically from memory cache
-    let find_historical_shares = |target_date: &str| -> f64 {
-        if let Some(&shares) = matrix.share_history_timeline.get(target_date) {
-            return shares;
-        }
-        let target_year = target_date.split('-').next().unwrap_or("2024");
-        let mut sorted_dates: Vec<&String> = matrix.share_history_timeline.keys().collect();
-        sorted_dates.sort();
-        
-        for date_key in sorted_dates.iter().rev() {
-            if date_key.starts_with(target_year) {
-                return *matrix.share_history_timeline.get(*date_key).unwrap_or(&53_954_106.0);
-            }
-        }
-        *matrix.share_history_timeline.values().next().unwrap_or(&53_954_106.0)
-    };
-
     // ==============================================================================
     // 📊 STEP 1: CALCULATE VALID CAPEX RATIOS FROM CACHED KEYS
     // ==============================================================================
@@ -67,7 +50,18 @@ pub fn execute_dual_dcf_pipeline(
 
             let fcf_margin = calculated_fcf / rev;
             let snapshot_date = matrix.file_to_date_map.get(file_key).unwrap().clone();
-            let shares_outstanding = find_historical_shares(&snapshot_date);
+            
+            // 🎯 REFACTOR OPTIMIZATION: Zero-cost, fluent lookup expression per historical point
+            let shares_outstanding = matrix.share_history_timeline.get(&snapshot_date)
+                .cloned()
+                .or_else(|| {
+                    let target_year = snapshot_date.split('-').next().unwrap_or("");
+                    matrix.share_history_timeline.iter()
+                        .find(|(date, _)| date.starts_with(target_year))
+                        .map(|(_, &val)| val)
+                })
+                .or_else(|| matrix.share_history_timeline.values().max_by(|a, b| a.total_cmp(b)).cloned())
+                .unwrap_or(1.0);
 
             dynamic_timeline.push(DynamicYearData {
                 date_bounds: snapshot_date,
@@ -115,6 +109,21 @@ pub fn execute_dual_dcf_pipeline(
         .par_iter()
         .map(|&(idx, wacc, mult)| {
             let current_node = &dynamic_timeline[idx];
+            
+            // 🛡️ EARLY OUT SECURITY FILTER: Bypass intensive calculation loops if denominator limits breach
+            if wacc <= base_terminal_g {
+                return DcfMatrixCell {
+                    year_end: current_node.date_bounds.clone(),
+                    base_revenue: current_node.revenue,
+                    wacc,
+                    terminal_g: base_terminal_g,
+                    growth_multiplier: mult,
+                    margin_multiplier: mult,
+                    rolling_fair_value: 0.0,
+                    omniscient_fair_value: 0.0,
+                };
+            }
+
             let cell_omni_growth = dynamic_base_omni_growth;
             let cell_omni_margin = dynamic_base_omni_margin;
             
