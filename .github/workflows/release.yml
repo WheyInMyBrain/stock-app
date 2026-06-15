@@ -46,44 +46,37 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # 🚀 WINDOWS EXTENSION: Mount Visual Studio C++ Compiler tools for building the C++ sidecar executable
-      - name: Setup MSVC C++ Build Tools (Windows Only)
-        if: matrix.os == 'windows-latest'
-        uses: ilammy/msvc-dev-cmd@v1
-
       # WINDOWS ONLY: Provision LLVM toolchain so we can use lld-link to easily handle Go assets
       - name: Install LLVM Toolchain (Windows Only)
         if: matrix.os == 'windows-latest'
         run: choco install llvm -y
-
-      # 🚀 MAC EXTENSION: Provision pkg-config so Apache Arrow can map system layouts
+        
+      # MAC ONLY: Provision pkg-config so Apache Arrow can map system layouts safely
       - name: Install Mac Native Build Dependencies (Mac Only)
         if: matrix.os == 'macos-latest'
         run: brew install pkg-config
 
-      # Compiles the whole project from the true root space so build.rs files find all directories cleanly
+      # Compiles the workspace targeting the explicit frontend manifest path location
       - name: Compile Cross-Platform Production Binary
         shell: bash
         env:
-          # This environment variable flags Rust to use LLVM's linker for Windows, bypassing MSVC LNK1223 permanently
-          RUSTFLAGS: ${{ matrix.os == 'windows-latest' && '-C linker=lld-link.exe' || '' }}
-          MACOSX_DEPLOYMENT_TARGET: '26.0' # Matches your explicit macOS build target
+          RUSTFLAGS:  ${{ matrix.os == 'windows-latest' && '-C linker=lld-link.exe' || '' }}
         run: |
-          cargo build --release --target ${{ matrix.target }} --workspace
+          cargo build --release --target ${{ matrix.target }} --manifest-path ui/frontend/Cargo.toml --workspace
 
       # WINDOWS PACKAGING ROUTINE
       - name: Package Release Archive (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          cd target/${{ matrix.target }}/release
+          cd ui/frontend/target/${{ matrix.target }}/release
           Compress-Archive -Path stock_app.exe, binaries -DestinationPath "${{ github.workspace }}/${{ matrix.artifact_name }}" -Force
 
       # MAC PACKAGING ROUTINE
       - name: Package Release Archive (Mac)
         if: matrix.os == 'macos-latest'
         run: |
-          cd target/${{ matrix.target }}/release
+          cd ui/frontend/target/${{ matrix.target }}/release
           zip -r "${{ github.workspace }}/${{ matrix.artifact_name }}" stock_app binaries
 
       # Dispatches the compiled ZIP packages straight from the workspace root into GitHub Releases
