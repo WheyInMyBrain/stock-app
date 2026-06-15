@@ -2,12 +2,14 @@ pub mod add_ticker;
 pub mod overview;
 pub mod analysis;
 pub mod financials;
+pub mod ai;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceTab {
     Overview,
     Financials,
     Analysis,
+    Ai,
 }
 
 impl WorkspaceTab {
@@ -15,6 +17,7 @@ impl WorkspaceTab {
         WorkspaceTab::Overview,
         WorkspaceTab::Financials,
         WorkspaceTab::Analysis,
+        WorkspaceTab::Ai,
     ];
 
     pub fn label(&self) -> String {
@@ -39,6 +42,9 @@ impl WorkspaceTab {
             }
             WorkspaceTab::Analysis => {
                 analysis::draw_analysis_panel(ui, active_ticker);
+            }
+            WorkspaceTab::Ai => {
+                ai::draw_ai_panel(ui, active_ticker);
             }
         }
     }

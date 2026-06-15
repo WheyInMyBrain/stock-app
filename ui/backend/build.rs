@@ -48,18 +48,16 @@ fn get_max_mtime(dir: &Path, skip_dirs: &[&str]) -> Option<SystemTime> {
 
 fn main() {
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    
     let ocr_source_dir = manifest_dir.parent().unwrap().parent().unwrap().join("ocr");
     
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let mut target_output_dir = PathBuf::from(out_dir);
-    target_output_dir.pop(); // pop out
-    target_output_dir.pop(); // pop build identity hash
-    target_output_dir.pop(); // pop "build" folder
-    target_output_dir.push("binaries"); // target/[profile]/binaries
+    target_output_dir.pop(); 
+    target_output_dir.pop(); 
+    target_output_dir.pop(); 
+    target_output_dir.push("binaries"); 
 
     std::fs::create_dir_all(&target_output_dir).unwrap();
-
     let ocr_skip = [".venv", "venv", "build", "dist", "__pycache__", "binaries"];
 
     watch_dir_recursively(&ocr_source_dir, &ocr_skip);
@@ -83,25 +81,15 @@ fn main() {
 
     if must_rebuild_ocr {
         println!("cargo:warning= [BUILD SCRIPT]: Source changes detected. Synchronizing environment and freezing OCR binary...");
-
         let venv_dir = ocr_source_dir.join(".venv");
         
         if !venv_dir.exists() {
-            println!("cargo:warning= [BUILD SCRIPT]: .VENV missing. Spawning localized Python virtual environment...");
             #[cfg(target_os = "windows")]
             let mut py_cmd = Command::new("python");
             #[cfg(not(target_os = "windows"))]
             let mut py_cmd = Command::new("python3");
 
-            let venv_status = py_cmd
-                .current_dir(&ocr_source_dir)
-                .args(&["-m", "venv", ".venv"])
-                .status()
-                .expect(" [BUILD ERROR]: Failed to invoke Python runtime to create virtual environment.");
-
-            if !venv_status.success() {
-                panic!(" [BUILD FAULT]: Failed creating local Python virtual environment sandbox.");
-            }
+            py_cmd.current_dir(&ocr_source_dir).args(&["-m", "venv", ".venv"]).status().unwrap();
         }
 
         #[cfg(target_os = "windows")]
@@ -114,33 +102,14 @@ fn main() {
         #[cfg(not(target_os = "windows"))]
         let pyinstaller_exe = venv_dir.join("bin/pyinstaller");
 
-        println!("cargo:warning= [BUILD SCRIPT]: Checking and updating virtual environment library alignments...");
-        let pip_status = Command::new(&pip_exe)
-            .current_dir(&ocr_source_dir)
-            .args(&["install", "--upgrade", "pip"])
-            .status()
-            .and_then(|_| {
-                Command::new(&pip_exe)
-                    .current_dir(&ocr_source_dir)
-                    .args(&["install", "-r", "requirements.txt"])
-                    .status()
-            })
-            .and_then(|_| {
-                Command::new(&pip_exe)
-                    .current_dir(&ocr_source_dir)
-                    .args(&["install", "pyinstaller"])
-                    .status()
-            });
+        Command::new(&pip_exe).current_dir(&ocr_source_dir).args(&["install", "--upgrade", "pip"]).status().unwrap();
+        Command::new(&pip_exe).current_dir(&ocr_source_dir).args(&["install", "-r", "requirements.txt"]).status().unwrap();
+        Command::new(&pip_exe).current_dir(&ocr_source_dir).args(&["install", "pyinstaller"]).status().unwrap();
 
-        if !pip_status.map_or(false, |s| s.success()) {
-            panic!(" [BUILD FAULT]: Failed synchronizing required packages from requirements.txt down the venv track.");
-        }
-
-        let ocr_status = Command::new(&pyinstaller_exe)
+        Command::new(&pyinstaller_exe)
             .current_dir(&ocr_source_dir)
             .args(&[
-                "--onefile",
-                "--clean",
+                "--onefile", "--clean",
                 "--recursive-copy-metadata", "docling",                   
                 "--recursive-copy-metadata", "torch",                   
                 "--recursive-copy-metadata", "huggingface_hub",                   
@@ -148,17 +117,70 @@ fn main() {
                 "--name", &format!("ocr-{}", target_triple), 
                 "ocr_engine.py",
             ])
-            .status();
+            .status().unwrap();
+    }
 
-        match ocr_status {
-            Ok(status) if status.success() => {
-                println!("cargo:warning= [BUILD SCRIPT]: Python OCR engine successfully frozen -> {}", ocr_binary_name);
-            }
-            _ => {
-                panic!(" [BUILD FAULT]: PyInstaller freezing pass failed! Inspect script errors.");
-            }
+    // =================================================================
+    // 🤖 AUTOMATED C++ SIDECAR COMPILATION
+    // =================================================================
+    let ai_source_dir = manifest_dir.parent().unwrap().parent().unwrap().join("ai");
+    let ai_src_folder = ai_source_dir.join("src");
+    let cpp_build_dir = ai_source_dir.join("build");
+    
+    // Exact location of the compiled standalone executable target inside CMake's workspace
+    let executable_internal_name = "ai_agent";
+    let target_executable_internal_path = cpp_build_dir.join(executable_internal_name);
+
+    // Dynamic filename for deployment context inside target/.../binaries/
+    let cpp_sidecar_deploy_name = format!("ai_agent-{}{}", target_triple, ext);
+    let final_cpp_sidecar_path = target_output_dir.join(&cpp_sidecar_deploy_name);
+
+    // Watch your C++ directory for tracking code modifications
+    watch_dir_recursively(&ai_src_folder, &[]);
+    println!("cargo:rerun-if-changed={}", final_cpp_sidecar_path.display());
+
+    let cpp_max_src_time = get_max_mtime(&ai_src_folder, &[]);
+    let cpp_bin_time = final_cpp_sidecar_path.metadata().and_then(|m| m.modified()).ok();
+
+    let must_rebuild_cpp = match (cpp_max_src_time, cpp_bin_time) {
+        (Some(src_t), Some(bin_t)) => src_t > bin_t,
+        _ => true, 
+    };
+
+    if must_rebuild_cpp {
+        println!("cargo:warning= [AI BUILD]: Changes detected in C++ architecture. Compiling standalone sidecar agent...");
+        
+        if !cpp_build_dir.exists() {
+            std::fs::create_dir_all(&cpp_build_dir).unwrap();
         }
+
+        let cmake_status = Command::new("cmake")
+            .current_dir(&cpp_build_dir)
+            .arg("..")
+            .arg("-DCMAKE_BUILD_TYPE=Release")
+            .status()
+            .expect("Failed to execute CMake generation step.");
+
+        if !cmake_status.success() {
+            panic!("CMake metadata validation run failed.");
+        }
+
+        let make_status = Command::new("make")
+            .current_dir(&cpp_build_dir)
+            .arg("-j4")
+            .status()
+            .expect("Failed to execute Make build steps.");
+
+        if !make_status.success() {
+            panic!("C++ sidecar binary generation build run failed.");
+        }
+
+        // 🚀 THE CENTRALIZATION SHIPPER: Copies the freshly baked binary side-by-side into target/binaries/
+        std::fs::copy(&target_executable_internal_path, &final_cpp_sidecar_path)
+            .expect(" [AI BUILD ERROR]: Failed to route compiled sidecar executable to central binaries home directory.");
+            
+        println!("cargo:warning= [AI BUILD]: Standalone C++ sidecar deployed successfully -> {}", cpp_sidecar_deploy_name);
     } else {
-        println!("cargo:warning= [BUILD SCRIPT]: Python OCR sidecar is completely up to date. Skipping freezing pass.");
+        println!("cargo:warning= [AI BUILD]: Standalone C++ engine sidecar is fully up to date.");
     }
 }

@@ -26,9 +26,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    fs::path binary_path = fs::absolute(argv[0]);
-    fs::path ai_root_dir = binary_path.parent_path().parent_path(); 
-    fs::path model_path = ai_root_dir / "models" / "Qwen3.5-4B-UD-Q4_K_XL.gguf";
+    fs::path base_data_path = fs::absolute(data_dir);
+    fs::path model_path = base_data_path / "Qwen3.5-4B-UD-Q4_K_XL.gguf";
 
     // 1. Initialize the Core AI Hardware Backend Contexts
     AIEngine engine;
@@ -36,10 +35,8 @@ int main(int argc, char* argv[]) {
     if (!engine.initialize(model_path.string())) return 1;
 
     // 2. Step 1: Run Intent Extraction
-    std::cout << "\n📊 Routing request pipeline securely..." << std::endl;
     AIRouter router;
     std::string outcome_tag = router.resolve_intent_tag(engine, user_query);
-    std::cout << "🎯 PART 1 OUTPUT (Extracted Intent Tag): " << outcome_tag << std::endl;
 
     // 3. Look up instructions mapping to the extracted tag
     auto it = MetricRegistry.find(outcome_tag);
@@ -49,19 +46,14 @@ int main(int argc, char* argv[]) {
     }
 
     // 4. Run Data Extraction Engine Natively
-    std::cout << "⚙️ Directing data loader to process target merge cluster [" 
-              << it->second.target_files.size() << " files]..." << std::endl;
-              
     std::string matrix_output = it->second.run_function(data_dir, ticker, it->second);
 
-    std::cout << "\n📈 --- PART 2 OUTPUT (Calculated Matrix Result) ---\n" << std::endl;
-    std::cout << matrix_output << std::endl;
+    // Print Data Matrix Output Boundary
+    std::cout << "__DATA_OUTPUT_START__\n" << matrix_output << "\n__DATA_OUTPUT_END__\n" << std::endl;
 
-    // 5. 🚀 STEP 3: Run AI Explanation & Analysis
-    std::cout << "\n🤖 --- PART 3 OUTPUT (AI Executive Analysis) ---\n" << std::endl;
+    // 5. 🚀 STEP 3: Run AI Explanation & Analysis (Boundaries handled seamlessly inside header!)
     AIAnalyst analyst;
     analyst.generate_explanation(engine, user_query, ticker, matrix_output);
-    std::cout << "\n" << std::endl;
 
     return 0;
 }

@@ -6,3 +6,4 @@ pub mod analysis_engine;
 pub mod analysis;
 pub mod parser;
 pub mod ocr;
+pub mod ai;
