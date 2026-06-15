@@ -342,6 +342,133 @@ impl AbstractSubTab<OverviewMetadata> for InvestorComplaintsSubTab {
     fn render_bottom(&self, _ui: &mut Ui, _meta: &OverviewMetadata) {}
 }
 
+struct PeerComparisonSubTab;
+impl AbstractSubTab<OverviewMetadata> for PeerComparisonSubTab {
+    fn id(&self) -> usize { 5 }
+    fn label(&self) -> &'static str { "Peer Comparison Matrix" }
+
+    fn render_main(&self, ui: &mut Ui, meta: &OverviewMetadata) {
+        if meta.peer_comparisons.is_empty() {
+            ui.weak("No peer comparison datasets found for this ticker.");
+            return;
+        }
+
+        let cat_state_id = ui.make_persistent_id("peer_comparison_category_token");
+        let mut selected_category = meta.peer_comparisons.first().unwrap().category_name.clone();
+        ui.data_mut(|d| {
+            if let Some(cached) = d.get_persisted::<String>(cat_state_id) {
+                if meta.peer_comparisons.iter().any(|c| c.category_name == cached) {
+                    selected_category = cached;
+                }
+            }
+        });
+
+        let active_cat = meta.peer_comparisons.iter().find(|c| c.category_name == selected_category).unwrap();
+
+        let date_state_id = ui.make_persistent_id("peer_comparison_date_token");
+        let mut selected_date = active_cat.available_dates.first().cloned().unwrap_or_default();
+        ui.data_mut(|d| {
+            if let Some(cached) = d.get_persisted::<String>(date_state_id) {
+                if active_cat.available_dates.contains(&cached) {
+                    selected_date = cached;
+                }
+            }
+        });
+
+        // Horizontal period toggles
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Reporting Period:").strong().color(Color32::from_rgb(100, 180, 240)));
+            for d in &active_cat.available_dates {
+                if ui.selectable_label(*d == selected_date, d).clicked() {
+                    selected_date = d.clone();
+                    ui.data_mut(|d_store| d_store.insert_persisted(date_state_id, selected_date.clone()));
+                }
+            }
+        });
+        ui.add_space(12.0);
+
+        if let Some(records) = active_cat.date_matrices.get(&selected_date) {
+            let max_safe_panel_width = ui.available_width();
+
+            // Contain the grid cleanly inside a width-bounded horizontal scroller
+            egui::ScrollArea::horizontal()
+                .id_source("peer_matrix_horizontal_scroller_guard")
+                .max_width(max_safe_panel_width)
+                .show(ui, |ui| {
+                    egui::Grid::new("peer_comparison_table")
+                        .striped(true)
+                        .spacing(Vec2::new(28.0, 12.0))
+                        .show(ui, |ui| {
+                            let headers = ["Symbol", "LTP", "P. Change", "Market Cap", "P/E", "EPS", "PAT", "Total Income", "Promoter Hold", "Debt/Eq"];
+                            for h in headers {
+                                ui.label(egui::RichText::new(h).strong().color(Color32::WHITE));
+                            }
+                            ui.end_row();
+
+                            for rec in records {
+                                ui.label(egui::RichText::new(&rec.symbol).strong().color(Color32::from_rgb(100, 180, 240)));
+                                ui.label(format_indian_style_number(rec.ltp));
+                                
+                                let color = if rec.p_change < 0.0 { Color32::LIGHT_RED } else if rec.p_change > 0.0 { Color32::from_rgb(100, 240, 140) } else { Color32::GRAY };
+                                ui.label(egui::RichText::new(format!("{:.2}%", rec.p_change)).color(color));
+                                
+                                ui.label(format_indian_style_number(rec.market_cap));
+                                ui.label(format!("{:.2}", rec.pe));
+                                ui.label(format!("{:.2}", rec.eps));
+                                ui.label(format_indian_style_number(rec.pat));
+                                ui.label(format_indian_style_number(rec.total_income));
+                                ui.label(format!("{:.2}%", rec.promoter_holding));
+                                ui.label(&rec.debt_eq_ratio);
+                                ui.end_row();
+                            }
+                        });
+                });
+        }
+    }
+
+    fn render_bottom(&self, ui: &mut Ui, meta: &OverviewMetadata) {
+        if meta.peer_comparisons.is_empty() { return; }
+
+        let cat_state_id = ui.make_persistent_id("peer_comparison_category_token");
+        let mut selected_category = meta.peer_comparisons.first().unwrap().category_name.clone();
+        ui.data_mut(|d| {
+            if let Some(cached) = d.get_persisted::<String>(cat_state_id) {
+                if meta.peer_comparisons.iter().any(|c| c.category_name == cached) {
+                    selected_category = cached;
+                }
+            }
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("PEER MATRIX DOMAINS:").strong());
+            ui.add_space(10.0);
+            
+            egui::ScrollArea::horizontal()
+                .id_source("peer_comparison_bottom_scroll")
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::new(8.0, 0.0);
+                    for cat in &meta.peer_comparisons {
+                        let is_selected = cat.category_name == selected_category;
+                        let btn_text = egui::RichText::new(&cat.category_name).strong();
+                        
+                        let button_widget = egui::Button::new(btn_text)
+                            .min_size(Vec2::new(84.0, 36.0))
+                            .stroke(if is_selected {
+                                Stroke::new(2.0, Color32::from_rgb(100, 180, 240)) 
+                            } else {
+                                Stroke::new(1.0, Color32::from_rgb(50, 50, 50))
+                            });
+
+                        if ui.add(button_widget).clicked() {
+                            selected_category = cat.category_name.clone();
+                            ui.data_mut(|d| d.insert_persisted(cat_state_id, selected_category.clone()));
+                        }
+                    }
+                });
+        });
+    }
+}
+
 pub fn draw_overview_panel(ui: &mut Ui, active_ticker: &str) {
     DataManager::ensure_overview_data(active_ticker);
 
@@ -350,6 +477,7 @@ pub fn draw_overview_panel(ui: &mut Ui, active_ticker: &str) {
         &ShareholdersMatrixSubTab,
         &BoardSubTab,
         &InvestorComplaintsSubTab,
+        &PeerComparisonSubTab,
     ];
 
     draw_nav_canvas_orchestrator(

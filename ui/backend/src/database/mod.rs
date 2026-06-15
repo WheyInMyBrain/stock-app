@@ -88,6 +88,61 @@ impl WorkspaceDataLoader {
         fs::read(&valid_path).map_err(|e| format!("IO failure on {}: {}", valid_path.display(), e))
     }
 
+    pub fn load_directory_filenames(&self, target_folder_path: &str) -> Result<Vec<String>, String> {
+        let ticker_upper = self.ticker.to_uppercase();
+        let parts: Vec<&str> = target_folder_path.split('/').filter(|s| !s.is_empty()).collect();
+        if parts.is_empty() {
+            return Err("Empty target folder path selector".to_string());
+        }
+
+        let data_root = resolve_data_directory_headless();
+        let mut folder_variants = vec![parts[0].to_string()];
+        if parts[0].starts_with("nse_") || parts[0].starts_with("bse_") {
+            if parts[0].len() > 4 {
+                folder_variants.push(parts[0][4..].to_string());
+            }
+        }
+
+        let mut final_dir_path = None;
+        for folder in folder_variants {
+            let mut sub_elements = Vec::new();
+            if parts.len() > 1 {
+                for i in 1..parts.len() {
+                    sub_elements.push(parts[i]);
+                }
+            }
+
+            // Variant A: data/TICKER/folder/sub-elements
+            let mut p1 = data_root.join(&ticker_upper).join(&folder);
+            for sub in &sub_elements { p1.push(sub); }
+            if p1.is_dir() { final_dir_path = Some(p1); break; }
+
+            // Variant B: data/folder/TICKER/sub-elements
+            let mut p2 = data_root.join(&folder).join(&ticker_upper);
+            for sub in &sub_elements { p2.push(sub); }
+            if p2.is_dir() { final_dir_path = Some(p2); break; }
+        }
+
+        let valid_dir = match final_dir_path {
+            Some(d) => d,
+            None => return Err(format!("Target directory path not resolved: {}", target_folder_path)),
+        };
+
+        let mut entries_list = Vec::new();
+        if let Ok(read_dir) = fs::read_dir(valid_dir) {
+            for entry in read_dir.flatten() {
+                if let Ok(file_type) = entry.file_type() {
+                    if file_type.is_file() {
+                        let fname = entry.file_name().to_string_lossy().to_string();
+                        entries_list.push(fname);
+                    }
+                }
+            }
+        }
+
+        Ok(entries_list)
+    }
+
     pub fn load_json_struct<T: serde::de::DeserializeOwned>(&self, target_path: &str) -> Result<T, String> {
         let bytes = self.load_raw_bytes(target_path)?;
         serde_json::from_slice(&bytes).map_err(|e| format!("JSON syntax error: {}", e))

@@ -49,6 +49,27 @@ pub struct HistoricalComplaintRow {
     pub complaints_unresolved: f64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PeerRecord {
+    pub symbol: String,
+    pub ltp: f64,
+    pub p_change: f64,
+    pub market_cap: f64,
+    pub pe: f64,
+    pub eps: f64,
+    pub pat: f64,
+    pub total_income: f64,
+    pub promoter_holding: f64,
+    pub debt_eq_ratio: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PeerCategory {
+    pub category_name: String,
+    pub available_dates: Vec<String>,
+    pub date_matrices: std::collections::HashMap<String, Vec<PeerRecord>>,
+}
+
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct OverviewMetadata {
     pub macro_category: String,
@@ -72,6 +93,7 @@ pub struct OverviewMetadata {
     pub hni_whales: Vec<HistoricalWhaleRow>,
     pub sbo_registry: Vec<HistoricalSboRow>,
     pub investor_complaints: Vec<HistoricalComplaintRow>,
+    pub peer_comparisons: Vec<PeerCategory>,
 }
 
 // =========================================================================
@@ -474,6 +496,84 @@ pub fn hydrate_overview_metadata(ticker: &str) -> Result<(), String> {
     });
 
     meta.investor_complaints = complaint_timeline;
+
+    // =========================================================================
+    // SYSTEM PEER COMPARISON CORE (ZERO HARDCODED SYSTEM PATHS)
+    // =========================================================================
+    let mut category_map: std::collections::HashMap<String, std::collections::HashMap<String, Vec<PeerRecord>>> = std::collections::HashMap::new();
+    
+    // Pass the logical route straight into your internal path resolver engine
+    let target_matrix_dir = "nse_peer-comparison-matrix";
+
+    if let Ok(file_names) = loader.load_directory_filenames(target_matrix_dir) {
+        for name_token in file_names {
+            if name_token.ends_with(".json") {
+                // Strip the .json extension to parse categories and dates cleanly
+                let file_stem = name_token.trim_end_matches(".json");
+                let mut parts: Vec<&str> = file_stem.split('_').collect();
+                
+                if parts.len() >= 2 {
+                    let date_str = parts.pop().unwrap().to_string();
+                    let category_str = parts.join(" ");
+
+                    // Use your asset framework to fetch file data via its logical location string
+                    let target_logical_file_path = format!("{}/{}", target_matrix_dir, name_token);
+                    if let Ok(json_val) = loader.load_json_struct::<serde_json::Value>(&target_logical_file_path) {
+                        let mut records = Vec::new();
+                        let data_arr = json_val.as_array().or_else(|| json_val.get("data").and_then(|d| d.as_array()));
+
+                        if let Some(arr) = data_arr {
+                            for item in arr {
+                                let get_f64 = |k: &str| -> f64 {
+                                    item.get(k).and_then(|v| {
+                                        if let Some(n) = v.as_f64() { Some(n) }
+                                        else if let Some(s) = v.as_str() { s.parse::<f64>().ok() }
+                                        else { None }
+                                    }).unwrap_or(0.0)
+                                };
+
+                                let symbol = item.get("symbol").and_then(|v| v.as_str()).unwrap_or("N/A").to_string();
+                                let debt_eq = match item.get("debtEqRatio") {
+                                    Some(v) if v.is_string() => v.as_str().unwrap().to_string(),
+                                    Some(v) if v.is_number() => v.to_string(),
+                                    _ => "N/A".to_string()
+                                };
+
+                                records.push(PeerRecord {
+                                    symbol,
+                                    ltp: get_f64("ltp"),
+                                    p_change: get_f64("pChange").max(get_f64("PChange")),
+                                    market_cap: get_f64("marketCap"),
+                                    pe: get_f64("pe"),
+                                    eps: get_f64("eps"),
+                                    pat: get_f64("pat"),
+                                    total_income: get_f64("totalIncome"),
+                                    promoter_holding: get_f64("promoterHolding"),
+                                    debt_eq_ratio: debt_eq,
+                                });
+                            }
+                        }
+                        category_map.entry(category_str).or_default().insert(date_str, records);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut peer_comparisons = Vec::new();
+    for (cat_name, date_map) in category_map {
+        let mut dates: Vec<String> = date_map.keys().cloned().collect();
+        dates.sort_by(|a, b| b.cmp(a)); 
+
+        peer_comparisons.push(PeerCategory {
+            category_name: cat_name,
+            available_dates: dates,
+            date_matrices: date_map,
+        });
+    }
+    
+    peer_comparisons.sort_by(|a, b| a.category_name.cmp(&b.category_name));
+    meta.peer_comparisons = peer_comparisons;
 
     store_parsed_table("overview_metadata", meta);
     Ok(())
