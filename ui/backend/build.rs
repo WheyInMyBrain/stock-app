@@ -102,7 +102,8 @@ fn main() {
         #[cfg(not(target_os = "windows"))]
         let pyinstaller_exe = venv_dir.join("bin/pyinstaller");
 
-        Command::new(&pip_exe).current_dir(&ocr_source_dir).args(&["install", "--upgrade", "pip"]).status().unwrap();
+        // 🚀 THE PYTHON FIXED ROUTINE: Pre-install wheel packages to kill build deprecation runtime dumps cleanly
+        Command::new(&pip_exe).current_dir(&ocr_source_dir).args(&["install", "wheel"]).status().unwrap();
         Command::new(&pip_exe).current_dir(&ocr_source_dir).args(&["install", "-r", "requirements.txt"]).status().unwrap();
         Command::new(&pip_exe).current_dir(&ocr_source_dir).args(&["install", "pyinstaller"]).status().unwrap();
 
@@ -127,15 +128,13 @@ fn main() {
     let ai_src_folder = ai_source_dir.join("src");
     let cpp_build_dir = ai_source_dir.join("build");
     
-    // Exact location of the compiled standalone executable target inside CMake's workspace
-    let executable_internal_name = "ai_agent";
+    // Windows builds binaries inside an auto-generated Release/ sub-directory layout
+    let executable_internal_name = if os == "windows" { "Release\\ai_agent.exe" } else { "ai_agent" };
     let target_executable_internal_path = cpp_build_dir.join(executable_internal_name);
 
-    // Dynamic filename for deployment context inside target/.../binaries/
     let cpp_sidecar_deploy_name = format!("ai_agent-{}{}", target_triple, ext);
     let final_cpp_sidecar_path = target_output_dir.join(&cpp_sidecar_deploy_name);
 
-    // Watch your C++ directory for tracking code modifications
     watch_dir_recursively(&ai_src_folder, &[]);
     println!("cargo:rerun-if-changed={}", final_cpp_sidecar_path.display());
 
@@ -165,17 +164,19 @@ fn main() {
             panic!("CMake metadata validation run failed.");
         }
 
-        let make_status = Command::new("make")
+        let make_status = Command::new("cmake")
             .current_dir(&cpp_build_dir)
-            .arg("-j4")
+            .arg("--build")
+            .arg(".")
+            .arg("--config")
+            .arg("Release")
             .status()
-            .expect("Failed to execute Make build steps.");
+            .expect("Failed to execute cross-platform build steps.");
 
         if !make_status.success() {
             panic!("C++ sidecar binary generation build run failed.");
         }
 
-        // 🚀 THE CENTRALIZATION SHIPPER: Copies the freshly baked binary side-by-side into target/binaries/
         std::fs::copy(&target_executable_internal_path, &final_cpp_sidecar_path)
             .expect(" [AI BUILD ERROR]: Failed to route compiled sidecar executable to central binaries home directory.");
             
