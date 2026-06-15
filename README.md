@@ -18,6 +18,7 @@ The repository is modularized by function and language:
 * **`ui/`** - The interactive application layer.
     * **`frontend/`** - The frontend user interface workspace.
     * **`backend/`** - The bridge connecting the UI to the local data pools and calculation engines.
+* **`ai/`** - A CPP-based using llama.cpp which connects to the downloaded data and gives output.
 * **`analysis/`** - The core mathematical engine. Executes stateless, on-the-fly intrinsic valuation models (including DCF, DDM, Residual Income, EPV, Benjamin Graham, and EVA).
 * **`downloader-rust/`** - The primary network worker. Connects to various financial websites to scrape and download raw market data.
 * **`downloader-go/`** - A specialized Go module handling HTTP client initialization, session management, and cookie handling for secure external connections.

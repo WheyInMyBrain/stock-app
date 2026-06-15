@@ -59,3 +59,11 @@ target_include_directories(ai_agent PRIVATE
     ${CMAKE_BINARY_DIR}/_deps/arrow_src-build/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+if(MSVC)
+    message(STATUS "Patching MSVC compilation flags for massive source layers...")
+    target_compile_options(llama PRIVATE "/Od" "/bigobj")
+    if(TARGET llama-common)
+        target_compile_options(llama-common PRIVATE "/Od" "/bigobj")
+    endif()
+endif()
