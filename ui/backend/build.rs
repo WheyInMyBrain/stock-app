@@ -102,7 +102,6 @@ fn main() {
         #[cfg(not(target_os = "windows"))]
         let pyinstaller_exe = venv_dir.join("bin/pyinstaller");
 
-        // 🚀 THE PYTHON FIXED ROUTINE: Pre-install wheel packages to kill build deprecation runtime dumps cleanly
         Command::new(&pip_exe).current_dir(&ocr_source_dir).args(&["install", "wheel"]).status().unwrap();
         Command::new(&pip_exe).current_dir(&ocr_source_dir).args(&["install", "-r", "requirements.txt"]).status().unwrap();
         Command::new(&pip_exe).current_dir(&ocr_source_dir).args(&["install", "pyinstaller"]).status().unwrap();
@@ -128,7 +127,6 @@ fn main() {
     let ai_src_folder = ai_source_dir.join("src");
     let cpp_build_dir = ai_source_dir.join("build");
     
-    // Windows builds binaries inside an auto-generated Release/ sub-directory layout
     let executable_internal_name = if os == "windows" { "Release\\ai_agent.exe" } else { "ai_agent" };
     let target_executable_internal_path = cpp_build_dir.join(executable_internal_name);
 
@@ -164,14 +162,14 @@ fn main() {
             panic!("CMake metadata validation run failed.");
         }
 
-        let make_status = Command::new("cmake")
-            .current_dir(&cpp_build_dir)
-            .arg("--build")
-            .arg(".")
-            .arg("--config")
-            .arg("Release")
-            .status()
-            .expect("Failed to execute cross-platform build steps.");
+        let mut build_cmd = Command::new("cmake");
+        build_cmd.current_dir(&cpp_build_dir).arg("--build").arg(".").arg("--config").arg("Release");
+        
+        if os != "windows" {
+            build_cmd.arg("--").arg("-j4");
+        }
+
+        let make_status = build_cmd.status().expect("Failed to execute cross-platform build steps.");
 
         if !make_status.success() {
             panic!("C++ sidecar binary generation build run failed.");
