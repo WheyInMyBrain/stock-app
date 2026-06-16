@@ -165,7 +165,12 @@ fn main() {
         let mut build_cmd = Command::new("cmake");
         build_cmd.current_dir(&cpp_build_dir).arg("--build").arg(".").arg("--config").arg("Release");
         
-        if os != "windows" {
+        // 🚀 THE SERIAL MULTI-THREAD EXTERMINATOR:
+        if os == "windows" {
+            // Force MSBuild on Windows to explicitly compile completely serially, 
+            // preventing simultaneous cl.exe spikes from overloading the runner's RAM pool.
+            build_cmd.arg("--").arg("-maxcpucount:1");
+        } else {
             build_cmd.arg("--").arg("-j4");
         }
 
