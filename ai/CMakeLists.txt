@@ -18,6 +18,7 @@ set(ARROW_BUILD_SHARED OFF CACHE BOOL "Turn off shared libraries for clean distr
 set(ARROW_COMPUTE OFF CACHE BOOL "Turn off compute engine maps" FORCE)
 set(ARROW_DATASET OFF CACHE BOOL "Turn off heavy dataset APIs" FORCE)
 set(ARROW_WITH_OPENSSL OFF CACHE BOOL "Disable OpenSSL tracking completely" FORCE)
+set(ARROW_WITH_THRIFT ON CACHE BOOL "Explicitly enable Thrift generation sequences" FORCE)
 set(ARROW_DEPENDENCY_SOURCE "BUNDLED" CACHE STRING "Force embedded thirdparty compilation" FORCE)
 
 include(FetchContent)
@@ -60,9 +61,6 @@ target_include_directories(ai_agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# =================================================================
-# 🚀 THE MSVC TARGET INTERCEPTOR: Fixes the Windows runner OOM completely
-# =================================================================
 if(MSVC)
     message(STATUS "Globally throttling MSVC compiler options to fit within runner RAM bounds...")
     add_compile_options("/Od" "/bigobj")
