@@ -80,15 +80,13 @@ fn main() {
     };
 
     if must_rebuild_ocr {
-        println!("cargo:warning= [BUILD SCRIPT]: Source changes detected. Synchronizing environment and freezing OCR binary...");
+        println!("cargo:warning= [BUILD SCRIPT]: Rebuilding OCR executable...");
         let venv_dir = ocr_source_dir.join(".venv");
-        
         if !venv_dir.exists() {
             #[cfg(target_os = "windows")]
             let mut py_cmd = Command::new("python");
             #[cfg(not(target_os = "windows"))]
             let mut py_cmd = Command::new("python3");
-
             py_cmd.current_dir(&ocr_source_dir).args(&["-m", "venv", ".venv"]).status().unwrap();
         }
 
@@ -145,46 +143,22 @@ fn main() {
     };
 
     if must_rebuild_cpp {
-        println!("cargo:warning= [AI BUILD]: Changes detected in C++ architecture. Compiling standalone sidecar agent...");
-        
+        println!("cargo:warning= [BUILD SCRIPT]: Rebuilding C++ executable...");
         if !cpp_build_dir.exists() {
             std::fs::create_dir_all(&cpp_build_dir).unwrap();
         }
 
-        let cmake_status = Command::new("cmake")
-            .current_dir(&cpp_build_dir)
-            .arg("..")
-            .arg("-DCMAKE_BUILD_TYPE=Release")
-            .status()
-            .expect("Failed to execute CMake generation step.");
-
-        if !cmake_status.success() {
-            panic!("CMake metadata validation run failed.");
-        }
+        Command::new("cmake").current_dir(&cpp_build_dir).arg("..").arg("-DCMAKE_BUILD_TYPE=Release").status().unwrap();
 
         let mut build_cmd = Command::new("cmake");
         build_cmd.current_dir(&cpp_build_dir).arg("--build").arg(".").arg("--config").arg("Release");
-        
-        // 🚀 THE SERIAL MULTI-THREAD EXTERMINATOR:
         if os == "windows" {
-            // Force MSBuild on Windows to explicitly compile completely serially, 
-            // preventing simultaneous cl.exe spikes from overloading the runner's RAM pool.
             build_cmd.arg("--").arg("-maxcpucount:1");
         } else {
             build_cmd.arg("--").arg("-j4");
         }
+        build_cmd.status().unwrap();
 
-        let make_status = build_cmd.status().expect("Failed to execute cross-platform build steps.");
-
-        if !make_status.success() {
-            panic!("C++ sidecar binary generation build run failed.");
-        }
-
-        std::fs::copy(&target_executable_internal_path, &final_cpp_sidecar_path)
-            .expect(" [AI BUILD ERROR]: Failed to route compiled sidecar executable to central binaries home directory.");
-            
-        println!("cargo:warning= [AI BUILD]: Standalone C++ sidecar deployed successfully -> {}", cpp_sidecar_deploy_name);
-    } else {
-        println!("cargo:warning= [AI BUILD]: Standalone C++ engine sidecar is fully up to date.");
+        std::fs::copy(&target_executable_internal_path, &final_cpp_sidecar_path).unwrap();
     }
 }
