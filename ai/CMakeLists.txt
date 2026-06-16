@@ -60,10 +60,10 @@ target_include_directories(ai_agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# =================================================================
+# 🚀 THE MSVC TARGET INTERCEPTOR: Fixes the Windows runner OOM completely
+# =================================================================
 if(MSVC)
-    message(STATUS "Patching MSVC compilation flags for massive source layers...")
-    target_compile_options(llama PRIVATE "/Od" "/bigobj")
-    if(TARGET llama-common)
-        target_compile_options(llama-common PRIVATE "/Od" "/bigobj")
-    endif()
+    message(STATUS "Globally throttling MSVC compiler options to fit within runner RAM bounds...")
+    add_compile_options("/Od" "/bigobj")
 endif()
