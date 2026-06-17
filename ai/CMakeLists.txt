@@ -63,9 +63,5 @@ target_include_directories(ai_agent PRIVATE
 
 if(MSVC)
     message(STATUS "Globally adjusting MSVC compiler options to relax strict generated-code checks...")
-    # /Od: Lowers memory optimization limits to fit runner bounds
-    # /bigobj: Grants address limits to massive files
-    # /permissive-: Relaxes strict template parsing constraints for third-party files
-    # /D_CRT_SECURE_NO_WARNINGS: Silences fatal security warnings on standard C definitions
     add_compile_options("/Od" "/bigobj" "/permissive" "/D_CRT_SECURE_NO_WARNINGS" "/wd4065" "/wd4996")
 endif()
