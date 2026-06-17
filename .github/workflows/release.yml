@@ -1,135 +1,38 @@
-name: Automated Release Packaging
+name: CI Sandbox Debug Compiler
 
 on:
   push:
-    tags:
-      - 'v*' # Triggers automatically on version tags (e.g., v1.0.0)
-
-permissions:
-  contents: write
+    branches:
+      - 'ci-debug' # 🚀 Triggers instantly on a simple git push to this branch!
 
 jobs:
-  release:
-    name: Build Assets for ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_name: stock_app_windows.zip
-            ext: ".exe"
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact_name: stock_app_mac_silicon.zip
-            ext: ""
+  debug-build:
+    name: Rapid Compile Test (Windows Only)
+    runs-on: windows-latest # We isolate strictly to Windows since Mac is already green
 
     steps:
-      - name: Checkout Repository Code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 1. Initialize Environments
-      - name: Initialize Python Environment
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      # provision required C++ compilation context tools on Windows natively
-      - name: Setup MSVC Dev Cmd (Windows Only)
-        if: matrix.os == 'windows-latest'
+      # Mounts the MSVC compiler binaries into the PATH environment so Ninja can call cl.exe directly
+      - name: Setup MSVC Dev Cmd
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Initialize Go Environment
-        uses: actions/setup-go@v5
-        with:
-          go-version: 'stable'
+      # Chocolatey comes pre-installed on GitHub Windows runners, making this instantaneous
+      - name: Install Ninja Build Tool
+        run: choco install ninja -y
 
-      - name: Install Stable Rust Compiler
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install LLVM Toolchain (Windows Only)
-        if: matrix.os == 'windows-latest'
-        run: choco install llvm -y
-        
-      - name: Install Mac Native Build Dependencies (Mac Only)
-        if: matrix.os == 'macos-latest'
-        run: brew install pkg-config
-
-      # 2. Pre-create the central binaries folder where your system expects assets
       - name: Initialize Central Binaries Directory
         shell: bash
-        run: |
-          mkdir -p ui/frontend/target/${{ matrix.target }}/release/binaries
+        run: mkdir -p ui/frontend/target/x86_64-pc-windows-msvc/release/binaries
 
-      # 🚀 3. PRE-BUILD STEP: Freeze Python OCR Engine out-of-process
-      - name: Pre-compile Python OCR Sidecar
-        shell: bash
-        run: |
-          cd ocr
-          python -m venv .venv
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            source .venv/Scripts/activate
-          else
-            source .venv/bin/activate
-          fi
-          pip install wheel
-          pip install -r requirements.txt
-          pip install pyinstaller
-          pyinstaller --onefile --clean \
-            --recursive-copy-metadata docling \
-            --recursive-copy-metadata torch \
-            --recursive-copy-metadata huggingface_hub \
-            --distpath ../ui/frontend/target/${{ matrix.target }}/release/binaries \
-            --name ocr-${{ matrix.target }} ocr_engine.py
-
-      # 🚀 4. PRE-BUILD STEP: Compile C++ Model Binary out-of-process
-      - name: Pre-compile C++ Sidecar Engine
+      # 🚀 TARGETED TEST ZONE: Using Ninja to completely drop the MSBuild overhead
+      - name: Compile C++ Sidecar Engine
         shell: bash
         run: |
           cd ai
           mkdir -p build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cmake --build . --config Release -- -maxcpucount:1
-            cp Release/ai_agent.exe ../../ui/frontend/target/${{ matrix.target }}/release/binaries/ai_agent-${{ matrix.target }}.exe
-          else
-            cmake --build . --config Release -- -j4
-            cp ai_agent ../../ui/frontend/target/${{ matrix.target }}/release/binaries/ai_agent-${{ matrix.target }}
-          fi
-
-      # 5. Compile Main Application Workspace (instantaneous because sidecars are already waiting!)
-      - name: Compile Cross-Platform Production Binary
-        shell: bash
-        env:
-          RUSTFLAGS: ${{ matrix.os == 'windows-latest' && '-C linker=lld-link.exe' || '' }}
-        run: |
-          cargo build --release --target ${{ matrix.target }} --manifest-path ui/frontend/Cargo.toml --workspace
-
-      # 6. Packaging Assets
-      - name: Package Release Archive (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          cd ui/frontend/target/${{ matrix.target }}/release
-          Compress-Archive -Path stock_app.exe, binaries -DestinationPath "${{ github.workspace }}/${{ matrix.artifact_name }}" -Force
-
-      # MAC PACKAGING ROUTINE
-      - name: Package Release Archive (Mac)
-        if: matrix.os == 'macos-latest'
-        run: |
-          cd ui/frontend/target/${{ matrix.target }}/release
-          zip -r "${{ github.workspace }}/${{ matrix.artifact_name }}" stock_app binaries
-
-      - name: Broadcast Compilation to GitHub Releases
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ github.workspace }}/${{ matrix.artifact_name }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # -G "Ninja" tells CMake to generate low-level ninja build scripts instead of heavy .vcxproj XMLs
+          cmake .. -G "Ninja" -DCMAKE_BUILD_TYPE=Release
+          ninja

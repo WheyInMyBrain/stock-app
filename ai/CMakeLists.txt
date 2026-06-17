@@ -1,21 +1,23 @@
 cmake_minimum_required(VERSION 3.22)
 project(ai_agent CXX)
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# 🚀 THE ARCHITECTURAL FIX: Do NOT set CXX_STANDARD 20 globally here!
+# Letting llama.cpp use C++17 natively stops the char8_t string literal error completely.
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# =================================================================
+# 📦 PRE-FETCH MASTER REGISTER
+# =================================================================
+set(ARROW_BUILD_TESTS OFF CACHE INTERNAL "Force kill arrow internal tests" FORCE)
+set(ARROW_BUILD_BENCHMARKS OFF CACHE INTERNAL "Force kill arrow benchmarks" FORCE)
+set(ARROW_BUILD_INTEGRATION OFF CACHE INTERNAL "Force kill arrow integration checks" FORCE)
+set(PARQUET_BUILD_EXECUTABLES OFF CACHE INTERNAL "Force kill parquet utility tools" FORCE)
+set(PARQUET_BUILD_EXAMPLES OFF CACHE INTERNAL "Force kill example apps" FORCE)
+
 set(LLAMA_BUILD_COMMON ON CACHE INTERNAL "Build common library sidecars" FORCE)
-
-set(ARROW_BUILD_TESTS OFF CACHE BOOL "Turn off core arrow test components completely" FORCE)
-set(ARROW_BUILD_BENCHMARKS OFF CACHE BOOL "Turn off heavy arrow benchmarks" FORCE)
-set(ARROW_BUILD_INTEGRATION OFF CACHE BOOL "Turn off cross-engine integration validations" FORCE)
-set(PARQUET_BUILD_EXECUTABLES OFF CACHE BOOL "Disable individual standalone parquet utility apps" FORCE)
-set(PARQUET_BUILD_EXAMPLES OFF CACHE BOOL "Disable auxiliary sample files" FORCE)
-
 set(ARROW_PARQUET ON CACHE BOOL "Build Parquet support" FORCE)
 set(ARROW_IPC ON CACHE BOOL "Build IPC support for Parquet schemas" FORCE)
 set(ARROW_WITH_ZSTD ON CACHE BOOL "Build ZSTD compression codec support" FORCE)
@@ -48,9 +50,13 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(llama arrow_src)
 
+# Define your custom executive binary
 add_executable(ai_agent src/main.cpp)
 
-# Link your portable binary natively to both llama and Arrow's compiled targets
+# 🚀 TARGET-LIMIT YOUR C++20 REQUIREMENT HERE:
+# This keeps your main file modern, while leaving third-party submodules safe in C++17.
+target_compile_features(ai_agent PRIVATE cxx_std_20)
+
 target_link_libraries(ai_agent PRIVATE 
     llama 
     llama-common
@@ -67,11 +73,8 @@ target_include_directories(ai_agent PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+# Apply standard low-memory object flags if building on MSVC
 if(MSVC)
-    message(STATUS "Globally adjusting MSVC compiler options to relax strict generated-code checks...")
-    # /Od: Lowers memory optimization limits to fit runner bounds
-    # /bigobj: Grants address limits to massive files
-    # /permissive-: Relaxes strict template parsing constraints for third-party files
-    # /D_CRT_SECURE_NO_WARNINGS: Silences fatal security warnings on standard C definitions
-    add_compile_options("/Od" "/bigobj" "/permissive" "/D_CRT_SECURE_NO_WARNINGS" "/wd4065" "/wd4996")
+    message(STATUS "Applying global tuning constraints across MSVC targets...")
+    add_compile_options("/Od" "/bigobj" "/D_CRT_SECURE_NO_WARNINGS" "/wd4065" "/wd4996")
 endif()
