@@ -41,6 +41,11 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
 
+      # 🚀 SPEED INJECTION: Provision Ninja binary utility tool onto your Windows system
+      - name: Install Ninja Build Tool (Windows Only)
+        if: matrix.os == 'windows-latest'
+        run: choco install ninja -y
+
       - name: Initialize Go Environment
         uses: actions/setup-go@v5
         with:
@@ -93,11 +98,13 @@ jobs:
           cd ai
           mkdir -p build
           cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cmake --build . --config Release -- -maxcpucount:1
-            cp Release/ai_agent.exe ../../ui/frontend/target/${{ matrix.target }}/release/binaries/ai_agent-${{ matrix.target }}.exe
+            # Use Ninja generator explicitly to bypass visual studio project allocations 
+            cmake .. -G "Ninja" -DCMAKE_BUILD_TYPE=Release
+            ninja
+            cp ai_agent.exe ../../ui/frontend/target/${{ matrix.target }}/release/binaries/ai_agent-${{ matrix.target }}.exe
           else
+            cmake .. -DCMAKE_BUILD_TYPE=Release
             cmake --build . --config Release -- -j4
             cp ai_agent ../../ui/frontend/target/${{ matrix.target }}/release/binaries/ai_agent-${{ matrix.target }}
           fi
