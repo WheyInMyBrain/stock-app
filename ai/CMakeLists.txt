@@ -10,6 +10,12 @@ endif()
 
 set(LLAMA_BUILD_COMMON ON CACHE INTERNAL "Build common library sidecars" FORCE)
 
+set(ARROW_BUILD_TESTS OFF CACHE BOOL "Turn off core arrow test components completely" FORCE)
+set(ARROW_BUILD_BENCHMARKS OFF CACHE BOOL "Turn off heavy arrow benchmarks" FORCE)
+set(ARROW_BUILD_INTEGRATION OFF CACHE BOOL "Turn off cross-engine integration validations" FORCE)
+set(PARQUET_BUILD_EXECUTABLES OFF CACHE BOOL "Disable individual standalone parquet utility apps" FORCE)
+set(PARQUET_BUILD_EXAMPLES OFF CACHE BOOL "Disable auxiliary sample files" FORCE)
+
 set(ARROW_PARQUET ON CACHE BOOL "Build Parquet support" FORCE)
 set(ARROW_IPC ON CACHE BOOL "Build IPC support for Parquet schemas" FORCE)
 set(ARROW_WITH_ZSTD ON CACHE BOOL "Build ZSTD compression codec support" FORCE)
@@ -63,5 +69,9 @@ target_include_directories(ai_agent PRIVATE
 
 if(MSVC)
     message(STATUS "Globally adjusting MSVC compiler options to relax strict generated-code checks...")
+    # /Od: Lowers memory optimization limits to fit runner bounds
+    # /bigobj: Grants address limits to massive files
+    # /permissive-: Relaxes strict template parsing constraints for third-party files
+    # /D_CRT_SECURE_NO_WARNINGS: Silences fatal security warnings on standard C definitions
     add_compile_options("/Od" "/bigobj" "/permissive" "/D_CRT_SECURE_NO_WARNINGS" "/wd4065" "/wd4996")
 endif()
