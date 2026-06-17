@@ -33,7 +33,7 @@ jobs:
       - name: Initialize Python Environment
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
           cache: 'pip'
 
       # provision required C++ compilation context tools on Windows natively
@@ -41,7 +41,6 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
 
-      # 🚀 SPEED INJECTION: Provision Ninja binary utility tool onto your Windows system
       - name: Install Ninja Build Tool (Windows Only)
         if: matrix.os == 'windows-latest'
         run: choco install ninja -y
@@ -70,7 +69,7 @@ jobs:
         run: |
           mkdir -p ui/frontend/target/${{ matrix.target }}/release/binaries
 
-      # 🚀 3. PRE-BUILD STEP: Freeze Python OCR Engine out-of-process
+      # 3. PRE-BUILD STEP: Freeze Python OCR Engine out-of-process
       - name: Pre-compile Python OCR Sidecar
         shell: bash
         run: |
@@ -91,7 +90,7 @@ jobs:
             --distpath ../ui/frontend/target/${{ matrix.target }}/release/binaries \
             --name ocr-${{ matrix.target }} ocr_engine.py
 
-      # 🚀 4. PRE-BUILD STEP: Compile C++ Model Binary out-of-process
+      # 4. PRE-BUILD STEP: Compile C++ Model Binary out-of-process
       - name: Pre-compile C++ Sidecar Engine
         shell: bash
         run: |
@@ -99,7 +98,6 @@ jobs:
           mkdir -p build
           cd build
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            # Use Ninja generator explicitly to bypass visual studio project allocations 
             cmake .. -G "Ninja" -DCMAKE_BUILD_TYPE=Release
             ninja
             cp ai_agent.exe ../../ui/frontend/target/${{ matrix.target }}/release/binaries/ai_agent-${{ matrix.target }}.exe
@@ -109,7 +107,7 @@ jobs:
             cp ai_agent ../../ui/frontend/target/${{ matrix.target }}/release/binaries/ai_agent-${{ matrix.target }}
           fi
 
-      # 5. Compile Main Application Workspace (instantaneous because sidecars are already waiting!)
+      # 5. Compile Main Application Workspace
       - name: Compile Cross-Platform Production Binary
         shell: bash
         env:
